@@ -214,6 +214,28 @@ describe('results.service', () => {
       expect(indexedDoc.event.ERROR).toBe(101);
     });
 
+    it('coerces unsigned 32-bit exit codes (EDR kills) to 999 and preserves the raw value', async () => {
+      // Observed in production: CrowdStrike-killed ransomware stage reported
+      // 0xE0000027 (3758096423), which ES rejected as document_parsing_exception
+      // on indices where event.ERROR is still `integer`.
+      const result = makeResult({ exit_code: 3758096423 });
+
+      await ingestResult(makeTask(), result);
+
+      const indexedDoc = mockEsIndex.mock.calls[0][0].document;
+      expect(indexedDoc.event.ERROR).toBe(999);
+      expect(indexedDoc.event.ERROR_raw).toBe('3758096423');
+      expect(indexedDoc.f0rtika.error_name).toBe('Unknown (3758096423)');
+    });
+
+    it('does not add ERROR_raw for in-range exit codes', async () => {
+      await ingestResult(makeTask(), makeResult({ exit_code: 126 }));
+
+      const indexedDoc = mockEsIndex.mock.calls[0][0].document;
+      expect(indexedDoc.event.ERROR).toBe(126);
+      expect(indexedDoc.event).not.toHaveProperty('ERROR_raw');
+    });
+
     it('maps all metadata fields into f0rtika namespace', async () => {
       await ingestResult(makeTask(), makeResult());
 

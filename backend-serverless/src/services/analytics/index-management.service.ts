@@ -53,7 +53,12 @@ export const RESULTS_INDEX_MAPPING = {
       },
       event: {
         properties: {
-          ERROR: { type: 'integer' as const },
+          // long, not integer: Windows exit codes are unsigned 32-bit
+          // (NTSTATUS/HRESULT-style codes from an EDR kill exceed int32).
+          // Indices created before this change keep `integer` — the ingestion
+          // path coerces out-of-range codes (see sanitizeExitCode).
+          ERROR: { type: 'long' as const },
+          ERROR_raw: { type: 'keyword' as const },
         },
       },
     },

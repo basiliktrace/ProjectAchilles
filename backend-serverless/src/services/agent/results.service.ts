@@ -24,6 +24,25 @@ function getErrorName(exitCode: number): string {
   return entry ? entry.name : `Unknown (${exitCode})`;
 }
 
+/**
+ * Windows exit codes are unsigned 32-bit — NTSTATUS/HRESULT-style codes from
+ * an EDR kill (e.g. 0xE0000027 = 3758096423) exceed int32, and indices
+ * created before event.ERROR moved to `long` reject them with
+ * document_parsing_exception, which silently dropped the stage doc after
+ * MAX_INGEST_ATTEMPTS. Coerce out-of-range codes to the unexpected-error
+ * sentinel and keep the original value in ERROR_raw.
+ */
+const INT32_MIN = -2147483648;
+const INT32_MAX = 2147483647;
+const EXIT_CODE_UNEXPECTED = 999;
+
+function sanitizeExitCode(exitCode: number): { code: number; raw?: string } {
+  if (Number.isInteger(exitCode) && exitCode >= INT32_MIN && exitCode <= INT32_MAX) {
+    return { code: exitCode };
+  }
+  return { code: EXIT_CODE_UNEXPECTED, raw: String(exitCode) };
+}
+
 // ── Write-index resolution helpers ───────────────────────────────────────────
 
 function pad2(n: number): string { return n < 10 ? `0${n}` : `${n}`; }
@@ -112,6 +131,7 @@ export async function ingestResult(task: Task, result: TaskResult): Promise<void
   }
 
   // Standard single-document path (unchanged)
+  const exitCode = sanitizeExitCode(result.exit_code);
   const doc = {
     routing: {
       event_time: result.completed_at,
@@ -119,7 +139,8 @@ export async function ingestResult(task: Task, result: TaskResult): Promise<void
       hostname: result.hostname,
     },
     event: {
-      ERROR: result.exit_code,
+      ERROR: exitCode.code,
+      ...(exitCode.raw !== undefined ? { ERROR_raw: exitCode.raw } : {}),
     },
     f0rtika: {
       test_uuid: task.payload.test_uuid,
@@ -180,41 +201,45 @@ async function ingestBundleControls(
     tenantLabel = azureSettings?.label || 'Azure Tenant';
   }
 
-  const operations = bundle.controls.flatMap((control) => [
-    { index: { _index: index, _id: `${task.id}::${control.control_id}` } },
-    {
-      routing: {
-        event_time: result.completed_at,
-        oid: task.org_id,
-        hostname: result.hostname,
+  const operations = bundle.controls.flatMap((control) => {
+    const controlExitCode = sanitizeExitCode(control.exit_code);
+    return [
+      { index: { _index: index, _id: `${task.id}::${control.control_id}` } },
+      {
+        routing: {
+          event_time: result.completed_at,
+          oid: task.org_id,
+          hostname: result.hostname,
+        },
+        event: {
+          ERROR: controlExitCode.code,
+          ...(controlExitCode.raw !== undefined ? { ERROR_raw: controlExitCode.raw } : {}),
+        },
+        f0rtika: {
+          test_uuid: `${bundle.bundle_id}::${control.control_id}`,
+          test_name: control.control_name,
+          is_protected: isProtectedCode(control.exit_code),
+          error_name: getErrorName(control.exit_code),
+          category: control.category,
+          subcategory: control.subcategory,
+          severity: control.severity,
+          techniques: control.techniques,
+          tactics: control.tactics,
+          threat_actor: task.payload.metadata?.threat_actor,
+          target: task.payload.metadata?.target,
+          complexity: task.payload.metadata?.complexity,
+          tags: task.payload.metadata?.tags,
+          score: task.payload.metadata?.score,
+          bundle_id: bundle.bundle_id,
+          bundle_name: bundle.bundle_name,
+          control_id: control.control_id,
+          control_validator: control.validator,
+          is_bundle_control: true,
+          ...(tenantLabel ? { tenant_label: tenantLabel } : {}),
+        },
       },
-      event: {
-        ERROR: control.exit_code,
-      },
-      f0rtika: {
-        test_uuid: `${bundle.bundle_id}::${control.control_id}`,
-        test_name: control.control_name,
-        is_protected: isProtectedCode(control.exit_code),
-        error_name: getErrorName(control.exit_code),
-        category: control.category,
-        subcategory: control.subcategory,
-        severity: control.severity,
-        techniques: control.techniques,
-        tactics: control.tactics,
-        threat_actor: task.payload.metadata?.threat_actor,
-        target: task.payload.metadata?.target,
-        complexity: task.payload.metadata?.complexity,
-        tags: task.payload.metadata?.tags,
-        score: task.payload.metadata?.score,
-        bundle_id: bundle.bundle_id,
-        bundle_name: bundle.bundle_name,
-        control_id: control.control_id,
-        control_validator: control.validator,
-        is_bundle_control: true,
-        ...(tenantLabel ? { tenant_label: tenantLabel } : {}),
-      },
-    },
-  ]);
+    ];
+  });
 
   const response = await client.bulk({ operations });
   if (response?.errors) {
