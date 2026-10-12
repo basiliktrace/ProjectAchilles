@@ -2,7 +2,7 @@
 # =============================================================================
 # init-elasticsearch.sh — Initialize Elasticsearch indices for ProjectAchilles
 # =============================================================================
-# Creates the proper index mappings for results, defender, and risk-acceptance.
+# Creates the proper index mappings for results, defender, crowdstrike, and risk-acceptance.
 # Optionally seeds synthetic demo data for the Analytics dashboard.
 #
 # Usage:

@@ -15,7 +15,7 @@ Usage:
     # For self-hosted
     python upload_to_elasticsearch.py --file synthetic_data.ndjson --host "http://localhost:9200"
 
-    # Create all indices (results, defender, risk-acceptance) without uploading data
+    # Create all indices (results, defender, crowdstrike, risk-acceptance) without uploading data
     python upload_to_elasticsearch.py --init-indices --host "http://localhost:9200"
 
     # Create results index with data upload
@@ -212,6 +212,8 @@ def get_results_index_mapping():
                         "is_bundle_control": {"type": "boolean"},
                         "defender_detected": {"type": "boolean"},
                         "defender_stage_detected": {"type": "boolean"},
+                        "crowdstrike_detected": {"type": "boolean"},
+                        "crowdstrike_stage_detected": {"type": "boolean"},
                         "tenant_label": kw
                     }
                 },
@@ -283,6 +285,92 @@ def get_defender_index_mapping():
             }
         }
     }
+
+
+def get_crowdstrike_index_mapping():
+    """Return the CrowdStrike index mapping matching the TypeScript source of truth.
+
+    Source: backend/src/services/crowdstrike/index-management.ts
+    Single index with doc_type discriminator for zta_score and alert.
+    """
+    return {
+        "mappings": {
+            "properties": {
+                "doc_type": {"type": "keyword"},
+                "timestamp": {"type": "date"},
+                "cid": {"type": "keyword"},
+
+                # ZTA score fields (daily org snapshot)
+                "overall_score": {"type": "float"},
+                "os_score": {"type": "float"},
+                "sensor_config_score": {"type": "float"},
+                "device_count": {"type": "integer"},
+                "min_score": {"type": "float"},
+                "max_score": {"type": "float"},
+
+                # Alert fields
+                "alert_id": {"type": "keyword"},
+                "alert_title": {"type": "text", "fields": {"keyword": {"type": "keyword"}}},
+                "description": {"type": "text"},
+                "severity": {"type": "keyword"},
+                "status": {"type": "keyword"},
+                "category": {"type": "keyword"},
+                "service_source": {"type": "keyword"},
+                "mitre_techniques": {"type": "keyword"},
+                "created_at": {"type": "date"},
+                "updated_at": {"type": "date"},
+                "resolved_at": {"type": "date"},
+                "recommended_actions": {"type": "text"},
+                # text + .keyword multi-fields; queries target both the bare
+                # field and the .keyword subfield (see evidence-correlation.ts)
+                "evidence_hostnames": {"type": "text", "fields": {"keyword": {"type": "keyword", "ignore_above": 256}}},
+                "evidence_filenames": {"type": "text", "fields": {"keyword": {"type": "keyword", "ignore_above": 256}}},
+                "evidence_filepaths": {"type": "text", "fields": {"keyword": {"type": "keyword", "ignore_above": 1024}}},
+
+                # Achilles correlation + auto-resolve fields
+                "f0rtika": {
+                    "properties": {
+                        "achilles_correlated": {"type": "boolean"},
+                        "achilles_test_uuid": {"type": "keyword"},
+                        "achilles_matched_at": {"type": "date"},
+                        "auto_resolved": {"type": "boolean"},
+                        "auto_resolved_at": {"type": "date"},
+                        "auto_resolve_mode": {"type": "keyword"},
+                        "auto_resolve_error": {"type": "keyword"}
+                    }
+                }
+            }
+        }
+    }
+
+
+def create_crowdstrike_index_mapping(es_client_or_session, index_name="achilles-crowdstrike", host=None, api_key=None):
+    """Create the CrowdStrike index with mappings.
+
+    Supports both the elasticsearch Python client and the requests fallback.
+    When host is provided, uses requests; otherwise assumes es_client_or_session
+    is an Elasticsearch client instance.
+    """
+    mapping = get_crowdstrike_index_mapping()
+
+    if host is not None:
+        # requests fallback
+        created, msg = create_index_with_requests(es_client_or_session, host, index_name, mapping, api_key)
+        print(msg)
+        return created
+    else:
+        # ES Python client
+        try:
+            if not es_client_or_session.indices.exists(index=index_name):
+                es_client_or_session.indices.create(index=index_name, body=mapping)
+                print(f"Created index '{index_name}' with mappings")
+                return True
+            else:
+                print(f"Index '{index_name}' already exists")
+                return False
+        except Exception as e:
+            print(f"Warning: Could not create crowdstrike index mapping: {e}")
+            return False
 
 
 def get_risk_acceptance_mapping():
@@ -410,23 +498,27 @@ def create_risk_acceptance_mapping(es_client_or_session, index_name="achilles-ri
 
 
 def _init_all_indices_es(es_client, results_index):
-    """Create all three index types using the ES Python client."""
+    """Create all four index types using the ES Python client."""
     print("--- Initializing results index ---")
     create_index_mapping(es_client, results_index)
     print("--- Initializing defender index ---")
     create_defender_index_mapping(es_client)
+    print("--- Initializing crowdstrike index ---")
+    create_crowdstrike_index_mapping(es_client)
     print("--- Initializing risk acceptance index ---")
     create_risk_acceptance_mapping(es_client)
 
 
 def _init_all_indices_requests(session, host, results_index, api_key=None):
-    """Create all three index types using the requests fallback."""
+    """Create all four index types using the requests fallback."""
     print("--- Initializing results index ---")
     mapping = get_results_index_mapping()
     _, msg = create_index_with_requests(session, host, results_index, mapping, api_key)
     print(msg)
     print("--- Initializing defender index ---")
     create_defender_index_mapping(session, host=host, api_key=api_key)
+    print("--- Initializing crowdstrike index ---")
+    create_crowdstrike_index_mapping(session, host=host, api_key=api_key)
     print("--- Initializing risk acceptance index ---")
     create_risk_acceptance_mapping(session, host=host, api_key=api_key)
 
@@ -485,7 +577,7 @@ def main():
     parser.add_argument(
         "--init-indices",
         action="store_true",
-        help="Create all index types (results, defender, risk-acceptance) and exit. Does not require --file."
+        help="Create all index types (results, defender, crowdstrike, risk-acceptance) and exit. Does not require --file."
     )
     parser.add_argument(
         "--index",
