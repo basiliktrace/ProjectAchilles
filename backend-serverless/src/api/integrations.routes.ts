@@ -4,9 +4,12 @@ import { asyncHandler, AppError } from '../middleware/error.middleware.js';
 import { validate } from '../middleware/validation.js';
 import { IntegrationsSettingsService } from '../services/integrations/settings.js';
 import { DefenderSyncService } from '../services/defender/sync.service.js';
-import { AzureCredentialsSchema, AzureTestSchema, DefenderCredentialsSchema, DefenderTestSchema, DefenderAutoResolveModeSchema } from '../schemas/integrations.schemas.js';
+import { AzureCredentialsSchema, AzureTestSchema, DefenderCredentialsSchema, DefenderTestSchema, DefenderAutoResolveModeSchema, CrowdStrikeCredentialsSchema, CrowdStrikeTestSchema, CrowdStrikeAutoResolveModeSchema } from '../schemas/integrations.schemas.js';
 import { DEFENDER_INDEX } from '../services/defender/index-management.js';
+import { CROWDSTRIKE_INDEX } from '../services/crowdstrike/index-management.js';
 import { buildClientAssertionForTest } from '../services/defender/graph-client.js';
+import { FalconClient, CROWDSTRIKE_REGION_BASE_URLS, DEFAULT_CROWDSTRIKE_BASE_URL } from '../services/crowdstrike/falcon-client.js';
+import { CrowdStrikeSyncService } from '../services/crowdstrike/sync.service.js';
 import { parsePfx } from '../services/defender/pfx-parser.js';
 import multer from 'multer';
 
@@ -447,4 +450,217 @@ router.get('/defender/auto-resolve/receipts', requirePermission('integrations:re
 }));
 
 export { defenderSyncService };
+
+// ---------------------------------------------------------------------------
+// CrowdStrike Falcon
+// ---------------------------------------------------------------------------
+
+const crowdstrikeSyncService = new CrowdStrikeSyncService();
+
+router.get('/crowdstrike', requirePermission('integrations:read'), asyncHandler(async (_req, res) => {
+  const settings = await settingsService.getCrowdStrikeSettings();
+
+  if (!settings?.configured) {
+    res.json({ configured: false });
+    return;
+  }
+
+  const mask = (val: string) =>
+    val.length > 4 ? '****' + val.slice(-4) : '****';
+
+  res.json({
+    configured: true,
+    base_url: settings.base_url,
+    region: settings.region,
+    client_id: mask(settings.client_id),
+    client_secret_set: !!settings.client_secret,
+    label: settings.label ?? '',
+    env_configured: settingsService.isEnvCrowdStrikeConfigured(),
+  });
+}));
+
+router.post('/crowdstrike', requirePermission('integrations:write'), validate(CrowdStrikeCredentialsSchema), asyncHandler(async (req, res) => {
+  const { base_url, region, client_id, client_secret, label } = req.body;
+
+  const isEdit = await settingsService.isCrowdStrikeConfigured();
+
+  if (!isEdit && (!client_id || !client_secret)) {
+    throw new AppError('client_id and client_secret are required for initial setup', 400);
+  }
+
+  await settingsService.saveCrowdStrikeSettings({ base_url, region, client_id, client_secret, label });
+  res.json({ success: true });
+}));
+
+router.delete('/crowdstrike', requirePermission('integrations:write'), asyncHandler(async (_req, res) => {
+  if (settingsService.isEnvCrowdStrikeConfigured()) {
+    throw new AppError(
+      'Cannot disconnect: CrowdStrike credentials are set via environment variables (CROWDSTRIKE_BASE_URL, CROWDSTRIKE_CLIENT_ID, CROWDSTRIKE_CLIENT_SECRET). Remove these env vars to disconnect.',
+      400
+    );
+  }
+  await settingsService.deleteCrowdStrikeSettings();
+  res.json({ success: true });
+}));
+
+/** POST /api/integrations/crowdstrike/test — Real OAuth2 token acquisition against CrowdStrike */
+router.post('/crowdstrike/test', requirePermission('integrations:write'), validate(CrowdStrikeTestSchema), asyncHandler(async (req, res) => {
+  const { base_url, region, client_id, client_secret } = req.body;
+
+  // Resolve: use provided values or fall back to stored
+  const stored = await settingsService.getCrowdStrikeCredentials();
+  const effectiveClientId = client_id || stored?.client_id;
+  const effectiveClientSecret = client_secret || stored?.client_secret;
+
+  if (!effectiveClientId || !effectiveClientSecret) {
+    res.json({ success: false, error: 'Missing credentials: client_id and client_secret are required' });
+    return;
+  }
+
+  // Custom base_url wins; otherwise the region map; otherwise stored; us-1 default.
+  const effectiveBaseUrl = base_url
+    || (region ? CROWDSTRIKE_REGION_BASE_URLS[region as keyof typeof CROWDSTRIKE_REGION_BASE_URLS] : undefined)
+    || stored?.base_url
+    || DEFAULT_CROWDSTRIKE_BASE_URL;
+
+  try {
+    const client = new FalconClient({
+      base_url: effectiveBaseUrl,
+      client_id: effectiveClientId,
+      client_secret: effectiveClientSecret,
+    });
+    const result = await client.testConnection();
+    if (!result.success) {
+      res.json({ success: false, error: result.message });
+      return;
+    }
+    res.json({ success: true, message: result.message });
+  } catch (err) {
+    res.json({ success: false, error: `Connection failed: ${err instanceof Error ? err.message : String(err)}` });
+  }
+}));
+
+// CrowdStrike sync routes
+
+router.post('/crowdstrike/sync', requirePermission('integrations:write'), asyncHandler(async (_req, res) => {
+  const isConfigured = await settingsService.isCrowdStrikeConfigured();
+  if (!isConfigured) {
+    throw new AppError('CrowdStrike integration is not configured', 400);
+  }
+  const result = await crowdstrikeSyncService.syncAll();
+  res.json({ success: true, data: result });
+}));
+
+router.get('/crowdstrike/sync/status', requirePermission('integrations:read'), asyncHandler(async (_req, res) => {
+  res.json(crowdstrikeSyncService.getSyncStatus());
+}));
+
+// ──────────────────────────────────────────────────────────────────
+// CrowdStrike Auto-Resolve (customer-facing controls)
+// ──────────────────────────────────────────────────────────────────
+
+router.get('/crowdstrike/auto-resolve/status', requirePermission('integrations:read'), asyncHandler(async (_req, res) => {
+  const mode = await settingsService.getCrowdStrikeAutoResolveMode();
+  const lastAutoResolve = crowdstrikeSyncService.getSyncStatus().lastSyncResult?.autoResolve ?? null;
+
+  const es = await getEsClientForRequest();
+  const counts = { last24h: 0, last7d: 0, last30d: 0 };
+
+  if (es) {
+    const windows: Array<[keyof typeof counts, string]> = [
+      ['last24h', 'now-24h'],
+      ['last7d', 'now-7d'],
+      ['last30d', 'now-30d'],
+    ];
+    for (const [key, gte] of windows) {
+      try {
+        const resp = await es.count({
+          index: CROWDSTRIKE_INDEX,
+          query: {
+            bool: {
+              filter: [
+                { term: { doc_type: 'alert' } },
+                { term: { 'f0rtika.auto_resolved': true } },
+                { range: { 'f0rtika.auto_resolved_at': { gte } } },
+              ],
+            },
+          },
+        });
+        counts[key] = typeof resp.count === 'number' ? resp.count : 0;
+      } catch {
+        // Non-fatal.
+      }
+    }
+  }
+
+  res.json({ success: true, data: { mode, counts, lastAutoResolve } });
+}));
+
+router.put('/crowdstrike/auto-resolve/mode', requirePermission('integrations:write'), validate(CrowdStrikeAutoResolveModeSchema), asyncHandler(async (req, res) => {
+  const { mode } = req.body as { mode: 'disabled' | 'dry_run' | 'enabled' };
+  try {
+    await settingsService.setCrowdStrikeAutoResolveMode(mode);
+  } catch (err) {
+    throw new AppError(err instanceof Error ? err.message : String(err), 400);
+  }
+  res.json({ success: true, data: { mode } });
+}));
+
+router.get('/crowdstrike/auto-resolve/receipts', requirePermission('integrations:read'), asyncHandler(async (_req, res) => {
+  const limit = Math.min(Math.max(parseInt(String(_req.query.limit ?? '20'), 10) || 20, 1), 100);
+  const offset = Math.max(parseInt(String(_req.query.offset ?? '0'), 10) || 0, 0);
+
+  const es = await getEsClientForRequest();
+  if (!es) {
+    res.json({ success: true, data: { items: [], total: 0, limit, offset } });
+    return;
+  }
+
+  try {
+    const resp = await es.search({
+      index: CROWDSTRIKE_INDEX,
+      size: limit,
+      from: offset,
+      query: {
+        bool: {
+          filter: [
+            { term: { doc_type: 'alert' } },
+            { term: { 'f0rtika.auto_resolved': true } },
+          ],
+        },
+      },
+      sort: [{ 'f0rtika.auto_resolved_at': 'desc' }],
+      _source: [
+        'alert_id', 'alert_title', 'severity',
+        'f0rtika.auto_resolved_at', 'f0rtika.auto_resolve_mode',
+        'f0rtika.auto_resolve_error', 'f0rtika.achilles_test_uuid',
+      ],
+    } as any);
+
+    const hits = ((resp as any).hits?.hits ?? []) as any[];
+    const totalRaw = (resp as any).hits?.total;
+    const total = typeof totalRaw === 'number' ? totalRaw : totalRaw?.value ?? hits.length;
+
+    const items = hits.map((h) => {
+      const src = h._source ?? {};
+      const f0rtika = src.f0rtika ?? {};
+      return {
+        alert_id: src.alert_id ?? '',
+        alert_title: src.alert_title ?? '',
+        severity: src.severity ?? '',
+        auto_resolved_at: f0rtika.auto_resolved_at ?? null,
+        auto_resolve_mode: f0rtika.auto_resolve_mode ?? null,
+        auto_resolve_error: f0rtika.auto_resolve_error ?? null,
+        achilles_test_uuid: f0rtika.achilles_test_uuid ?? null,
+      };
+    });
+
+    res.json({ success: true, data: { items, total, limit, offset } });
+  } catch (err) {
+    console.warn('[crowdstrike auto-resolve receipts] query failed:', err instanceof Error ? err.message : String(err));
+    res.json({ success: true, data: { items: [], total: 0, limit, offset } });
+  }
+}));
+
+export { crowdstrikeSyncService };
 export default router;

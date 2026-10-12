@@ -427,6 +427,28 @@ export interface DefenderControl {
   deprecated: boolean;
 }
 
+// ─── CrowdStrike ────────────────────────────────────────────────────────────
+
+export interface ZtaScore {
+  score: number;
+  deviceCount: number;
+  minScore: number;
+  maxScore: number;
+  osScore?: number;
+  sensorConfigScore?: number;
+  lastUpdated?: string;
+}
+
+export interface CrowdStrikeAlert {
+  id: string;
+  title: string;
+  severity: string;
+  status: string;
+  category: string;
+  createdDateTime: string;
+  techniques: string[];
+}
+
 // ─── Builds ─────────────────────────────────────────────────────────────────
 
 export interface BuildInfo {
@@ -466,6 +488,16 @@ export interface CertInfo {
 export interface IntegrationConfig {
   configured: boolean;
   tenant_id?: string;
+  client_id?: string;
+  client_secret_set?: boolean;
+  label?: string;
+  env_configured?: boolean;
+}
+
+export interface CrowdStrikeIntegrationConfig {
+  configured: boolean;
+  base_url?: string;
+  region?: string;
   client_id?: string;
   client_secret_set?: boolean;
   label?: string;

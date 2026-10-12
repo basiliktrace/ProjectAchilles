@@ -15,6 +15,7 @@ import * as versionsApi from '../api/versions.js';
 import * as browserApi from '../api/browser.js';
 import * as analyticsApi from '../api/analytics.js';
 import * as defenderApi from '../api/defender.js';
+import * as crowdstrikeApi from '../api/crowdstrike.js';
 import * as buildsApi from '../api/builds.js';
 import * as certsApi from '../api/certs.js';
 import * as integrationsApi from '../api/integrations.js';
@@ -205,6 +206,43 @@ export const readTools = {
     description: 'Get correlation between Defense Score and Microsoft Secure Score over time.',
     inputSchema: z.object({ days: z.number().optional().default(30) }),
     execute: async ({ days }) => defenderApi.getScoreCorrelation(days),
+  }),
+
+  // CrowdStrike
+  get_zta_score: tool({
+    description: 'Get the current CrowdStrike Zero Trust Assessment (ZTA) score.',
+    inputSchema: z.object({}),
+    execute: async () => crowdstrikeApi.getZtaScore(),
+  }),
+  get_zta_score_trend: tool({
+    description: 'Get the CrowdStrike ZTA score trend over time.',
+    inputSchema: z.object({ days: z.number().optional().default(30) }),
+    execute: async ({ days }) => crowdstrikeApi.getZtaScoreTrend(days),
+  }),
+  get_crowdstrike_alerts: tool({
+    description: 'Get CrowdStrike Falcon alerts with severity and status filters.',
+    inputSchema: z.object({
+      severity: z.string().optional(),
+      status: z.string().optional(),
+      search: z.string().optional(),
+      page: z.number().optional().default(1),
+    }),
+    execute: async (params) => crowdstrikeApi.getAlerts(params),
+  }),
+  get_crowdstrike_alert_trend: tool({
+    description: 'Get the CrowdStrike alert count trend over time.',
+    inputSchema: z.object({ days: z.number().optional().default(30) }),
+    execute: async ({ days }) => crowdstrikeApi.getAlertsTrend(days),
+  }),
+  get_crowdstrike_score_correlation: tool({
+    description: 'Get correlation between Defense Score and CrowdStrike ZTA score over time.',
+    inputSchema: z.object({ days: z.number().optional().default(30) }),
+    execute: async ({ days }) => crowdstrikeApi.getScoreCorrelation(days),
+  }),
+  get_crowdstrike_technique_correlation: tool({
+    description: 'Get MITRE technique overlap between Achilles tests and CrowdStrike alerts.',
+    inputSchema: z.object({}),
+    execute: async () => crowdstrikeApi.getTechniqueCorrelation(),
   }),
 
   // Builds

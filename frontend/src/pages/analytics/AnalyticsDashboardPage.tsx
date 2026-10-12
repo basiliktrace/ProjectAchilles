@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { LayoutDashboard, Table, Filter, ChevronUp, ChevronDown, RefreshCw, Settings, ShieldCheck, ShieldOff } from 'lucide-react';
+import { LayoutDashboard, Table, Filter, ChevronUp, ChevronDown, RefreshCw, Settings, ShieldCheck, ShieldOff, Bird } from 'lucide-react';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { Button } from '@/components/ui/button';
 import SettingsModal from './components/SettingsModal';
@@ -19,15 +19,19 @@ import ExecutionsDataTable from './components/ExecutionsDataTable';
 import { Toast } from '@/components/shared/ui/Alert';
 import RiskAcceptancesTab from './components/RiskAcceptancesTab';
 import DefenderTab from './components/DefenderTab';
+import CrowdStrikeTab from './components/CrowdStrikeTab';
 import SecureScoreCard from './components/SecureScoreCard';
+import ZtaScoreCard from './components/ZtaScoreCard';
 import TopControlsCard from './components/TopControlsCard';
 import { useAnalyticsFilters, getWindowDaysForDateRange } from '@/hooks/useAnalyticsFilters';
 import { useAnalyticsAuth } from '@/hooks/useAnalyticsAuth';
 import { useDefenderConfig } from '@/hooks/useDefenderConfig';
+import { useCrowdStrikeConfig } from '@/hooks/useCrowdStrikeConfig';
 import { useScoringMode } from '@/hooks/useScoringMode';
 import { analyticsApi } from '../../services/api/analytics';
 import { reportsApi } from '../../services/api/reports';
 import { defenderApi, type SecureScoreSummary, type SecureScoreTrendPoint } from '../../services/api/defender';
+import { crowdstrikeApi, type ZtaScoreSummary, type ZtaScoreTrendPoint } from '../../services/api/crowdstrike';
 import type {
   TrendDataPoint,
   ErrorTypeBreakdown,
@@ -43,7 +47,7 @@ import type {
   RiskAcceptance,
 } from '../../services/api/analytics';
 
-type TabType = 'dashboard' | 'executions' | 'risk-acceptances' | 'defender';
+type TabType = 'dashboard' | 'executions' | 'risk-acceptances' | 'defender' | 'crowdstrike';
 
 interface DefenseScoreData {
   overall: number;
@@ -70,12 +74,20 @@ export default function AnalyticsDashboardPage() {
 
   // Defender integration status (Approach A: hidden when not configured)
   const { configured: defenderConfigured } = useDefenderConfig();
+  // CrowdStrike integration status (same hidden-until-configured pattern)
+  const { configured: crowdstrikeConfigured } = useCrowdStrikeConfig();
   const { scoringMode } = useScoringMode();
 
   // UI State
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
-  const validTabs: TabType[] = ['dashboard', 'executions', 'risk-acceptances', ...(defenderConfigured ? ['defender' as const] : [])];
+  const validTabs: TabType[] = [
+    'dashboard',
+    'executions',
+    'risk-acceptances',
+    ...(defenderConfigured ? ['defender' as const] : []),
+    ...(crowdstrikeConfigured ? ['crowdstrike' as const] : []),
+  ];
   const [activeTab, setActiveTab] = useState<TabType>(
     tabFromUrl && validTabs.includes(tabFromUrl) ? tabFromUrl : 'dashboard'
   );
@@ -84,6 +96,11 @@ export default function AnalyticsDashboardPage() {
   const [secureScore, setSecureScore] = useState<SecureScoreSummary | null>(null);
   const [defenderTechniqueCount, setDefenderTechniqueCount] = useState<number>(0);
   const [secureScoreTrendData, setSecureScoreTrendData] = useState<SecureScoreTrendPoint[]>([]);
+
+  // CrowdStrike dashboard data (loaded alongside main dashboard when configured)
+  const [ztaScore, setZtaScore] = useState<ZtaScoreSummary | null>(null);
+  const [crowdstrikeTechniqueCount, setCrowdStrikeTechniqueCount] = useState<number>(0);
+  const [ztaScoreTrendData, setZtaScoreTrendData] = useState<ZtaScoreTrendPoint[]>([]);
 
   // Risk acceptances tab badge count
   const [activeRiskCount, setActiveRiskCount] = useState(0);
@@ -95,7 +112,7 @@ export default function AnalyticsDashboardPage() {
     if (resolved !== activeTab) {
       setActiveTab(resolved);
     }
-  }, [searchParams, defenderConfigured]);
+  }, [searchParams, defenderConfigured, crowdstrikeConfigured]);
 
   // Handle tab change with URL sync
   const handleTabChange = useCallback((tab: TabType) => {
@@ -207,12 +224,12 @@ export default function AnalyticsDashboardPage() {
     }
   }
 
-  // Load dashboard data when filters, settings, defender config, or scoring mode change
+  // Load dashboard data when filters, settings, defender/crowdstrike config, or scoring mode change
   useEffect(() => {
     if (activeTab === 'dashboard') {
       loadDashboardData();
     }
-  }, [filterState.filters, activeTab, settingsVersion, defenderConfigured, scoringMode]);
+  }, [filterState.filters, activeTab, settingsVersion, defenderConfigured, crowdstrikeConfigured, scoringMode]);
 
   // Load executions data when tab/filters/pagination/settings change
   useEffect(() => {
@@ -339,6 +356,31 @@ export default function AnalyticsDashboardPage() {
       } else {
         setSecureScoreTrendData([]);
       }
+
+      // Conditionally load CrowdStrike summary for dashboard cards
+      if (crowdstrikeConfigured) {
+        const presetDaysMap: Record<string, number> = { '7d': 7, '14d': 14, '30d': 30, '90d': 90, 'all': 90 };
+        const trendDays = presetDaysMap[filterState.filters.dateRange.preset] ?? 90;
+
+        try {
+          const [csScore, csTechniques, csTrend] = await Promise.all([
+            crowdstrikeApi.getZtaScore(),
+            crowdstrikeApi.getTechniqueOverlap(),
+            crowdstrikeApi.getZtaScoreTrend(trendDays),
+          ]);
+          setZtaScore(csScore);
+          setCrowdStrikeTechniqueCount(csTechniques.length);
+          setZtaScoreTrendData(csTrend);
+        } catch {
+          // CrowdStrike data is supplementary — don't fail the whole dashboard.
+          // ZTA may be unlicensed (403) in some tenants; the card hides then.
+          setZtaScore(null);
+          setZtaScoreTrendData([]);
+        }
+      } else {
+        setZtaScore(null);
+        setZtaScoreTrendData([]);
+      }
     } catch (error) {
       console.error('Failed to load dashboard data:', error);
     } finally {
@@ -355,7 +397,7 @@ export default function AnalyticsDashboardPage() {
         }
       }
     }
-  }, [filterState, defenderConfigured, scoringMode]);
+  }, [filterState, defenderConfigured, crowdstrikeConfigured, scoringMode]);
 
   // Load executions data
   const loadExecutionsData = useCallback(async () => {
@@ -639,6 +681,7 @@ export default function AnalyticsDashboardPage() {
             { id: 'executions' as const, label: 'All Executions', icon: Table, badge: executionsData?.pagination ? executionsData.pagination.totalDocuments.toLocaleString() : null },
             { id: 'risk-acceptances' as const, label: 'Risk Acceptances', icon: ShieldOff, badge: activeRiskCount > 0 ? String(activeRiskCount) : null },
             ...(defenderConfigured ? [{ id: 'defender' as const, label: 'Defender', icon: ShieldCheck, badge: null }] : []),
+            ...(crowdstrikeConfigured ? [{ id: 'crowdstrike' as const, label: 'CrowdStrike', icon: Bird, badge: null }] : []),
           ]).map(tab => (
             <button
               key={tab.id}
@@ -682,6 +725,9 @@ export default function AnalyticsDashboardPage() {
         {activeTab === 'defender' ? (
           /* Defender Tab (full-page view) */
           <DefenderTab />
+        ) : activeTab === 'crowdstrike' ? (
+          /* CrowdStrike Tab (full-page view) */
+          <CrowdStrikeTab />
         ) : activeTab === 'risk-acceptances' ? (
           /* Risk Acceptances Tab */
           <RiskAcceptancesTab onActiveCountChange={setActiveRiskCount} />
@@ -701,6 +747,7 @@ export default function AnalyticsDashboardPage() {
                 data={techniqueDistData}
                 loading={loadingDashboard}
                 defenderTechniqueCount={defenderTechniqueCount}
+                crowdstrikeTechniqueCount={crowdstrikeTechniqueCount}
                 onTechniqueClick={(technique) => {
                   filterState.setTechniques([technique]);
                   handleTabChange('executions');
@@ -738,6 +785,9 @@ export default function AnalyticsDashboardPage() {
                 {defenderConfigured && secureScore && (
                   <SecureScoreCard data={secureScore} loading={loadingDashboard} />
                 )}
+                {crowdstrikeConfigured && ztaScore && (
+                  <ZtaScoreCard data={ztaScore} loading={loadingDashboard} />
+                )}
               </div>
 
               <div className="relative h-[340px] min-w-0 md:col-span-2 md:h-auto">
@@ -747,6 +797,7 @@ export default function AnalyticsDashboardPage() {
                     errorRateData={errorRateTrendData}
                     errorRateOverall={errorRate}
                     secureScoreTrendData={secureScoreTrendData}
+                    ztaScoreTrendData={ztaScoreTrendData}
                     loading={loadingDashboard}
                     title="Trend Overview"
                     windowDays={getWindowDaysForDateRange(filterState.filters.dateRange)}

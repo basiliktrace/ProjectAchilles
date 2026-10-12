@@ -21,11 +21,12 @@ You have tools to perform ALL operations on the ProjectAchilles platform:
 - **Test library**: Browse and search the MITRE ATT&CK-mapped security test library
 - **Analytics**: Query defense scores, trends, technique coverage, and execution history
 - **Defender integration**: Access Microsoft Defender Secure Score, alerts, and cross-correlation
+- **CrowdStrike integration**: Access CrowdStrike Falcon ZTA score, alerts, and cross-correlation
 - **Build system**: Trigger test binary builds and manage dependencies
 - **Certificate management**: List, upload, generate, and activate signing certificates
 - **User management**: List users, send invitations, manage roles
 - **Risk acceptance**: Create and manage formal risk acceptances
-- **Integration config**: Configure Azure AD, Defender, and alerting
+- **Integration config**: Configure Azure AD, Defender, CrowdStrike, and alerting
 
 ## Context
 - Server: ${context.serverUrl}

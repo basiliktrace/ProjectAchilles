@@ -111,4 +111,33 @@ router.get('/defender-sync', async (req, res) => {
   }
 });
 
+/**
+ * Cron endpoint for CrowdStrike data sync.
+ * A single endpoint runs syncAll() — Vercel Cron triggers at the desired
+ * interval (alerts + enrichment + auto-resolve + ZTA; the ZTA stage is
+ * non-fatal when the Falcon Insight license is absent).
+ *
+ * Registered in vercel.json on a 5-minute cadence — matching the Express
+ * backend's 5-minute alert interval. syncAll() covers every stage in one
+ * call because Vercel Cron is one-path-per-schedule; the ZTA snapshot write
+ * is idempotent (doc id "score-<date>"), so running it at alert cadence is
+ * harmless.
+ */
+router.get('/crowdstrike-sync', async (req, res) => {
+  const authHeader = req.headers.authorization;
+  if (!verifyCronSecret(authHeader)) {
+    res.status(401).json({ success: false, error: 'Unauthorized' });
+    return;
+  }
+
+  try {
+    const { crowdstrikeSyncService } = await import('./integrations.routes.js');
+    const result = await crowdstrikeSyncService.syncAll();
+    res.json({ success: true, data: result });
+  } catch (error) {
+    console.error('[cron/crowdstrike-sync] Error:', error);
+    res.status(500).json({ success: false, error: 'CrowdStrike sync failed' });
+  }
+});
+
 export default router;

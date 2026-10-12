@@ -1,4 +1,4 @@
-import { Activity, FlaskConical, Server, ShieldAlert, ShieldCheck, Star } from 'lucide-react';
+import { Activity, Bird, FlaskConical, Server, ShieldAlert, ShieldCheck, Star } from 'lucide-react';
 import { useSearchParams } from 'react-router-dom';
 import { cn } from '@/lib/utils';
 import { PageHeader } from '@/components/layout/PageHeader';
@@ -68,6 +68,18 @@ export default function DashboardPage() {
       to: '/analytics?tab=defender',
       tone: data.secureScore ? 'accent' : 'default',
     },
+    // CrowdStrike ZTA card — only joins the KPI grid when configured so the
+    // 6-up layout isn't broken by a "not configured" placeholder.
+    ...(data.crowdstrikeConfigured
+      ? [{
+          label: 'ZTA score',
+          value: data.ztaScore ? `${data.ztaScore.overallScore.toFixed(1)}%` : '—',
+          sub: data.ztaScore ? `${data.ztaScore.deviceCount.toLocaleString()} devices` : undefined,
+          icon: Bird,
+          to: '/analytics?tab=crowdstrike',
+          tone: (data.ztaScore ? 'accent' : 'default') as KpiCardProps['tone'],
+        }]
+      : []),
     {
       label: 'Total tests',
       value: data.testStats ? String(data.testStats.total) : '—',
@@ -186,6 +198,7 @@ export default function DashboardPage() {
             data={data.trend}
             description={data.trendDescription}
             hasSecureScore={data.defenderConfigured}
+            hasZtaScore={data.crowdstrikeConfigured && data.ztaScore != null}
             rangeLabel={range}
             loading={data.loading}
           />

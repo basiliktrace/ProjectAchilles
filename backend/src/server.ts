@@ -30,7 +30,9 @@ import { startIngestionRetryWorker, stopIngestionRetryWorker } from './services/
 import type { TestSource } from './types/test.js';
 import { IntegrationsSettingsService } from './services/integrations/settings.js';
 import { defenderSyncService } from './api/integrations.routes.js';
+import { crowdstrikeSyncService } from './api/integrations.routes.js';
 import defenderRoutes from './api/defender.routes.js';
+import crowdstrikeRoutes from './api/crowdstrike.routes.js';
 import riskAcceptanceRoutes from './api/risk-acceptance.routes.js';
 import reportsRoutes from './api/reports.routes.js';
 import cliAuthRoutes from './api/cli-auth.routes.js';
@@ -334,6 +336,9 @@ async function startServer() {
   // Defender analytics - Secure Score, alerts, controls
   app.use('/api/analytics/defender', defenderRoutes);
 
+  // CrowdStrike analytics - ZTA score, alerts
+  app.use('/api/analytics/crowdstrike', crowdstrikeRoutes);
+
   // Risk acceptance - formal risk acceptance for security controls
   app.use('/api/risk-acceptances', riskAcceptanceRoutes);
 
@@ -450,6 +455,39 @@ function startBackgroundJobs(httpServer?: http.Server) {
     await defenderSyncService.runAutoResolvePass().catch(logDefenderError('auto-resolve'));
   }, 5 * 60 * 1000); // 5 minutes
 
+  // --- CrowdStrike sync: ZTA scores every 6h, alerts every 5min ---
+  let crowdstrikeZtaInterval: ReturnType<typeof setInterval> | undefined;
+  let crowdstrikeAlertInterval: ReturnType<typeof setInterval> | undefined;
+
+  // Same always-on timer pattern as Defender: ticks check configuration so
+  // CrowdStrike configured (or repaired) through the UI after boot starts
+  // syncing without a restart.
+  const isCrowdStrikeConfigured = () => new IntegrationsSettingsService().isCrowdStrikeConfigured();
+  const logCrowdStrikeError = (step: string) => (err: unknown) => {
+    console.warn(`⚠ CrowdStrike ${step} failed:`, err instanceof Error ? err.message : err);
+  };
+
+  if (isCrowdStrikeConfigured()) {
+    console.log('🛡  CrowdStrike integration configured — starting background sync');
+    crowdstrikeSyncService.syncAll().catch(logCrowdStrikeError('initial sync'));
+  }
+  crowdstrikeZtaInterval = setInterval(() => {
+    if (!isCrowdStrikeConfigured()) return;
+    crowdstrikeSyncService.syncZtaScores().catch(logCrowdStrikeError('ZTA score sync'));
+  }, 6 * 60 * 60 * 1000); // 6 hours
+  crowdstrikeAlertInterval = setInterval(async () => {
+    if (!isCrowdStrikeConfigured()) return;
+    // Order matters and each step catches its own errors so one failure
+    // doesn't silence the others:
+    //   1. syncAlerts   — pull fresh alerts from Falcon into ES
+    //   2. enrichment   — tag freshly-arrived alerts that match Achilles tests
+    //   3. auto-resolve — PATCH correlated alerts to status=closed
+    //                     when the customer has opted in (mode != 'disabled')
+    await crowdstrikeSyncService.syncAlerts().catch(logCrowdStrikeError('alert sync'));
+    await crowdstrikeSyncService.runEnrichmentPass().catch(logCrowdStrikeError('enrichment'));
+    await crowdstrikeSyncService.runAutoResolvePass().catch(logCrowdStrikeError('auto-resolve'));
+  }, 5 * 60 * 1000); // 5 minutes
+
   const shutdown = () => {
     clearInterval(schedulerInterval);
     clearInterval(autoRotationInterval);
@@ -458,6 +496,8 @@ function startBackgroundJobs(httpServer?: http.Server) {
     stopIngestionRetryWorker();
     if (defenderScoreInterval) clearInterval(defenderScoreInterval);
     if (defenderAlertInterval) clearInterval(defenderAlertInterval);
+    if (crowdstrikeZtaInterval) clearInterval(crowdstrikeZtaInterval);
+    if (crowdstrikeAlertInterval) clearInterval(crowdstrikeAlertInterval);
     if (httpServer) httpServer.close();
   };
   process.on('SIGTERM', shutdown);

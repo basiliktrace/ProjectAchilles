@@ -164,6 +164,10 @@ export interface EnrichedTestExecution extends TestExecution {
    * Strictly per-stage; does not propagate across a bundle's stages.
    */
   defender_stage_detected?: boolean;
+  /** Set true by the CrowdStrike enrichment pass when a Falcon alert matches this doc's bundle UUID, hostname, and time window. */
+  crowdstrike_detected?: boolean;
+  /** CrowdStrike per-stage equivalent of defender_stage_detected. */
+  crowdstrike_stage_detected?: boolean;
 }
 
 // Pagination support
@@ -223,6 +227,8 @@ export interface ExecutionGroup {
   totalCount: number;
   /** True when a correlated Defender alert exists for this group's binary + hostname. */
   defenderDetected?: boolean;
+  /** True when a correlated CrowdStrike alert exists for this group's binary + hostname. */
+  crowdstrikeDetected?: boolean;
 }
 
 // Response shape for grouped/collapsed pagination

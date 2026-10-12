@@ -17,6 +17,7 @@ import { createAgentRouter } from './api/agent/index.js';
 import usersRoutes from './api/users.routes.js';
 import integrationsRoutes from './api/integrations.routes.js';
 import defenderRoutes from './api/defender.routes.js';
+import crowdstrikeRoutes from './api/crowdstrike.routes.js';
 import riskAcceptanceRoutes from './api/risk-acceptance.routes.js';
 import reportsRoutes from './api/reports.routes.js';
 import cronRoutes from './api/cron.routes.js';
@@ -167,6 +168,9 @@ app.use('/api/integrations', integrationsRoutes);
 
 // Defender analytics (Secure Score, alerts, controls, cross-correlation)
 app.use('/api/analytics/defender', defenderRoutes);
+
+// CrowdStrike analytics (ZTA score, alerts, cross-correlation)
+app.use('/api/analytics/crowdstrike', crowdstrikeRoutes);
 
 // Risk acceptance management
 app.use('/api/risk-acceptances', riskAcceptanceRoutes);

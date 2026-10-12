@@ -1,5 +1,5 @@
 import { client } from './client.js';
-import type { IntegrationConfig, AlertConfig } from './types.js';
+import type { IntegrationConfig, CrowdStrikeIntegrationConfig, AlertConfig } from './types.js';
 
 // ─── Azure / Defender Credentials ───────────────────────────────────────────
 
@@ -64,6 +64,58 @@ export async function getDefenderSyncStatus(): Promise<{
   counts?: Record<string, number>;
 }> {
   return client.get('/api/integrations/defender/sync/status');
+}
+
+// ─── CrowdStrike Credentials ────────────────────────────────────────────────
+
+export async function getCrowdStrikeConfig(): Promise<CrowdStrikeIntegrationConfig> {
+  return client.get('/api/integrations/crowdstrike');
+}
+
+export async function setCrowdStrikeConfig(params: {
+  base_url?: string;
+  client_id?: string;
+  client_secret?: string;
+  label?: string;
+}): Promise<void> {
+  await client.post('/api/integrations/crowdstrike', { body: params });
+}
+
+export async function deleteCrowdStrikeConfig(): Promise<void> {
+  await client.delete('/api/integrations/crowdstrike');
+}
+
+export async function testCrowdStrikeConnection(params?: {
+  base_url?: string;
+  client_id?: string;
+  client_secret?: string;
+}): Promise<{ success: boolean; error?: string; message?: string }> {
+  return client.post('/api/integrations/crowdstrike/test', { body: params });
+}
+
+export async function triggerCrowdStrikeSync(): Promise<{ success: boolean; data: unknown }> {
+  return client.post('/api/integrations/crowdstrike/sync');
+}
+
+export async function getCrowdStrikeSyncStatus(): Promise<{
+  last_sync_alerts?: string;
+  last_sync_zta?: string;
+  zta_status?: string;
+  counts?: Record<string, number>;
+}> {
+  return client.get('/api/integrations/crowdstrike/sync/status');
+}
+
+export async function getCrowdStrikeAutoResolveStatus(): Promise<Record<string, unknown>> {
+  return client.get('/api/integrations/crowdstrike/auto-resolve/status');
+}
+
+export async function setCrowdStrikeAutoResolveMode(mode: 'disabled' | 'dry_run' | 'enabled'): Promise<void> {
+  await client.put('/api/integrations/crowdstrike/auto-resolve/mode', { body: { mode } });
+}
+
+export async function getCrowdStrikeAutoResolveReceipts(): Promise<Array<Record<string, unknown>>> {
+  return client.get('/api/integrations/crowdstrike/auto-resolve/receipts');
 }
 
 // ─── Alerting ───────────────────────────────────────────────────────────────

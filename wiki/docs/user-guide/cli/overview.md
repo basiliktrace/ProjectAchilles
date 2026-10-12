@@ -91,9 +91,10 @@ bun run build
 | `browser` | | Browse the security test library |
 | `analytics` | `an` | Query security analytics from Elasticsearch |
 | `defender` | | Microsoft Defender integration |
+| `crowdstrike` | | CrowdStrike Falcon integration |
 | `builds` | | Manage test builds and dependencies |
 | `certs` | | Manage code signing certificates |
-| `integrations` | | Configure Azure AD and alerting |
+| `integrations` | | Configure Azure AD, EDR integrations (Defender, CrowdStrike), and alerting |
 | `risk` | | Risk acceptance workflow management |
 | `users` | | Team member and invitation management |
 | `deploy` | | Unified deployment TUI — guided multi-target deploys (interactive or headless) |

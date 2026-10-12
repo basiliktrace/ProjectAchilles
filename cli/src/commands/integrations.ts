@@ -4,7 +4,7 @@ import { colors } from '../output/colors.js';
 
 registerCommand({
   name: 'integrations',
-  description: 'Manage integrations (Azure, Defender, Alerts)',
+  description: 'Manage integrations (Azure, Defender, CrowdStrike, Alerts)',
   aliases: ['int'],
   subcommands: {
     'azure-show': {
@@ -103,6 +103,95 @@ registerCommand({
       handler: async (ctx) => {
         const status = await api.getDefenderSyncStatus();
         ctx.output.detail(status as unknown as Record<string, unknown>);
+      },
+    },
+    'crowdstrike-show': {
+      description: 'Show CrowdStrike integration config',
+      handler: async (ctx) => {
+        const config = await api.getCrowdStrikeConfig();
+        ctx.output.detail(config as unknown as Record<string, unknown>);
+      },
+    },
+    'crowdstrike-set': {
+      description: 'Configure CrowdStrike credentials',
+      flags: {
+        'base-url': { type: 'string' as const, description: 'API base URL (region cloud or custom)' },
+        'client-id': { type: 'string' as const, description: 'Client ID' },
+        'client-secret': { type: 'string' as const, description: 'Client secret' },
+        label: { type: 'string' as const, description: 'Display label' },
+      },
+      handler: async (ctx) => {
+        await api.setCrowdStrikeConfig({
+          base_url: ctx.flags['base-url'] as string | undefined,
+          client_id: ctx.flags['client-id'] as string | undefined,
+          client_secret: ctx.flags['client-secret'] as string | undefined,
+          label: ctx.flags.label as string | undefined,
+        });
+        ctx.output.success('CrowdStrike integration updated');
+      },
+    },
+    'crowdstrike-delete': {
+      description: 'Remove CrowdStrike configuration',
+      handler: async (ctx) => {
+        await api.deleteCrowdStrikeConfig();
+        ctx.output.success('CrowdStrike integration removed');
+      },
+    },
+    'crowdstrike-test': {
+      description: 'Test CrowdStrike connection',
+      handler: async (ctx) => {
+        const result = await api.testCrowdStrikeConnection();
+        if (result.success) {
+          ctx.output.success(result.message ?? 'Connection successful');
+        } else {
+          ctx.output.error(result.error ?? 'Connection failed');
+        }
+      },
+    },
+    'crowdstrike-sync': {
+      description: 'Trigger CrowdStrike data sync',
+      handler: async (ctx) => {
+        await api.triggerCrowdStrikeSync();
+        ctx.output.success('CrowdStrike sync triggered');
+      },
+    },
+    'crowdstrike-sync-status': {
+      description: 'Show CrowdStrike sync status',
+      handler: async (ctx) => {
+        const status = await api.getCrowdStrikeSyncStatus();
+        ctx.output.detail(status as unknown as Record<string, unknown>);
+      },
+    },
+    'crowdstrike-auto-resolve-status': {
+      description: 'Show CrowdStrike auto-resolve status',
+      handler: async (ctx) => {
+        const status = await api.getCrowdStrikeAutoResolveStatus();
+        ctx.output.detail(status as Record<string, unknown>);
+      },
+    },
+    'crowdstrike-auto-resolve-mode': {
+      description: 'Set CrowdStrike auto-resolve mode',
+      flags: {
+        mode: { type: 'string' as const, required: true, choices: ['disabled', 'dry_run', 'enabled'], description: 'Auto-resolve mode' },
+      },
+      handler: async (ctx) => {
+        await api.setCrowdStrikeAutoResolveMode(ctx.flags.mode as 'disabled' | 'dry_run' | 'enabled');
+        ctx.output.success(`CrowdStrike auto-resolve mode set to ${ctx.flags.mode}`);
+      },
+    },
+    'crowdstrike-auto-resolve-receipts': {
+      description: 'Show CrowdStrike auto-resolve receipts',
+      handler: async (ctx) => {
+        const receipts = await api.getCrowdStrikeAutoResolveReceipts();
+        ctx.output.table(
+          receipts,
+          [
+            { key: 'alert_id', label: 'Alert', width: 30 },
+            { key: 'auto_resolve_mode', label: 'Mode', width: 10 },
+            { key: 'auto_resolved_at', label: 'Resolved At', width: 24 },
+            { key: 'auto_resolve_error', label: 'Error', width: 30 },
+          ],
+        );
       },
     },
     'alerts-show': {

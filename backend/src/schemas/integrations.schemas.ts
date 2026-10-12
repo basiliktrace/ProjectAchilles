@@ -58,6 +58,30 @@ export const DefenderTestSchema = z.object({
   private_key_pem: z.string().optional(),
 });
 
+// ── CrowdStrike Falcon ───────────────────────────────────────────────────────
+
+const CrowdStrikeRegionSchema = z.enum(['us-1', 'us-2', 'eu-1', 'us-gov-1']);
+
+export const CrowdStrikeCredentialsSchema = z.object({
+  base_url: z.string().url().optional(),
+  region: CrowdStrikeRegionSchema.optional(),
+  // Falcon client IDs are 32-char lowercase hex
+  client_id: z.string().regex(/^[0-9a-f]{32}$/, 'client_id must be a 32-character lowercase hex string').optional(),
+  client_secret: z.string().min(1).optional(),
+  label: z.string().optional(),
+});
+
+export const CrowdStrikeAutoResolveModeSchema = z.object({
+  mode: z.enum(['disabled', 'dry_run', 'enabled']),
+});
+
+export const CrowdStrikeTestSchema = z.object({
+  base_url: z.string().url().optional(),
+  region: CrowdStrikeRegionSchema.optional(),
+  client_id: z.string().regex(/^[0-9a-f]{32}$/, 'client_id must be a 32-character lowercase hex string').optional(),
+  client_secret: z.string().optional(),
+});
+
 // ── Alert Settings ───────────────────────────────────────────────────────────
 
 const AlertThresholdsSchema = z.object({

@@ -5,6 +5,7 @@
   "crons": [
     { "path": "/api/cron/schedules", "schedule": "* * * * *" },
     { "path": "/api/cron/auto-rotation", "schedule": "* * * * *" },
-    { "path": "/api/cron/retry-ingestion", "schedule": "*/5 * * * *" }
+    { "path": "/api/cron/retry-ingestion", "schedule": "*/5 * * * *" },
+    { "path": "/api/cron/crowdstrike-sync", "schedule": "*/5 * * * *" }
   ]
 }

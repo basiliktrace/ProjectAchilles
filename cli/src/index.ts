@@ -23,6 +23,7 @@ import './commands/versions.js';
 import './commands/browser.js';
 import './commands/analytics.js';
 import './commands/defender.js';
+import './commands/crowdstrike.js';
 import './commands/builds.js';
 import './commands/certs.js';
 import './commands/integrations.js';

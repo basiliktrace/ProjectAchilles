@@ -42,6 +42,7 @@ export const SEVERITY_VARIANTS: Record<SeverityLevel, string> = {
 };
 
 export const ALERT_SEVERITY_CLASSES: Record<string, string> = {
+  critical: 'bg-danger-dim text-danger border-danger/30',
   high: 'bg-danger-dim text-danger border-danger/30',
   medium: 'bg-warning-dim text-warning border-warning/30',
   low: 'bg-accent-dim text-accent border-accent/30',
@@ -101,6 +102,7 @@ export interface BundleGroup {
   totalCount: number;
   category?: CategoryType;
   defenderDetected?: boolean;
+  crowdstrikeDetected?: boolean;
 }
 
 export interface StandaloneRow {
@@ -129,6 +131,7 @@ export function mapGroupsToDisplayRows(groups: ExecutionGroup[]): DisplayRow[] {
         totalCount: group.totalCount,
         category: rep.category,
         defenderDetected: group.defenderDetected,
+        crowdstrikeDetected: group.crowdstrikeDetected,
       };
     }
     return {
@@ -143,9 +146,9 @@ export function mapGroupsToDisplayRows(groups: ExecutionGroup[]): DisplayRow[] {
 
 /**
  * Result label for a single execution. "Detected" semantics: EDR failed
- * (error_code 101) but the Defender enrichment pass correlated this doc to a
- * Defender alert — the cloud SIEM caught what the endpoint missed. Prefers
- * the stage-specific flag; falls back to the bundle-level flag for docs
+ * (error_code 101) but the Defender or CrowdStrike enrichment pass correlated
+ * this doc to a vendor alert — the cloud SIEM caught what the endpoint missed.
+ * Prefers the stage-specific flag; falls back to the bundle-level flag for docs
  * predating stage-specific enrichment (over-detects, but strictly safer
  * than silently showing Unprotected).
  */
@@ -171,7 +174,9 @@ export function ExecResultLabel({ exec, compact }: { exec: EnrichedTestExecution
     );
   }
   if (result === 'unprotected') {
-    const isDetected = exec.defender_stage_detected ?? exec.defender_detected;
+    const isDetected =
+      (exec.defender_stage_detected ?? exec.defender_detected) ||
+      (exec.crowdstrike_stage_detected ?? exec.crowdstrike_detected);
     if (isDetected) {
       return (
         <span className="inline-flex items-center gap-1.5 text-warning">
@@ -205,7 +210,7 @@ export function BundleResultLabel({ group, compact }: { group: BundleGroup; comp
   const iconClass = compact ? 'w-3.5 h-3.5' : 'w-4 h-4';
   const textClass = compact ? 'text-xs font-medium' : 'text-sm font-medium';
   const isProtected = group.protectedCount > 0;
-  const isDetected = !isProtected && group.defenderDetected;
+  const isDetected = !isProtected && (group.defenderDetected || group.crowdstrikeDetected);
 
   if (group.category === 'cyber-hygiene') {
     if (isDetected) {

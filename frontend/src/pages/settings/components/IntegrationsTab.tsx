@@ -1,11 +1,12 @@
 import { useState, useCallback, useEffect } from 'react';
-import { Database, Cloud, ShieldCheck, Bell } from 'lucide-react';
+import { Database, Cloud, ShieldCheck, Bird, Bell } from 'lucide-react';
 import { useAnalyticsAuth } from '@/hooks/useAnalyticsAuth';
 import type { IntegrationStatus } from './IntegrationCard';
 import { IntegrationGridCard } from './IntegrationGridCard';
 import { AnalyticsConfig } from './AnalyticsConfig';
 import { AzureConfig } from './AzureConfig';
 import { DefenderConfig } from './DefenderConfig';
+import { CrowdStrikeConfig } from './CrowdStrikeConfig';
 import { AlertsConfig } from './AlertsConfig';
 import { integrationsApi } from '@/services/api/integrations';
 import { alertsApi } from '@/services/api/alerts';
@@ -19,6 +20,7 @@ export function IntegrationsTab() {
   );
   const [azureStatus, setAzureStatus] = useState<IntegrationStatus>('not-configured');
   const [defenderStatus, setDefenderStatus] = useState<IntegrationStatus>('not-configured');
+  const [crowdstrikeStatus, setCrowdStrikeStatus] = useState<IntegrationStatus>('not-configured');
   const [alertsStatus, setAlertsStatus] = useState<IntegrationStatus>('not-configured');
 
   const handleAnalyticsStatusChange = useCallback((configured: boolean) => {
@@ -33,11 +35,15 @@ export function IntegrationsTab() {
     setDefenderStatus(configured ? 'connected' : 'not-configured');
   }, []);
 
+  const handleCrowdStrikeStatusChange = useCallback((configured: boolean) => {
+    setCrowdStrikeStatus(configured ? 'connected' : 'not-configured');
+  }, []);
+
   const handleAlertsStatusChange = useCallback((configured: boolean) => {
     setAlertsStatus(configured ? 'connected' : 'not-configured');
   }, []);
 
-  // Pre-fetch Azure + Defender status for the card badges
+  // Pre-fetch Azure + Defender + CrowdStrike status for the card badges
   useEffect(() => {
     integrationsApi.getAzureSettings().then((settings) => {
       setAzureStatus(settings.configured ? 'connected' : 'not-configured');
@@ -45,6 +51,10 @@ export function IntegrationsTab() {
 
     integrationsApi.getDefenderSettings().then((settings) => {
       setDefenderStatus(settings.configured ? 'connected' : 'not-configured');
+    }).catch(() => {});
+
+    integrationsApi.getCrowdStrikeSettings().then((settings) => {
+      setCrowdStrikeStatus(settings.configured ? 'connected' : 'not-configured');
     }).catch(() => {});
 
     alertsApi.getAlertSettings().then((settings) => {
@@ -79,6 +89,15 @@ export function IntegrationsTab() {
         status={defenderStatus}
       >
         <DefenderConfig onStatusChange={handleDefenderStatusChange} />
+      </IntegrationGridCard>
+
+      <IntegrationGridCard
+        icon={Bird}
+        title="CrowdStrike Falcon"
+        description="Alerts, posture scores, and detection correlation via CrowdStrike Falcon"
+        status={crowdstrikeStatus}
+      >
+        <CrowdStrikeConfig onStatusChange={handleCrowdStrikeStatusChange} />
       </IntegrationGridCard>
 
       <IntegrationGridCard

@@ -102,7 +102,7 @@ wide right column carrying the shapes you read.
 - **Results by error type** — donut plus a legend list of `name · count · pct`
 - **ATT&CK technique distribution** — one row per technique with a stacked
   protected/unprotected bar and a percentage; a warning chip counts techniques
-  that also raised Defender alerts
+  that also raised Defender or CrowdStrike alerts
 - **Score by category** — bar list of defense score per category, with
   subcategories nested underneath
 
@@ -163,12 +163,17 @@ with a per-execution detection rate, Secure Score, alert correlation, MITRE
 technique overlap, and an alert drill-down drawer. See
 [Microsoft Defender](./microsoft-defender) for the full tab walkthrough.
 
+When CrowdStrike Falcon is configured, a parallel **CrowdStrike** tab appears
+with the same shape — per-execution detection rate, ZTA posture score, alert
+correlation, technique overlap, and an alert drawer with Falcon console links.
+See [CrowdStrike Falcon](./crowdstrike).
+
 :::info Detection Rate vs. Defense Score
 These are distinct metrics. The **Defense Score** measures whether a test's
-*exit code* reported it as protected; the Defender tab's **Detection Rate**
-measures whether *Microsoft Defender raised a correlated alert*. The Defense
-Score counts cyber-hygiene controls; the Detection Rate excludes them. Auto-
-resolve never affects either score.
+*exit code* reported it as protected; the EDR tabs' **Detection Rate**
+measures whether *Microsoft Defender or CrowdStrike raised a correlated
+alert*. The Defense Score counts cyber-hygiene controls; the Detection Rate
+excludes them. Auto-resolve never affects either score.
 :::
 
 ## Coverage Treemap
@@ -223,7 +228,7 @@ The dashboard automatically reloads data when you:
 - Change any filter or date range
 - Switch tabs
 - Modify Elasticsearch settings (index pattern changes)
-- Toggle Defender integration on or off
+- Toggle Defender or CrowdStrike integrations on or off
 
 :::info Conditional Loading
 Only the active tab's data is fetched, so switching tabs triggers a fresh load for that tab while keeping others cached.

@@ -8,6 +8,8 @@ interface TechniqueDistributionCardProps {
   loading?: boolean;
   /** Techniques that also raised Defender alerts (warning badge in header). */
   defenderTechniqueCount?: number;
+  /** Techniques that also raised CrowdStrike alerts (warning badge in header). */
+  crowdstrikeTechniqueCount?: number;
   /** Row click — filters executions to the technique. */
   onTechniqueClick?: (technique: string) => void;
 }
@@ -16,6 +18,7 @@ function TechniqueDistributionCard({
   data,
   loading,
   defenderTechniqueCount = 0,
+  crowdstrikeTechniqueCount = 0,
   onTechniqueClick,
 }: TechniqueDistributionCardProps) {
   if (loading) {
@@ -36,6 +39,9 @@ function TechniqueDistributionCard({
         <CardTitle>ATT&CK technique distribution</CardTitle>
         {defenderTechniqueCount > 0 && (
           <Badge variant="medium">{defenderTechniqueCount} with Defender alerts</Badge>
+        )}
+        {crowdstrikeTechniqueCount > 0 && (
+          <Badge variant="medium">{crowdstrikeTechniqueCount} with CrowdStrike alerts</Badge>
         )}
       </CardHeader>
       <CardContent>

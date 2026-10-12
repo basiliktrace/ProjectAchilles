@@ -7,7 +7,8 @@
 // ingested ES docs can observe:
 //
 //   exit 126/105/127                                  -> PREVENTED
-//   exit 101 (or 0) + defender_stage/detected flag    -> DETECTED
+//   exit 101 (or 0) + EDR stage/detected flag         -> DETECTED
+//      (defender_* or crowdstrike_* — either vendor qualifies)
 //   exit 101 (or 0), exfiltration/impact tactics      -> EXPOSED
 //   exit 101 (or 0), other tactics                    -> MISSED
 //   exit 200/259/260 (inconclusive)                   -> ERROR ("inconclusive: <name>")
@@ -67,6 +68,7 @@ const INCONCLUSIVE_EXIT_CODES = new Set([200, 259, 260]);
 const MAX_REPORT_DOCS = 10000;
 
 const MICROSOFT_DEFENDER = 'Microsoft Defender for Endpoint';
+const CROWDSTRIKE_FALCON = 'CrowdStrike Falcon';
 
 export type SbOutcome = 'PREVENTED' | 'DETECTED' | 'MISSED' | 'EXPOSED' | 'NOT_RUN' | 'ERROR';
 
@@ -192,10 +194,10 @@ function isoWithTz(ts: unknown): string {
 }
 
 /** Decide the SB outcome for one bundle-control doc. */
-function mapOutcome(exitCode: number | undefined, rawTactics: string[], defenderDetected: boolean): SbOutcome {
+function mapOutcome(exitCode: number | undefined, rawTactics: string[], edrDetected: boolean): SbOutcome {
   if (exitCode !== undefined && PREVENTED_EXIT_CODES.has(exitCode)) return 'PREVENTED';
   if (exitCode !== undefined && EXECUTED_EXIT_CODES.has(exitCode)) {
-    if (defenderDetected) return 'DETECTED';
+    if (edrDetected) return 'DETECTED';
     if (rawTactics.some((t) => EXPOSED_TACTICS.has(t))) return 'EXPOSED';
     return 'MISSED';
   }
@@ -325,11 +327,20 @@ export class SbReportService {
       const defenderDetected = Boolean(
         getField(source, 'f0rtika.defender_stage_detected') ?? getField(source, 'f0rtika.defender_detected'),
       );
+      const crowdstrikeDetected = Boolean(
+        getField(source, 'f0rtika.crowdstrike_stage_detected') ?? getField(source, 'f0rtika.crowdstrike_detected'),
+      );
+      // Vendor attribution — when both vendors detected the stage, list both.
+      const detectingVendors = [
+        ...(defenderDetected ? [MICROSOFT_DEFENDER] : []),
+        ...(crowdstrikeDetected ? [CROWDSTRIKE_FALCON] : []),
+      ];
+      const edrDetected = detectingVendors.length > 0;
 
       const stage = parseStageFromValidator(getField(source, 'f0rtika.control_validator'))
         ?? fallbackStage.get(hit)
         ?? 0;
-      const outcome = mapOutcome(exitCode, rawTactics, defenderDetected);
+      const outcome = mapOutcome(exitCode, rawTactics, edrDetected);
       const sourceEventId = String(hit._id ?? '');
 
       const inconclusive = exitCode !== undefined && INCONCLUSIVE_EXIT_CODES.has(exitCode);
@@ -350,8 +361,8 @@ export class SbReportService {
         tactics: rawTactics.map((t) => TACTIC_TO_TA[t] ?? t),
         outcome,
         isProtected: outcome === 'PREVENTED' || outcome === 'DETECTED',
-        preventedBy: outcome === 'PREVENTED' && defenderDetected ? [MICROSOFT_DEFENDER] : [],
-        detectedBy: outcome === 'DETECTED' ? [MICROSOFT_DEFENDER] : [],
+        preventedBy: outcome === 'PREVENTED' ? detectingVendors : [],
+        detectedBy: outcome === 'DETECTED' ? detectingVendors : [],
         evidenceRef,
       };
     });

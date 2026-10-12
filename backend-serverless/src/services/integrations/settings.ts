@@ -1,8 +1,10 @@
 // Settings service for external integration credentials — Vercel Blob storage version
 
 import * as crypto from 'crypto';
-import type { AzureIntegrationSettings, AzureCredentials, DefenderIntegrationSettings, DefenderCredentials, IntegrationsSettings } from '../../types/integrations.js';
+import type { AzureIntegrationSettings, AzureCredentials, DefenderIntegrationSettings, DefenderCredentials, CrowdStrikeIntegrationSettings, CrowdStrikeCredentials, IntegrationsSettings } from '../../types/integrations.js';
 import type { AutoResolveMode } from '../../types/defender.js';
+import type { CrowdStrikeRegion, CrowdStrikeZtaStatus } from '../../types/crowdstrike.js';
+import { CROWDSTRIKE_REGION_BASE_URLS, DEFAULT_CROWDSTRIKE_BASE_URL } from '../crowdstrike/falcon-client.js';
 import { blobReadText, blobWrite } from '../storage.js';
 
 const SETTINGS_KEY = 'settings/integrations.json';
@@ -118,6 +120,14 @@ export class IntegrationsSettingsService {
         }
         if (settings.defender.private_key_pem?.startsWith('enc:')) {
           settings.defender.private_key_pem = this.decrypt(settings.defender.private_key_pem.slice(4));
+        }
+      }
+      if (settings.crowdstrike) {
+        if (settings.crowdstrike.client_id?.startsWith('enc:')) {
+          settings.crowdstrike.client_id = this.decrypt(settings.crowdstrike.client_id.slice(4));
+        }
+        if (settings.crowdstrike.client_secret?.startsWith('enc:')) {
+          settings.crowdstrike.client_secret = this.decrypt(settings.crowdstrike.client_secret.slice(4));
         }
       }
       return settings;
@@ -414,5 +424,180 @@ export class IntegrationsSettingsService {
       throw new Error('Cannot set auto_resolve_mode: Defender integration is not configured');
     }
     await this.saveDefenderSettings({ auto_resolve_mode: mode });
+  }
+
+  // ── CrowdStrike Falcon ────────────────────────────────────────────
+
+  private getEnvCrowdStrikeSettings(): CrowdStrikeIntegrationSettings | null {
+    const clientId = process.env.CROWDSTRIKE_CLIENT_ID;
+    const clientSecret = process.env.CROWDSTRIKE_CLIENT_SECRET;
+
+    if (!clientId || !clientSecret) return null;
+
+    return {
+      base_url: process.env.CROWDSTRIKE_BASE_URL || DEFAULT_CROWDSTRIKE_BASE_URL,
+      client_id: clientId,
+      client_secret: clientSecret,
+      configured: true,
+      label: process.env.CROWDSTRIKE_LABEL || undefined,
+    };
+  }
+
+  /** Check if CrowdStrike credentials are provided via environment variables. */
+  isEnvCrowdStrikeConfigured(): boolean {
+    return this.getEnvCrowdStrikeSettings() !== null;
+  }
+
+  /** Resolve a region key to its API base URL (custom base_url always wins). */
+  private resolveCrowdStrikeBaseUrl(baseUrl?: string, region?: CrowdStrikeRegion): string {
+    if (baseUrl) return baseUrl;
+    if (region && CROWDSTRIKE_REGION_BASE_URLS[region]) return CROWDSTRIKE_REGION_BASE_URLS[region];
+    return DEFAULT_CROWDSTRIKE_BASE_URL;
+  }
+
+  async getCrowdStrikeSettings(): Promise<CrowdStrikeIntegrationSettings | null> {
+    const fileSettings = await this.getFileSettings();
+    if (fileSettings?.crowdstrike?.configured) {
+      return fileSettings.crowdstrike;
+    }
+    return this.getEnvCrowdStrikeSettings();
+  }
+
+  async saveCrowdStrikeSettings(settings: Partial<CrowdStrikeIntegrationSettings>): Promise<void> {
+    const existing = await this.getFileSettings() ?? {};
+    const current = existing.crowdstrike ?? {
+      base_url: '',
+      client_id: '',
+      client_secret: '',
+      configured: false,
+    };
+    const merged: CrowdStrikeIntegrationSettings = {
+      base_url: this.resolveCrowdStrikeBaseUrl(
+        settings.base_url || current.base_url || undefined,
+        settings.region !== undefined ? settings.region : current.region,
+      ),
+      region: settings.region !== undefined ? settings.region : current.region,
+      client_id: settings.client_id || current.client_id,
+      client_secret: settings.client_secret || current.client_secret,
+      configured: true,
+      label: settings.label !== undefined ? settings.label : current.label,
+      last_alert_sync: settings.last_alert_sync !== undefined ? settings.last_alert_sync : current.last_alert_sync,
+      last_zta_sync: settings.last_zta_sync !== undefined ? settings.last_zta_sync : current.last_zta_sync,
+      zta_status: settings.zta_status !== undefined ? settings.zta_status : current.zta_status,
+      auto_resolve_mode: settings.auto_resolve_mode !== undefined ? settings.auto_resolve_mode : current.auto_resolve_mode,
+    };
+    const toSave: IntegrationsSettings = {
+      ...existing,
+      crowdstrike: {
+        ...merged,
+        client_id: 'enc:' + this.encrypt(merged.client_id),
+        client_secret: 'enc:' + this.encrypt(merged.client_secret),
+      },
+    };
+    await blobWrite(SETTINGS_KEY, JSON.stringify(toSave, null, 2));
+  }
+
+  async isCrowdStrikeConfigured(): Promise<boolean> {
+    const settings = await this.getCrowdStrikeSettings();
+    if (!settings?.configured) return false;
+    if (!settings.client_id) return false;
+    return !!settings.client_secret;
+  }
+
+  /** Returns raw decrypted credentials for the Falcon OAuth2 client. */
+  async getCrowdStrikeCredentials(): Promise<CrowdStrikeCredentials | null> {
+    const settings = await this.getCrowdStrikeSettings();
+    if (!settings?.configured) return null;
+    if (!settings.client_id || !settings.client_secret) return null;
+    return {
+      base_url: this.resolveCrowdStrikeBaseUrl(settings.base_url, settings.region),
+      client_id: settings.client_id,
+      client_secret: settings.client_secret,
+    };
+  }
+
+  /** Remove CrowdStrike integration credentials from blob settings. */
+  async deleteCrowdStrikeSettings(): Promise<void> {
+    const raw = await this.getRawFileSettings();
+    if (!raw || !raw.crowdstrike) return;
+    delete raw.crowdstrike;
+    await blobWrite(SETTINGS_KEY, JSON.stringify(raw, null, 2));
+  }
+
+  /**
+   * Read persisted CrowdStrike sync timestamps from either the crowdstrike
+   * settings section (blob-based credentials) or the standalone
+   * crowdstrike_sync key (env var credentials).
+   */
+  async getCrowdStrikeSyncTimestamps(): Promise<{ last_alert_sync?: string; last_zta_sync?: string; zta_status?: CrowdStrikeZtaStatus; sync_version?: number }> {
+    const settings = await this.getCrowdStrikeSettings();
+    if (settings?.last_alert_sync || settings?.last_zta_sync) {
+      return {
+        last_alert_sync: settings.last_alert_sync,
+        last_zta_sync: settings.last_zta_sync,
+        zta_status: settings.zta_status,
+        sync_version: settings.sync_version,
+      };
+    }
+    const raw = await this.getRawFileSettings() as Record<string, any> | null;
+    const syncSection = raw?.crowdstrike_sync;
+    if (syncSection) {
+      return {
+        last_alert_sync: syncSection.last_alert_sync,
+        last_zta_sync: syncSection.last_zta_sync,
+        zta_status: syncSection.zta_status,
+        sync_version: syncSection.sync_version,
+      };
+    }
+    return {};
+  }
+
+  /**
+   * Save only CrowdStrike sync timestamps without touching credentials.
+   * Uses a standalone crowdstrike_sync key when no blob-based crowdstrike
+   * section exists, preventing env-var credentials from being clobbered.
+   */
+  async saveCrowdStrikeSyncTimestamps(timestamps: { last_alert_sync?: string; last_zta_sync?: string; zta_status?: CrowdStrikeZtaStatus; sync_version?: number }): Promise<void> {
+    const existing = await this.getRawFileSettings() as Record<string, any> ?? {};
+
+    if (existing.crowdstrike) {
+      if (timestamps.last_alert_sync !== undefined) existing.crowdstrike.last_alert_sync = timestamps.last_alert_sync;
+      if (timestamps.last_zta_sync !== undefined) existing.crowdstrike.last_zta_sync = timestamps.last_zta_sync;
+      if (timestamps.zta_status !== undefined) existing.crowdstrike.zta_status = timestamps.zta_status;
+      if (timestamps.sync_version !== undefined) existing.crowdstrike.sync_version = timestamps.sync_version;
+    } else {
+      existing.crowdstrike_sync = { ...existing.crowdstrike_sync, ...timestamps };
+    }
+
+    await blobWrite(SETTINGS_KEY, JSON.stringify(existing, null, 2));
+  }
+
+  // ── CrowdStrike Auto-Resolve mode ──────────────────────────────
+
+  /**
+   * Read the current CrowdStrike auto-resolve mode. Defaults to 'disabled'
+   * when the field is missing, CrowdStrike isn't configured, or the blob
+   * holds an unknown string (forward-compat).
+   */
+  async getCrowdStrikeAutoResolveMode(): Promise<AutoResolveMode> {
+    const settings = await this.getCrowdStrikeSettings();
+    const mode = settings?.auto_resolve_mode;
+    if (mode && AUTO_RESOLVE_MODES.includes(mode)) return mode;
+    return DEFAULT_AUTO_RESOLVE_MODE;
+  }
+
+  /**
+   * Persist a new auto-resolve mode without touching credentials. Throws
+   * when the mode is invalid or when CrowdStrike isn't configured yet.
+   */
+  async setCrowdStrikeAutoResolveMode(mode: AutoResolveMode): Promise<void> {
+    if (!AUTO_RESOLVE_MODES.includes(mode)) {
+      throw new Error(`Invalid auto_resolve_mode: ${mode}. Must be one of: ${AUTO_RESOLVE_MODES.join(', ')}`);
+    }
+    const current = await this.getCrowdStrikeSettings();
+    if (!current?.configured) {
+      throw new Error('Cannot set auto_resolve_mode: CrowdStrike integration is not configured');
+    }
+    await this.saveCrowdStrikeSettings({ auto_resolve_mode: mode });
   }
 }

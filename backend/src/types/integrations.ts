@@ -1,7 +1,9 @@
 // Type definitions for external integration settings (Azure / Entra ID, etc.)
 
 import type { AutoResolveMode } from './defender.js';
+import type { CrowdStrikeRegion, CrowdStrikeZtaStatus } from './crowdstrike.js';
 export type { AutoResolveMode };
+export type { CrowdStrikeRegion };
 
 export type DefenderAuthMethod = 'client_secret' | 'certificate';
 
@@ -51,6 +53,42 @@ export interface DefenderIntegrationSettings {
 export type DefenderCredentials =
   | { authMethod: 'client_secret'; tenant_id: string; client_id: string; client_secret: string }
   | { authMethod: 'certificate'; tenant_id: string; client_id: string; cert_thumbprint: string; private_key_pem: string };
+
+// ---------------------------------------------------------------------------
+// CrowdStrike Falcon
+// ---------------------------------------------------------------------------
+
+export interface CrowdStrikeIntegrationSettings {
+  /** Resolved API base URL (custom value wins over the region map). */
+  base_url: string;
+  /** Falcon cloud region used to derive base_url when no custom URL is set. */
+  region?: CrowdStrikeRegion;
+  client_id: string;
+  // Encrypted at rest
+  client_secret: string;
+  configured: boolean;
+  label?: string; // e.g. "Contoso Production Falcon"
+  /** Persisted sync timestamps so incremental syncs survive process restarts. */
+  last_alert_sync?: string;
+  last_zta_sync?: string;
+  /** Alert schema version of the last completed sync — mismatch forces a full re-sync. */
+  sync_version?: number;
+  /** Last known Zero Trust Assessment availability ('not_licensed' after a 403). */
+  zta_status?: CrowdStrikeZtaStatus;
+  /**
+   * Auto-resolve pillar mode. Missing/undefined = 'disabled' (default).
+   * Operationally opt-in — requires the `Alerts: write` scope on the
+   * Falcon API client for modes other than 'disabled'.
+   */
+  auto_resolve_mode?: AutoResolveMode;
+}
+
+/** Raw credentials for the Falcon OAuth2 client (secret-only auth — CrowdStrike has no certificate auth). */
+export interface CrowdStrikeCredentials {
+  base_url: string;
+  client_id: string;
+  client_secret: string;
+}
 
 // ---------------------------------------------------------------------------
 // Alert & Notification Settings
@@ -103,6 +141,7 @@ export interface AlertSettings {
 export interface OrgIntegrationSettings {
   azure?: AzureIntegrationSettings;
   defender?: DefenderIntegrationSettings;
+  crowdstrike?: CrowdStrikeIntegrationSettings;
   alerts?: AlertSettings;
 }
 
@@ -114,6 +153,7 @@ export interface OrgIntegrationSettings {
 export interface IntegrationsSettings {
   azure?: AzureIntegrationSettings;
   defender?: DefenderIntegrationSettings;
+  crowdstrike?: CrowdStrikeIntegrationSettings;
   alerts?: AlertSettings;
   /** Per-org overrides. Key is the Clerk org_id. */
   orgs?: Record<string, OrgIntegrationSettings>;
