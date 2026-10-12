@@ -341,8 +341,12 @@ export class CrowdStrikeSyncService {
       this.syncStatus.ztaStatus = 'ok';
       await this.persistSyncTimestamps();
     } catch (err) {
-      if (err instanceof FalconApiError && err.statusCode === 403) {
-        // Not licensed / scope missing — non-fatal by design.
+      // Not licensed / not provisioned — non-fatal by design. CrowdStrike
+      // returns 403 when the API client lacks the ZTA scope, and 404
+      // (generic "Not Found" with a trace-id) when ZTA isn't provisioned
+      // for the CID at all (no Falcon Insight subscription). Both mean the
+      // same thing to us: record not_licensed and skip quietly.
+      if (err instanceof FalconApiError && (err.statusCode === 403 || err.statusCode === 404)) {
         console.log('[CrowdStrike] ZTA not licensed/unavailable — skipping score sync');
         this.syncStatus.ztaStatus = 'not_licensed';
         await this.persistSyncTimestamps();
