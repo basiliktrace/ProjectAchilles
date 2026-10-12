@@ -43,8 +43,8 @@ registerCommand({
       },
       handler: async (ctx) => {
         const result = await api.listAgents({
-          status: ctx.flags.status as string | undefined,
-          os: ctx.flags.os as string | undefined,
+          status: ctx.flags.status as api.ListAgentsParams['status'],
+          os: ctx.flags.os as api.ListAgentsParams['os'],
           tag: ctx.flags.tag as string | undefined,
           online_only: ctx.flags['online-only'] as boolean | undefined,
           stale_only: ctx.flags['stale-only'] as boolean | undefined,

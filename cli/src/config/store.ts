@@ -190,7 +190,7 @@ export function setConfigValue(key: string, value: string): void {
     }
   }
 
-  let current: Record<string, unknown> = config as Record<string, unknown>;
+  let current: Record<string, unknown> = config as unknown as Record<string, unknown>;
 
   for (let i = 0; i < parts.length - 1; i++) {
     const part = parts[i];
