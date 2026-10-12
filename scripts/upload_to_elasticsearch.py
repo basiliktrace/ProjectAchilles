@@ -219,7 +219,10 @@ def get_results_index_mapping():
                 },
                 "event": {
                     "properties": {
-                        "ERROR": {"type": "integer"}
+                        # long, not integer: Windows exit codes are unsigned
+                        # 32-bit (EDR-kill codes like 0xE0000027 exceed int32).
+                        "ERROR": {"type": "long"},
+                        "ERROR_raw": {"type": "keyword"}
                     }
                 }
             }
