@@ -157,7 +157,7 @@ export interface CrowdStrikeSyncStageResult {
 
 export interface CrowdStrikeSyncRunResult {
   alerts: CrowdStrikeSyncStageResult;
-  zta_scores: CrowdStrikeSyncStageResult;
+  zta: CrowdStrikeSyncStageResult;
   timestamp: string;
 }
 
@@ -166,7 +166,7 @@ export interface CrowdStrikeSyncStatus {
   lastZtaSync: string | null;
   lastAttemptAt?: string | null;
   ztaStatus?: CrowdStrikeZtaStatus | null;
-  lastError?: { stage: 'alerts' | 'zta_scores'; message: string; at: string } | null;
+  lastError?: { stage: 'alerts' | 'zta'; message: string; at: string } | null;
 }
 
 // --- Auto-Resolve (shared by Defender and CrowdStrike) ---

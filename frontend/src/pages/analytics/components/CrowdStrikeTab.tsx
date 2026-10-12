@@ -108,7 +108,7 @@ export default function CrowdStrikeTab() {
         .filter((t): t is string => !!t)
         .sort();
       setLastSync(times.at(-1) ?? null);
-      setSyncError(status.lastError ? `${status.lastError.stage}: ${status.lastError.message}` : null);
+      setSyncError(status.lastError ? `${status.lastError.stage}: ${status.lastError.message || 'unknown error'}` : null);
       setZtaStatus(status.ztaStatus ?? null);
     } catch (err) {
       console.error('Failed to load CrowdStrike sync status:', err);
@@ -120,8 +120,8 @@ export default function CrowdStrikeTab() {
     setSyncError(null);
     try {
       const result = await integrationsApi.triggerCrowdStrikeSync();
-      const failed = (['alerts', 'zta_scores'] as const).find((s) => result[s].errors.length > 0);
-      if (failed) setSyncError(`${failed}: ${result[failed].errors[0]}`);
+      const failed = (['alerts', 'zta'] as const).find((s) => (result[s]?.errors.length ?? 0) > 0);
+      if (failed) setSyncError(`${failed}: ${result[failed].errors[0] || 'unknown error'}`);
       await loadData();
       await loadSyncStatus();
     } catch (err) {

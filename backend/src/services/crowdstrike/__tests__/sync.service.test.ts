@@ -516,6 +516,25 @@ describe('CrowdStrikeSyncService', () => {
       expect(status.lastAlertSync).toBeNull();
     });
 
+    it('synthesizes a descriptive error when the ES error message is empty (HEAD exists 403)', async () => {
+      // ES ResponseError from a HEAD request (indices.exists) carries no
+      // response body by definition, so .message is ''. Without describeError
+      // this surfaced in the UI as a bare "alerts:" banner.
+      const emptyHeadError = Object.assign(new Error(''), {
+        name: 'ResponseError',
+        statusCode: 403,
+        meta: { meta: { request: { params: { path: '/achilles-crowdstrike' } } } },
+      });
+      vi.mocked(ensureCrowdStrikeIndex).mockRejectedValueOnce(emptyHeadError);
+
+      const result = await service.syncAlerts();
+
+      expect(result.errors[0]).toContain('ResponseError');
+      expect(result.errors[0]).toContain('403');
+      expect(result.errors[0]).toContain('achilles-crowdstrike');
+      expect(service.getSyncStatus().lastError?.message).toBe(result.errors[0]);
+    });
+
     it('clears lastError once the same stage succeeds', async () => {
       vi.mocked(ensureCrowdStrikeIndex).mockRejectedValueOnce(new Error(PRIV_ERROR));
       await service.syncAlerts();
