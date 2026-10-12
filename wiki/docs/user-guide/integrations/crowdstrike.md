@@ -247,6 +247,15 @@ discriminator:
 
 ZTA snapshots are keyed `score-<YYYY-MM-DD>` — one document per day.
 
+:::warning Elasticsearch API key privileges
+If you connect to Elasticsearch with a scoped API key (rather than a
+superuser), the key must include `read`, `write`, and `create_index` on the
+`achilles-crowdstrike` index — the same grants you gave `achilles-defender`
+when enabling the Defender integration. Without them the sync fails with an
+HTTP 403 on the index existence check. (Defender can keep working while
+CrowdStrike fails, because the key's index list is per-pattern.)
+:::
+
 ### Cross-Correlation Logic
 
 The analytics service provides four types of cross-correlation between

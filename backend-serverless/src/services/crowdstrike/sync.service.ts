@@ -38,6 +38,30 @@ const ALERT_PAGE_LIMIT = 1000;
 /** Max device AIDs per ZTA query page. */
 const ZTA_DEVICE_PAGE_LIMIT = 5000;
 
+/**
+ * Never record an empty error message. Elasticsearch `ResponseError`s from
+ * HEAD requests (e.g. `indices.exists` inside `ensureCrowdStrikeIndex`) have
+ * no response body by definition, so `.message` is '' — which surfaced in
+ * the UI as a bare "alerts:" banner and in logs as a blank line. A 403 on
+ * that HEAD request almost always means the ES API key lacks privileges on
+ * the achilles-crowdstrike index (Defender works because its index was
+ * already covered).
+ */
+function describeError(err: unknown): string {
+  if (err instanceof Error) {
+    if (err.message) return err.message;
+    const statusCode = (err as { statusCode?: number }).statusCode;
+    const path = (err as { meta?: { meta?: { request?: { params?: { path?: string } } } } })
+      .meta?.meta?.request?.params?.path;
+    const where = path ? ` on ${path}` : '';
+    const hint = statusCode === 403
+      ? ' — check that the Elasticsearch API key has read/write/create_index on the achilles-crowdstrike index'
+      : ' (empty response body)';
+    return `${err.name}${statusCode ? ` HTTP ${statusCode}` : ''}${where}${hint}`;
+  }
+  return String(err);
+}
+
 export class CrowdStrikeSyncService {
   private falconClient: FalconClient | null = null;
   private syncStatus: CrowdStrikeSyncStatus = {
@@ -249,7 +273,7 @@ export class CrowdStrikeSyncService {
       this.syncStatus.lastAlertSync = new Date().toISOString();
       await this.persistSyncTimestamps();
     } catch (err) {
-      errors.push(err instanceof Error ? err.message : String(err));
+      errors.push(describeError(err));
     }
 
     this.recordOutcome('alerts', errors);
@@ -325,7 +349,7 @@ export class CrowdStrikeSyncService {
         this.recordOutcome('zta', []);
         return { synced, errors };
       }
-      errors.push(err instanceof Error ? err.message : String(err));
+      errors.push(describeError(err));
     }
 
     this.recordOutcome('zta', errors);
