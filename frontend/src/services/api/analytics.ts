@@ -158,6 +158,13 @@ export interface EnrichedTestExecution extends TestExecution {
    * bundle flag in that case.
    */
   defender_stage_detected?: boolean;
+  // Populated by the CrowdStrike enrichment pass when an alert in
+  // achilles-crowdstrike correlates to this doc via bundle UUID + hostname +
+  // time window. Same semantics as the defender_* flags above: the
+  // bundle-level flag propagates across stages; the stage flag is strictly
+  // per-stage.
+  crowdstrike_detected?: boolean;
+  crowdstrike_stage_detected?: boolean;
 }
 
 export interface PaginatedResponse<T> {
@@ -284,6 +291,7 @@ export interface ExecutionGroup {
   unprotectedCount: number;
   totalCount: number;
   defenderDetected?: boolean;
+  crowdstrikeDetected?: boolean;
 }
 
 // Response shape for grouped/collapsed pagination

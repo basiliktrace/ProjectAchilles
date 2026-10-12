@@ -26,6 +26,7 @@ graph TB
         AGS[Agent Service]
         BDS[Build Service]
         DFS[Defender Service]
+        CSF[CrowdStrike Service]
         ALS[Alerting Service]
     end
 
@@ -34,6 +35,7 @@ graph TB
     AGS --> DB[(SQLite)]
     BDS --> GO[Go Toolchain + Code Signing]
     DFS --> GRAPH[Microsoft Graph API]
+    CSF --> FALCON[CrowdStrike Falcon API]
     ALS --> NOTIFY[Slack · Email]
 
     AGS <-->|Agent API Key| AGENT
@@ -126,6 +128,7 @@ ProjectAchilles/
 │       │   ├── browser/       # Git sync, test indexing
 │       │   ├── tests/         # Go cross-compilation, cert management
 │       │   ├── defender/      # Microsoft Graph API client
+│       │   ├── crowdstrike/   # CrowdStrike Falcon API client
 │       │   └── alerting/      # Slack + email dispatch
 │       ├── middleware/        # Auth, error handling, rate limiting
 │       └── types/             # TypeScript definitions
@@ -201,7 +204,7 @@ graph LR
         ES -->|Aggregate| DEFENSE[Defense Score]
         ES -->|Aggregate| HEATMAP[MITRE Heatmap]
         ES -->|Aggregate| TRENDS[Trend Charts]
-        ES -->|Correlate| DEFENDER[Defender Cross-Correlation]
+        ES -->|Correlate| DEFENDER[EDR Cross-Correlation<br/>Defender · CrowdStrike]
     end
 ```
 
@@ -256,6 +259,11 @@ Beyond the core test execution pipeline, several integration-specific flows run 
 **Microsoft Defender Sync** (background, every 5 min / 6 hours):
 ```
 Microsoft Graph API → Graph Client → Sync Service → achilles-defender index
+```
+
+**CrowdStrike Falcon Sync** (background, alerts every 5 min / ZTA every 6 hours):
+```
+CrowdStrike Falcon API → Falcon Client → Sync Service → achilles-crowdstrike index
 ```
 
 **Alert Evaluation** (triggered per result ingestion):

@@ -3,15 +3,22 @@ import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { GroupedPaginatedResponse, EnrichedTestExecution } from '@/services/api/analytics';
 import type { DefenderAlertItem, RelatedAlertsResponse } from '@/services/api/defender';
+import type { CrowdStrikeAlertItem, RelatedCrowdStrikeAlertsResponse } from '@/services/api/crowdstrike';
 
 // Hoisted spy so the vi.mock factory (which is itself hoisted above all
 // top-level declarations) can reference it without hitting a TDZ.
-const { getAlertsForTestMock } = vi.hoisted(() => ({
+const { getAlertsForTestMock, csGetAlertsForTestMock, csConfigured } = vi.hoisted(() => ({
   getAlertsForTestMock: vi.fn(),
+  csGetAlertsForTestMock: vi.fn(),
+  csConfigured: { value: false },
 }));
 
 vi.mock('@/hooks/useDefenderConfig', () => ({
   useDefenderConfig: () => ({ configured: true, loading: false }),
+}));
+
+vi.mock('@/hooks/useCrowdStrikeConfig', () => ({
+  useCrowdStrikeConfig: () => ({ configured: csConfigured.value, loading: false }),
 }));
 
 vi.mock('@/services/api/defender', async () => {
@@ -21,6 +28,16 @@ vi.mock('@/services/api/defender', async () => {
   return {
     ...actual,
     defenderApi: { getAlertsForTest: getAlertsForTestMock },
+  };
+});
+
+vi.mock('@/services/api/crowdstrike', async () => {
+  const actual = await vi.importActual<typeof import('@/services/api/crowdstrike')>(
+    '@/services/api/crowdstrike',
+  );
+  return {
+    ...actual,
+    crowdstrikeApi: { getAlertsForTest: csGetAlertsForTestMock },
   };
 });
 
@@ -52,6 +69,7 @@ function makeStage(overrides: Partial<EnrichedTestExecution>): EnrichedTestExecu
     control_id: 'T1083',
     is_bundle_control: true,
     defender_detected: false,
+    crowdstrike_detected: false,
     ...overrides,
   };
 }
@@ -75,7 +93,7 @@ function makeAlert(overrides: Partial<DefenderAlertItem> = {}): DefenderAlertIte
   };
 }
 
-function makeData(controls: EnrichedTestExecution[], opts: { defenderDetected: boolean }): GroupedPaginatedResponse {
+function makeData(controls: EnrichedTestExecution[], opts: { defenderDetected: boolean; crowdstrikeDetected?: boolean }): GroupedPaginatedResponse {
   const protectedCount = controls.filter((c) => c.error_code !== 101).length;
   const unprotectedCount = controls.length - protectedCount;
   return {
@@ -89,6 +107,7 @@ function makeData(controls: EnrichedTestExecution[], opts: { defenderDetected: b
         unprotectedCount,
         totalCount: controls.length,
         defenderDetected: opts.defenderDetected,
+        crowdstrikeDetected: opts.crowdstrikeDetected,
       },
     ],
     pagination: {
@@ -119,6 +138,9 @@ function renderTable(data: GroupedPaginatedResponse) {
 
 beforeEach(() => {
   getAlertsForTestMock.mockReset();
+  csGetAlertsForTestMock.mockReset();
+  csGetAlertsForTestMock.mockResolvedValue({ alerts: [], matchedTechniques: [], total: 0 });
+  csConfigured.value = false;
 });
 
 describe('ExecutionsDataTable — SB report export', () => {
@@ -529,5 +551,144 @@ describe('ExecutionsDataTable — toggle removal + parent rollup', () => {
 
     // Ratio badge format: "1/2 Protected" (run list + panel header)
     expect(screen.getAllByText('1/2 Protected').length).toBeGreaterThanOrEqual(1);
+  });
+});
+
+function makeCsAlert(overrides: Partial<CrowdStrikeAlertItem> = {}): CrowdStrikeAlertItem {
+  return {
+    alert_id: 'cs-alert-001',
+    alert_title: 'CrowdStrike: suspicious file lock race',
+    description: '',
+    severity: 'critical',
+    status: 'new',
+    technique: 'File and Directory Discovery',
+    tactic: 'Discovery',
+    product: 'epp',
+    scenario: 'suspicious_activity',
+    hostname: 'LAP-PF1A47F0',
+    filename: '',
+    filepath: '',
+    mitre_techniques: ['T1083'],
+    created_at: '2026-05-12T12:05:00.000Z',
+    updated_at: '2026-05-12T12:05:00.000Z',
+    resolved_at: null,
+    attribution: 'bundle',
+    ...overrides,
+  };
+}
+
+describe('ExecutionsDataTable — CrowdStrike detection + related alerts', () => {
+  it('renders "Detected" instead of "Unprotected" when a stage has crowdstrike_detected:true and error_code:101', async () => {
+    // Mirror of the Defender per-stage badge test: the crowdstrike enrichment
+    // flags (crowdstrike_stage_detected / crowdstrike_detected) drive the same
+    // amber "Detected" wording — a CrowdStrike-only shop sees identical UX.
+    csConfigured.value = true;
+    getAlertsForTestMock.mockResolvedValue({ alerts: [], matchedTechniques: [], total: 0 });
+
+    const detectedStage = makeStage({
+      test_uuid: `${BUNDLE_UUID}::T1562.001`,
+      test_name: 'WinDefend Service-Stop Notification Subscription',
+      control_id: 'T1562.001',
+      techniques: ['T1562.001'],
+      crowdstrike_detected: true,
+      crowdstrike_stage_detected: true,
+    });
+    const plainStage = makeStage({});
+
+    renderTable(makeData([plainStage, detectedStage], { defenderDetected: false, crowdstrikeDetected: true }));
+
+    await userEvent.click(screen.getAllByText(plainStage.bundle_name!)[0]);
+
+    // Parent rollup + the detected stage both show "Detected"; the plain
+    // stage stays "Unprotected".
+    await waitFor(() => {
+      expect(screen.getAllByText('Detected').length).toBeGreaterThanOrEqual(2);
+    });
+    expect(screen.getAllByText('Unprotected')).toHaveLength(1);
+  });
+
+  it('does not fetch CrowdStrike alerts when the integration is not configured', async () => {
+    getAlertsForTestMock.mockResolvedValue({ alerts: [], matchedTechniques: [], total: 0 });
+    const stage = makeStage({});
+    renderTable(makeData([stage], { defenderDetected: false }));
+
+    await userEvent.click(screen.getAllByText(stage.bundle_name!)[0]);
+
+    await waitFor(() => expect(getAlertsForTestMock).toHaveBeenCalled());
+    expect(csGetAlertsForTestMock).not.toHaveBeenCalled();
+  });
+
+  it('renders the stage-attributed CrowdStrike alert under the matching stage detail', async () => {
+    csConfigured.value = true;
+    getAlertsForTestMock.mockResolvedValue({ alerts: [], matchedTechniques: [], total: 0 });
+    csGetAlertsForTestMock.mockResolvedValue({
+      alerts: [
+        makeCsAlert({
+          alert_id: 'cs-stage-1',
+          alert_title: 'Falcon: Wacatac blocked',
+          attribution: 'stage',
+          attributed_control_id: 't1562.001',
+        }),
+      ],
+      matchedTechniques: ['T1562.001'],
+      total: 1,
+    } satisfies RelatedCrowdStrikeAlertsResponse);
+
+    const stage1 = makeStage({ test_uuid: `${BUNDLE_UUID}::T1083`, control_id: 'T1083', techniques: ['T1083'] });
+    const stage2 = makeStage({
+      test_uuid: `${BUNDLE_UUID}::T1562.001`,
+      control_id: 'T1562.001',
+      techniques: ['T1562.001'],
+      test_name: 'WinDefend Service-Stop Notification Subscription',
+      crowdstrike_detected: true,
+    });
+    renderTable(makeData([stage1, stage2], { defenderDetected: false, crowdstrikeDetected: true }));
+
+    await userEvent.click(screen.getAllByText(stage1.bundle_name!)[0]);
+    await waitFor(() => expect(csGetAlertsForTestMock).toHaveBeenCalledTimes(2));
+
+    // Open stage 2's detail panel — the stage-attributed CrowdStrike alert
+    // should surface there (and the section header should exist).
+    await userEvent.click(screen.getByText(stage2.test_name));
+    await waitFor(() => {
+      expect(screen.getByText(/Falcon: Wacatac blocked/)).toBeInTheDocument();
+    });
+    expect(screen.getByText('CrowdStrike Alerts')).toBeInTheDocument();
+  });
+
+  it('aggregates bundle-attribution CrowdStrike alerts across per-stage caches and dedupes by alert_id', async () => {
+    csConfigured.value = true;
+    getAlertsForTestMock.mockResolvedValue({ alerts: [], matchedTechniques: [], total: 0 });
+    const sharedAlert = makeCsAlert({
+      alert_id: 'cs-bundle-1',
+      alert_title: "Falcon: 'EICAR_Test_File' malware was prevented",
+      attribution: 'bundle',
+    });
+    csGetAlertsForTestMock.mockResolvedValue({
+      alerts: [sharedAlert],
+      matchedTechniques: ['T1083'],
+      total: 1,
+    });
+
+    const stage1 = makeStage({ test_uuid: `${BUNDLE_UUID}::T1083`, control_id: 'T1083', techniques: ['T1083'] });
+    const stage2 = makeStage({
+      test_uuid: `${BUNDLE_UUID}::T1562.001`,
+      control_id: 'T1562.001',
+      techniques: ['T1562.001'],
+      test_name: 'WinDefend Service-Stop Notification Subscription',
+    });
+    renderTable(makeData([stage1, stage2], { defenderDetected: false, crowdstrikeDetected: true }));
+
+    await userEvent.click(screen.getAllByText(stage1.bundle_name!)[0]);
+
+    await waitFor(() => {
+      expect(screen.getByText(/EICAR_Test_File/)).toBeInTheDocument();
+    });
+
+    expect(csGetAlertsForTestMock).toHaveBeenCalledTimes(2);
+    // Bundle-level callout renders the alert once despite both stages
+    // returning it.
+    expect(screen.getAllByText(/EICAR_Test_File/)).toHaveLength(1);
+    expect(screen.getByText(/Bundle-level CrowdStrike alerts/i)).toBeInTheDocument();
   });
 });

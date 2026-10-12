@@ -45,6 +45,9 @@ export const RESULTS_INDEX_MAPPING = {
           defender_detected: { type: 'boolean' as const },
           // Stage-specific detection — see backend mirror for rationale.
           defender_stage_detected: { type: 'boolean' as const },
+          // CrowdStrike equivalents, written by CrowdStrikeEnrichmentService.
+          crowdstrike_detected: { type: 'boolean' as const },
+          crowdstrike_stage_detected: { type: 'boolean' as const },
           tenant_label: { type: 'keyword' as const },
         },
       },

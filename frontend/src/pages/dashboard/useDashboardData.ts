@@ -13,6 +13,11 @@ import {
   type SecureScoreSummary,
   type SecureScoreTrendPoint,
 } from '@/services/api/defender';
+import {
+  crowdstrikeApi,
+  type ZtaScoreSummary,
+  type ZtaScoreTrendPoint,
+} from '@/services/api/crowdstrike';
 import { agentApi } from '@/services/api/agent';
 import type { AgentMetrics, AgentTask, FleetHealthMetrics } from '@/types/agent';
 import { browserApi, type SyncStatus } from '@/services/api/browser';
@@ -20,6 +25,7 @@ import type { TestMetadata } from '@/types/test';
 import { useAnalyticsAuth } from '@/hooks/useAnalyticsAuth';
 import { getWindowDaysForDateRange } from '@/hooks/useAnalyticsFilters';
 import { useDefenderConfig } from '@/hooks/useDefenderConfig';
+import { useCrowdStrikeConfig } from '@/hooks/useCrowdStrikeConfig';
 import { useOutdatedAgentCount } from '@/hooks/useOutdatedAgentCount';
 import { useScoringMode } from '@/hooks/useScoringMode';
 import { usePolling } from '@/hooks/usePolling';
@@ -80,6 +86,7 @@ export interface DashboardData {
   defense7: DefenseScore | null;
   errorRate: ErrorRateResponse | null;
   secureScore: SecureScoreSummary | null;
+  ztaScore: ZtaScoreSummary | null;
   testStats: TestStats | null;
   metrics: AgentMetrics | null;
   fleetHealth: FleetHealthMetrics | null;
@@ -89,11 +96,13 @@ export interface DashboardData {
   recentExecutions: RecentExecution[];
   analyticsConfigured: boolean;
   defenderConfigured: boolean;
+  crowdstrikeConfigured: boolean;
 }
 
 export function useDashboardData(range: DashboardRange = DEFAULT_DASHBOARD_RANGE): DashboardData {
   const { configured: analyticsConfigured, loading: analyticsAuthLoading } = useAnalyticsAuth();
   const { configured: defenderConfigured, loading: defenderConfigLoading } = useDefenderConfig();
+  const { configured: crowdstrikeConfigured, loading: crowdstrikeConfigLoading } = useCrowdStrikeConfig();
   const { scoringMode } = useScoringMode();
   const { outdatedCount } = useOutdatedAgentCount();
 
@@ -109,6 +118,8 @@ export function useDashboardData(range: DashboardRange = DEFAULT_DASHBOARD_RANGE
   const [errorTrend, setErrorTrend] = useState<ErrorRateTrendDataPoint[] | null>(null);
   const [secureScore, setSecureScore] = useState<SecureScoreSummary | null>(null);
   const [secureTrend, setSecureTrend] = useState<SecureScoreTrendPoint[] | null>(null);
+  const [ztaScore, setZtaScore] = useState<ZtaScoreSummary | null>(null);
+  const [ztaTrend, setZtaTrend] = useState<ZtaScoreTrendPoint[] | null>(null);
   const [rawControls, setRawControls] = useState<ControlItem[] | null>(null);
   const [metrics, setMetrics] = useState<AgentMetrics | null>(null);
   const [fleetHealth, setFleetHealth] = useState<FleetHealthMetrics | null>(null);
@@ -169,18 +180,30 @@ export function useDashboardData(range: DashboardRange = DEFAULT_DASHBOARD_RANGE
     setRawControls(settle(controls));
   }, [defenderConfigured, range]);
 
+  // CrowdStrike slice — ZTA may be unlicensed (403); settle() nulls it out
+  // and the rest of the dashboard is unaffected.
+  const loadCrowdStrikeData = useCallback(async () => {
+    if (!crowdstrikeConfigured) return;
+    const [score, trend] = await Promise.allSettled([
+      crowdstrikeApi.getZtaScore(),
+      crowdstrikeApi.getZtaScoreTrend(RANGE_DAYS[range]),
+    ]);
+    setZtaScore(settle(score));
+    setZtaTrend(settle(trend));
+  }, [crowdstrikeConfigured, range]);
+
   useEffect(() => {
     // Wait for config checks so we don't render "not configured" flashes
-    if (analyticsAuthLoading || defenderConfigLoading) return;
+    if (analyticsAuthLoading || defenderConfigLoading || crowdstrikeConfigLoading) return;
     let cancelled = false;
-    void Promise.all([loadAgentData(), loadTestData(), loadAnalyticsData(), loadDefenderData()])
+    void Promise.all([loadAgentData(), loadTestData(), loadAnalyticsData(), loadDefenderData(), loadCrowdStrikeData()])
       .finally(() => {
         if (!cancelled) setLoading(false);
       });
     return () => {
       cancelled = true;
     };
-  }, [analyticsAuthLoading, defenderConfigLoading, loadAgentData, loadTestData, loadAnalyticsData, loadDefenderData]);
+  }, [analyticsAuthLoading, defenderConfigLoading, crowdstrikeConfigLoading, loadAgentData, loadTestData, loadAnalyticsData, loadDefenderData, loadCrowdStrikeData]);
 
   usePolling(loadAgentData, AGENT_POLL_MS);
 
@@ -197,7 +220,7 @@ export function useDashboardData(range: DashboardRange = DEFAULT_DASHBOARD_RANGE
 
   const testStats = useMemo(() => (tests ? computeTestStats(tests) : null), [tests]);
 
-  // Left-join error-rate + secure-score trends onto the defense-score days
+  // Left-join error-rate + secure-score + zta-score trends onto the defense-score days
   const trend = useMemo<TrendPoint[]>(() => {
     if (!defenseTrend?.length) return [];
     const errByDay = new Map(
@@ -206,25 +229,30 @@ export function useDashboardData(range: DashboardRange = DEFAULT_DASHBOARD_RANGE
     const secureByDay = new Map(
       (secureTrend ?? []).map((p) => [format(new Date(p.date), 'yyyy-MM-dd'), p.percentage]),
     );
+    const ztaByDay = new Map(
+      (ztaTrend ?? []).map((p) => [format(new Date(p.date), 'yyyy-MM-dd'), p.overallScore]),
+    );
     return defenseTrend.map((p) => {
       const day = format(toDate(p.timestamp), 'yyyy-MM-dd');
       return {
         date: format(toDate(p.timestamp), 'MMM d'),
         defense: p.score,
         secure: secureByDay.get(day) ?? null,
+        zta: ztaByDay.get(day) ?? null,
         errorRate: errByDay.get(day) ?? null,
       };
     });
-  }, [defenseTrend, errorTrend, secureTrend]);
+  }, [defenseTrend, errorTrend, secureTrend, ztaTrend]);
 
   const trendDescription = useMemo(() => {
     const parts: string[] = [];
     if (defenseScore) parts.push(`Defense ${defenseScore.score.toFixed(1)}%`);
     if (secureScore) parts.push(`Secure ${secureScore.percentage.toFixed(1)}%`);
+    if (ztaScore) parts.push(`ZTA ${ztaScore.overallScore.toFixed(1)}%`);
     if (errorRate) parts.push(`Error rate ${errorRate.errorRate.toFixed(1)}%`);
     parts.push(`(${getWindowDaysForDateRange({ preset: range })}-day rolling)`);
     return parts.join(' · ');
-  }, [defenseScore, secureScore, errorRate, range]);
+  }, [defenseScore, secureScore, ztaScore, errorRate, range]);
 
   const controls = useMemo<RemediationControl[]>(() => {
     if (!rawControls) return [];
@@ -270,7 +298,7 @@ export function useDashboardData(range: DashboardRange = DEFAULT_DASHBOARD_RANGE
   );
 
   return {
-    loading: loading || analyticsAuthLoading || defenderConfigLoading,
+    loading: loading || analyticsAuthLoading || defenderConfigLoading || crowdstrikeConfigLoading,
     syncStatus,
     syncing,
     handleSync,
@@ -280,6 +308,7 @@ export function useDashboardData(range: DashboardRange = DEFAULT_DASHBOARD_RANGE
     defense7,
     errorRate,
     secureScore,
+    ztaScore,
     testStats,
     metrics,
     fleetHealth,
@@ -289,5 +318,6 @@ export function useDashboardData(range: DashboardRange = DEFAULT_DASHBOARD_RANGE
     recentExecutions,
     analyticsConfigured,
     defenderConfigured,
+    crowdstrikeConfigured,
   };
 }

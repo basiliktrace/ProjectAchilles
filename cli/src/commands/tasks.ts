@@ -119,8 +119,8 @@ registerCommand({
       },
       handler: async (ctx) => {
         const result = await api.listTasks({
-          status: ctx.flags.status as string | undefined,
-          type: ctx.flags.type as string | undefined,
+          status: ctx.flags.status as api.ListTasksParams['status'],
+          type: ctx.flags.type as api.ListTasksParams['type'],
           agent_id: ctx.flags['agent-id'] as string | undefined,
           search: ctx.flags.search as string | undefined,
           limit: ctx.flags.limit as number,
@@ -142,8 +142,8 @@ registerCommand({
       },
       handler: async (ctx) => {
         const result = await api.listTasksGrouped({
-          status: ctx.flags.status as string | undefined,
-          type: ctx.flags.type as string | undefined,
+          status: ctx.flags.status as api.ListTasksParams['status'],
+          type: ctx.flags.type as api.ListTasksParams['type'],
           limit: ctx.flags.limit as number,
         });
         ctx.output.table(

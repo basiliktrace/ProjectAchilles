@@ -41,6 +41,8 @@ while IFS= read -r file; do
   case "$file" in
     backend/src/services/defender/*|backend-serverless/src/services/defender/*)
       add "wiki: user-guide/integrations/microsoft-defender.md" "Defender service changed" ;;
+    backend/src/services/crowdstrike/*|backend-serverless/src/services/crowdstrike/*)
+      add "wiki: user-guide/integrations/crowdstrike.md" "CrowdStrike service changed" ;;
     backend/src/services/agent/*|backend-serverless/src/services/agent/*)
       add "wiki: user-guide/agent-management/" "Agent service changed" ;;
     backend/src/services/analytics/*|backend-serverless/src/services/analytics/*)

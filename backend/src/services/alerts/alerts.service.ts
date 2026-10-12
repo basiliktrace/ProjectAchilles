@@ -111,6 +111,8 @@ export class AlertsService {
     }
 
     // 7. Secure Score (Defender)
+    // NOTE: Defender-only in v1 — CrowdStrike ZTA score thresholds are out of
+    // scope here (see the crowdstrike integration plan, Phase 2 item 19).
     if (
       alertSettings.thresholds.secure_score_min != null &&
       integrationsSettings.isDefenderConfigured()

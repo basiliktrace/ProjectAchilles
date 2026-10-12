@@ -50,6 +50,30 @@ export const DefenderAutoResolveModeSchema = z.object({
   mode: z.enum(['disabled', 'dry_run', 'enabled']),
 });
 
+// ── CrowdStrike Falcon ───────────────────────────────────────────────────────
+
+const CrowdStrikeRegionSchema = z.enum(['us-1', 'us-2', 'eu-1', 'us-gov-1']);
+
+export const CrowdStrikeCredentialsSchema = z.object({
+  // Region only — the API base URL is derived from the constant region map
+  // (falcon-client.ts); there is deliberately no custom base_url field.
+  region: CrowdStrikeRegionSchema.optional(),
+  // Falcon client IDs are 32-char lowercase hex
+  client_id: z.string().regex(/^[0-9a-f]{32}$/, 'client_id must be a 32-character lowercase hex string').optional(),
+  client_secret: z.string().min(1).optional(),
+  label: z.string().optional(),
+});
+
+export const CrowdStrikeTestSchema = z.object({
+  region: CrowdStrikeRegionSchema.optional(),
+  client_id: z.string().regex(/^[0-9a-f]{32}$/, 'client_id must be a 32-character lowercase hex string').optional(),
+  client_secret: z.string().optional(),
+});
+
+export const CrowdStrikeAutoResolveModeSchema = z.object({
+  mode: z.enum(['disabled', 'dry_run', 'enabled']),
+});
+
 // ── Alert Settings ───────────────────────────────────────────────────────────
 
 const AlertThresholdsSchema = z.object({

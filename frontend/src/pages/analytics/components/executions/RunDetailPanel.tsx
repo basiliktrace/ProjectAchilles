@@ -10,6 +10,7 @@ import {
 } from 'lucide-react';
 import type { EnrichedTestExecution, RiskAcceptance } from '@/services/api/analytics';
 import type { RelatedAlertsResponse } from '@/services/api/defender';
+import type { RelatedCrowdStrikeAlertsResponse } from '@/services/api/crowdstrike';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
@@ -51,10 +52,13 @@ interface DescriptionData {
 interface RunDetailPanelProps {
   row: DisplayRow | null;
   defenderConfigured: boolean;
+  crowdstrikeConfigured: boolean;
   descriptionMap: Map<string, DescriptionData | null>;
   descriptionLoadingKey: string | null;
   alertsMap: Map<string, RelatedAlertsResponse | null>;
   alertsLoading: Set<string>;
+  csAlertsMap: Map<string, RelatedCrowdStrikeAlertsResponse | null>;
+  csAlertsLoading: Set<string>;
   stageAlertsCacheKey: (exec: EnrichedTestExecution) => string;
   getAcceptanceForExec: (exec: EnrichedTestExecution) => RiskAcceptance | undefined;
   riskEnabled: boolean;
@@ -83,23 +87,29 @@ function MetaCell({ label, children }: { label: string; children: React.ReactNod
   );
 }
 
-/** Description + metadata + stage-attributed Defender alerts for one execution. */
+/** Description + metadata + stage-attributed Defender/CrowdStrike alerts for one execution. */
 function ExecDetailBody({
   exec,
   defenderConfigured,
+  crowdstrikeConfigured,
   descriptionMap,
   descriptionLoadingKey,
   alertsMap,
   alertsLoading,
+  csAlertsMap,
+  csAlertsLoading,
   stageAlertsCacheKey,
   onOpenInfo,
 }: Pick<
   RunDetailPanelProps,
   | 'defenderConfigured'
+  | 'crowdstrikeConfigured'
   | 'descriptionMap'
   | 'descriptionLoadingKey'
   | 'alertsMap'
   | 'alertsLoading'
+  | 'csAlertsMap'
+  | 'csAlertsLoading'
   | 'stageAlertsCacheKey'
   | 'onOpenInfo'
 > & { exec: EnrichedTestExecution }) {
@@ -113,6 +123,9 @@ function ExecDetailBody({
   const alertData = alertsMap.get(alertKey);
   const isLoadingAlerts = alertsLoading.has(alertKey);
 
+  const csAlertData = csAlertsMap.get(alertKey);
+  const isLoadingCsAlerts = csAlertsLoading.has(alertKey);
+
   // Filter to alerts whose evidence binary is THIS specific stage's
   // technique. Accept exact match OR a `<control_id>-` prefix; the `-`
   // boundary prevents `T108` from accidentally matching `T1083`.
@@ -120,6 +133,16 @@ function ExecDetailBody({
   const stageAlerts =
     alertData && stageControlId
       ? alertData.alerts.filter((a) => {
+          if (a.attribution !== 'stage') return false;
+          const att = a.attributed_control_id?.toLowerCase();
+          if (!att) return false;
+          return att === stageControlId || att.startsWith(`${stageControlId}-`);
+        })
+      : [];
+
+  const csStageAlerts =
+    csAlertData && stageControlId
+      ? csAlertData.alerts.filter((a) => {
           if (a.attribution !== 'stage') return false;
           const att = a.attributed_control_id?.toLowerCase();
           if (!att) return false;
@@ -238,6 +261,56 @@ function ExecDetailBody({
           )}
         </div>
       )}
+
+      {/* Related CrowdStrike Alerts — STAGE-ATTRIBUTABLE only. Bundle-level
+          alerts render once in the bundle callout instead of being
+          duplicated under every stage. */}
+      {crowdstrikeConfigured && exec.techniques && exec.techniques.length > 0 && (
+        <div className="border-t border-border pt-3">
+          <span className="text-[10px] font-medium uppercase tracking-wider text-faint">
+            CrowdStrike Alerts
+          </span>
+          {isLoadingCsAlerts ? (
+            <div className="mt-2 flex items-center gap-2">
+              <Loader2 className="h-3.5 w-3.5 animate-spin text-muted" />
+              <span className="text-xs text-muted">Checking for related alerts...</span>
+            </div>
+          ) : csStageAlerts.length > 0 ? (
+            <div className="mt-2 space-y-2">
+              {csStageAlerts.map((alert) => {
+                const testTime = parseTimestamp(exec.timestamp).getTime();
+                const alertTime = new Date(alert.created_at).getTime();
+                const deltaMin = Math.round(Math.abs(alertTime - testTime) / 60000);
+                const deltaLabel =
+                  deltaMin < 60
+                    ? `${deltaMin}m ${alertTime > testTime ? 'after' : 'before'}`
+                    : `${Math.round(deltaMin / 60)}h ${alertTime > testTime ? 'after' : 'before'}`;
+                return (
+                  <div key={alert.alert_id} className="flex items-center gap-2 text-xs">
+                    <Badge
+                      variant="outline"
+                      className={cn('px-1.5 py-0 text-[10px]', ALERT_SEVERITY_CLASSES[alert.severity])}
+                    >
+                      {alert.severity}
+                    </Badge>
+                    <span className="flex-1 truncate text-foreground">{alert.alert_title}</span>
+                    <Badge variant="default" className="px-1.5 py-0 text-[10px]">
+                      {alert.status}
+                    </Badge>
+                    <span className="whitespace-nowrap text-faint">{deltaLabel}</span>
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <p className="mt-2 text-xs text-faint">
+              {csAlertData && csAlertData.alerts.some((a) => a.attribution === 'bundle')
+                ? 'No stage-specific CrowdStrike alerts. See the bundle-level alerts above.'
+                : 'No related CrowdStrike alerts within the time window'}
+            </p>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -292,8 +365,11 @@ export function RunDetailPanel(props: RunDetailPanelProps) {
   const {
     row,
     defenderConfigured,
+    crowdstrikeConfigured,
     alertsMap,
     alertsLoading,
+    csAlertsMap,
+    csAlertsLoading,
     stageAlertsCacheKey,
     getAcceptanceForExec,
     archiveEnabled,
@@ -417,8 +493,11 @@ export function RunDetailPanel(props: RunDetailPanelProps) {
             group={row}
             {...props}
             defenderConfigured={defenderConfigured}
+            crowdstrikeConfigured={crowdstrikeConfigured}
             alertsMap={alertsMap}
             alertsLoading={alertsLoading}
+            csAlertsMap={csAlertsMap}
+            csAlertsLoading={csAlertsLoading}
             stageAlertsCacheKey={stageAlertsCacheKey}
             expandedControlIndex={expandedControlIndex}
             onToggleControl={onToggleControl}
@@ -435,8 +514,11 @@ function BundleBody({
 }: RunDetailPanelProps & { group: BundleGroup }) {
   const {
     defenderConfigured,
+    crowdstrikeConfigured,
     alertsMap,
     alertsLoading,
+    csAlertsMap,
+    csAlertsLoading,
     stageAlertsCacheKey,
     expandedControlIndex,
     onToggleControl,
@@ -456,6 +538,18 @@ function BundleBody({
     }
   }
   const bundleAlerts = Array.from(seen.values());
+
+  // Bundle-level CrowdStrike alerts — same union/dedupe pattern as Defender.
+  const isLoadingCsAlerts = group.controls.some((ctrl) => csAlertsLoading.has(stageAlertsCacheKey(ctrl)));
+  const csSeen = new Map<string, RelatedCrowdStrikeAlertsResponse['alerts'][number]>();
+  for (const ctrl of group.controls) {
+    const entry = csAlertsMap.get(stageAlertsCacheKey(ctrl));
+    if (!entry) continue;
+    for (const a of entry.alerts) {
+      if (a.attribution === 'bundle') csSeen.set(a.alert_id, a);
+    }
+  }
+  const csBundleAlerts = Array.from(csSeen.values());
 
   const scored = group.controls.filter((c) => !isSkippedStage(c));
   const ratio = scored.length > 0 ? group.protectedCount / scored.length : 0;
@@ -482,6 +576,45 @@ function BundleBody({
               ) : (
                 <div className="mt-1 space-y-1">
                   {bundleAlerts.map((alert) => (
+                    <div key={alert.alert_id} className="flex items-center gap-2 text-xs">
+                      <Badge
+                        variant="outline"
+                        className={cn('px-1.5 py-0 text-[10px]', ALERT_SEVERITY_CLASSES[alert.severity])}
+                      >
+                        {alert.severity}
+                      </Badge>
+                      <span className="flex-1 truncate text-foreground">{alert.alert_title}</span>
+                      <Badge variant="default" className="px-1.5 py-0 text-[10px]">
+                        {alert.status}
+                      </Badge>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {crowdstrikeConfigured && (isLoadingCsAlerts || csBundleAlerts.length > 0) && (
+        <div className="rounded-md border border-warning/40 bg-warning-dim p-3">
+          <div className="flex items-start gap-2">
+            <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0 text-warning" />
+            <div className="min-w-0 flex-1">
+              <span className="text-xs font-medium uppercase tracking-wide text-warning">
+                Bundle-level CrowdStrike alerts
+              </span>
+              <span className="ml-2 text-xs text-muted">
+                (evidence doesn't identify a specific stage)
+              </span>
+              {isLoadingCsAlerts ? (
+                <div className="mt-1 flex items-center gap-2">
+                  <Loader2 className="h-3 w-3 animate-spin text-muted" />
+                  <span className="text-xs text-muted">Checking…</span>
+                </div>
+              ) : (
+                <div className="mt-1 space-y-1">
+                  {csBundleAlerts.map((alert) => (
                     <div key={alert.alert_id} className="flex items-center gap-2 text-xs">
                       <Badge
                         variant="outline"

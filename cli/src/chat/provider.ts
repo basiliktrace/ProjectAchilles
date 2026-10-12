@@ -9,7 +9,7 @@
 import { createAnthropic } from '@ai-sdk/anthropic';
 import { createOpenAI } from '@ai-sdk/openai';
 import { loadConfig } from '../config/store.js';
-import type { LanguageModelV1 } from 'ai';
+import type { LanguageModel } from 'ai';
 
 const DEFAULT_MODEL: Record<string, string> = {
   anthropic: 'claude-sonnet-4-6',
@@ -17,7 +17,7 @@ const DEFAULT_MODEL: Record<string, string> = {
   ollama: 'llama3',
 };
 
-export function getConfiguredModel(): LanguageModelV1 {
+export function getConfiguredModel(): LanguageModel {
   const config = loadConfig();
   const ai = config.ai;
 
@@ -36,7 +36,7 @@ export function getConfiguredModel(): LanguageModelV1 {
     const openai = createOpenAI({
       apiKey: apiKey ?? '',
       ...(ai?.base_url ? { baseURL: ai.base_url } : {}),
-      compatibility: 'compatible',
+      ...(provider === 'ollama' ? { name: 'ollama' } : {}),
     });
     // Use .chat() explicitly — the default openai(modelId) uses the Responses API
     // (/v1/responses) which Ollama and local servers don't support.

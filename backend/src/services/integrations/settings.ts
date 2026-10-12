@@ -5,8 +5,10 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import { encrypt as sharedEncrypt, decrypt as sharedDecrypt } from '../shared/encryption.js';
-import type { AzureIntegrationSettings, AzureCredentials, DefenderIntegrationSettings, DefenderCredentials, AlertSettings, IntegrationsSettings, OrgIntegrationSettings } from '../../types/integrations.js';
+import type { AzureIntegrationSettings, AzureCredentials, DefenderIntegrationSettings, DefenderCredentials, CrowdStrikeIntegrationSettings, CrowdStrikeCredentials, AlertSettings, IntegrationsSettings, OrgIntegrationSettings } from '../../types/integrations.js';
 import type { AutoResolveMode } from '../../types/defender.js';
+import type { CrowdStrikeRegion, CrowdStrikeZtaStatus } from '../../types/crowdstrike.js';
+import { CROWDSTRIKE_REGION_BASE_URLS, DEFAULT_CROWDSTRIKE_REGION } from '../crowdstrike/falcon-client.js';
 
 const AUTO_RESOLVE_MODES: ReadonlyArray<AutoResolveMode> = ['disabled', 'dry_run', 'enabled'] as const;
 const DEFAULT_AUTO_RESOLVE_MODE: AutoResolveMode = 'disabled';
@@ -152,6 +154,25 @@ export class IntegrationsSettingsService {
         if (settings.alerts.email?.smtp_pass?.startsWith('enc:')) {
           settings.alerts.email.smtp_pass = this.decrypt(settings.alerts.email.smtp_pass.slice(4));
         }
+      }
+
+      // Decrypt a single CrowdStrike section in place (top-level or per-org).
+      const decryptCrowdStrike = (cs: CrowdStrikeIntegrationSettings | undefined) => {
+        if (!cs) return;
+        if (cs.client_id?.startsWith('enc:')) {
+          cs.client_id = this.decrypt(cs.client_id.slice(4));
+        }
+        if (cs.client_secret?.startsWith('enc:')) {
+          cs.client_secret = this.decrypt(cs.client_secret.slice(4));
+        }
+      };
+
+      decryptCrowdStrike(settings.crowdstrike);
+      // Per-org sections are decrypted too (the Defender/Azure org sections
+      // predate this and are only decrypted at top level — decrypting here
+      // keeps the CrowdStrike per-org round-trip correct).
+      for (const org of Object.values(settings.orgs ?? {})) {
+        decryptCrowdStrike(org.crowdstrike);
       }
 
       return settings;
@@ -560,6 +581,296 @@ export class IntegrationsSettingsService {
 
     // Partial update preserves credentials (encrypted) and existing sync timestamps.
     this.saveDefenderSettings({ auto_resolve_mode: mode });
+  }
+
+  // ---------------------------------------------------------------------------
+  // CrowdStrike Falcon
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Read and validate CROWDSTRIKE_REGION from the environment. An invalid
+   * value is IGNORED with a clear warning (falls back to the us-1 default) —
+   * the region feeds the constant region map in falcon-client.ts, and a
+   * garbage value must never influence a fetch target.
+   */
+  private getEnvCrowdStrikeRegion(): CrowdStrikeRegion | undefined {
+    const region = process.env.CROWDSTRIKE_REGION;
+    if (!region) return undefined;
+    if (region in CROWDSTRIKE_REGION_BASE_URLS) return region as CrowdStrikeRegion;
+    console.warn(
+      `[integrations] Ignoring invalid CROWDSTRIKE_REGION='${region}' — must be one of: ${Object.keys(CROWDSTRIKE_REGION_BASE_URLS).join(', ')}. Falling back to '${DEFAULT_CROWDSTRIKE_REGION}'.`,
+    );
+    return undefined;
+  }
+
+  private getEnvCrowdStrikeSettings(): CrowdStrikeIntegrationSettings | null {
+    const clientId = process.env.CROWDSTRIKE_CLIENT_ID;
+    const clientSecret = process.env.CROWDSTRIKE_CLIENT_SECRET;
+
+    if (!clientId || !clientSecret) return null;
+
+    return {
+      region: this.getEnvCrowdStrikeRegion(),
+      client_id: clientId,
+      client_secret: clientSecret,
+      configured: true,
+      label: process.env.CROWDSTRIKE_LABEL || undefined,
+    };
+  }
+
+  /** Check if CrowdStrike credentials are provided via environment variables. */
+  isEnvCrowdStrikeConfigured(): boolean {
+    return this.getEnvCrowdStrikeSettings() !== null;
+  }
+
+  /** Returns decrypted CrowdStrike settings. Org-specific > legacy file > env vars. */
+  getCrowdStrikeSettings(): CrowdStrikeIntegrationSettings | null {
+    const fileSettings = this.getFileSettings();
+
+    const orgSection = this.getOrgSection(fileSettings);
+    if (orgSection?.crowdstrike?.configured) {
+      return orgSection.crowdstrike;
+    }
+
+    if (fileSettings?.crowdstrike?.configured) {
+      return fileSettings.crowdstrike;
+    }
+
+    return this.getEnvCrowdStrikeSettings();
+  }
+
+  /** Save CrowdStrike credentials (encrypts sensitive fields). Supports partial update. */
+  saveCrowdStrikeSettings(settings: Partial<CrowdStrikeIntegrationSettings>): void {
+    this.ensureSettingsDir();
+
+    const existing = this.getRawFileSettings() ?? {};
+    const decrypted = this.getFileSettings() ?? {};
+    const orgSection = this.getOrgSection(decrypted);
+    const current = orgSection?.crowdstrike ?? decrypted.crowdstrike ?? {
+      client_id: '',
+      client_secret: '',
+      configured: false,
+    };
+
+    const merged: CrowdStrikeIntegrationSettings = {
+      // Region only — the API base URL is derived from the constant region
+      // map at use time, never stored.
+      region: settings.region !== undefined ? settings.region : (current.region ?? DEFAULT_CROWDSTRIKE_REGION),
+      client_id: settings.client_id || current.client_id,
+      client_secret: settings.client_secret || current.client_secret,
+      configured: true,
+      label: settings.label !== undefined ? settings.label : current.label,
+      last_alert_sync: settings.last_alert_sync !== undefined ? settings.last_alert_sync : current.last_alert_sync,
+      last_zta_sync: settings.last_zta_sync !== undefined ? settings.last_zta_sync : current.last_zta_sync,
+      zta_status: settings.zta_status !== undefined ? settings.zta_status : current.zta_status,
+      auto_resolve_mode: settings.auto_resolve_mode !== undefined ? settings.auto_resolve_mode : current.auto_resolve_mode,
+    };
+
+    const encrypted = {
+      ...merged,
+      client_id: 'enc:' + this.encrypt(merged.client_id),
+      client_secret: 'enc:' + this.encrypt(merged.client_secret),
+    } as unknown as CrowdStrikeIntegrationSettings;
+
+    if (this.orgId) {
+      existing.orgs ??= {};
+      existing.orgs[this.orgId] ??= {};
+      existing.orgs[this.orgId].crowdstrike = encrypted;
+    } else {
+      existing.crowdstrike = encrypted;
+    }
+
+    fs.writeFileSync(SETTINGS_FILE, JSON.stringify(existing, null, 2), { mode: 0o600 });
+  }
+
+  /** Check if CrowdStrike integration is configured (file or env). */
+  isCrowdStrikeConfigured(): boolean {
+    const settings = this.getCrowdStrikeSettings();
+    if (!settings?.configured) return false;
+    if (!settings.client_id) return false;
+    return !!settings.client_secret;
+  }
+
+  /** Returns raw decrypted credentials for the Falcon OAuth2 client (region only — the client resolves the base URL from its constant map). */
+  getCrowdStrikeCredentials(): CrowdStrikeCredentials | null {
+    const settings = this.getCrowdStrikeSettings();
+    if (!settings?.configured) return null;
+    if (!settings.client_id || !settings.client_secret) return null;
+    return {
+      region: settings.region ?? DEFAULT_CROWDSTRIKE_REGION,
+      client_id: settings.client_id,
+      client_secret: settings.client_secret,
+    };
+  }
+
+  /**
+   * Masked view of the CrowdStrike settings for API responses: never exposes
+   * client_secret, only whether it is set. Client IDs and labels are
+   * non-secret identifiers and are shown in full. `base_url` is DERIVED from
+   * the constant region map for display — never a stored string.
+   */
+  getCrowdStrikeSettingsMasked(): {
+    configured: boolean;
+    base_url?: string;
+    region?: CrowdStrikeRegion;
+    client_id?: string;
+    label?: string;
+    client_secret_set?: boolean;
+    zta_status?: CrowdStrikeZtaStatus;
+    auto_resolve_mode?: AutoResolveMode;
+    env_configured: boolean;
+  } {
+    const settings = this.getCrowdStrikeSettings();
+    const envConfigured = this.isEnvCrowdStrikeConfigured();
+
+    if (!settings?.configured) {
+      return { configured: false, env_configured: envConfigured };
+    }
+
+    const region = settings.region ?? DEFAULT_CROWDSTRIKE_REGION;
+    return {
+      configured: true,
+      base_url: CROWDSTRIKE_REGION_BASE_URLS[region],
+      region,
+      client_id: settings.client_id,
+      label: settings.label,
+      client_secret_set: !!settings.client_secret,
+      zta_status: settings.zta_status,
+      auto_resolve_mode: settings.auto_resolve_mode,
+      env_configured: envConfigured,
+    };
+  }
+
+  /**
+   * Remove CrowdStrike integration credentials from the settings file.
+   * Refuses when credentials come from environment variables — deleting the
+   * file section would leave the env vars active, so the operator must
+   * remove the env vars to disconnect.
+   */
+  deleteCrowdStrikeSettings(): void {
+    if (this.isEnvCrowdStrikeConfigured()) {
+      throw new Error(
+        'Cannot disconnect: CrowdStrike credentials are set via environment variables (CROWDSTRIKE_REGION, CROWDSTRIKE_CLIENT_ID, CROWDSTRIKE_CLIENT_SECRET). Remove these env vars to disconnect.',
+      );
+    }
+
+    const raw = this.getRawFileSettings();
+    if (!raw) return;
+    if (this.orgId && raw.orgs?.[this.orgId]) {
+      delete raw.orgs[this.orgId].crowdstrike;
+    } else if (raw.crowdstrike) {
+      delete raw.crowdstrike;
+    } else {
+      return;
+    }
+    this.ensureSettingsDir();
+    fs.writeFileSync(SETTINGS_FILE, JSON.stringify(raw, null, 2), { mode: 0o600 });
+  }
+
+  /**
+   * Read persisted CrowdStrike sync timestamps from either the crowdstrike
+   * settings section (file-based credentials) or the standalone
+   * crowdstrike_sync key (env var credentials).
+   */
+  getCrowdStrikeSyncTimestamps(): { last_alert_sync?: string; last_zta_sync?: string; zta_status?: CrowdStrikeZtaStatus; sync_version?: number } {
+    // Check file-based crowdstrike settings first
+    const settings = this.getCrowdStrikeSettings();
+    if (settings?.last_alert_sync || settings?.last_zta_sync) {
+      return {
+        last_alert_sync: settings.last_alert_sync,
+        last_zta_sync: settings.last_zta_sync,
+        zta_status: settings.zta_status,
+        sync_version: settings.sync_version,
+      };
+    }
+    // Fallback: standalone key (used when credentials come from env vars)
+    const raw = this.getRawFileSettings() as Record<string, any> | null;
+    const syncSection = raw?.crowdstrike_sync;
+    if (syncSection) {
+      return {
+        last_alert_sync: syncSection.last_alert_sync,
+        last_zta_sync: syncSection.last_zta_sync,
+        zta_status: syncSection.zta_status,
+        sync_version: syncSection.sync_version,
+      };
+    }
+    return {};
+  }
+
+  /**
+   * Save only CrowdStrike sync timestamps without touching credentials.
+   * Writes directly to the raw file to avoid the read-decrypt-merge-encrypt
+   * cycle that would clobber env-var-based credentials with empty file entries.
+   */
+  saveCrowdStrikeSyncTimestamps(timestamps: { last_alert_sync?: string; last_zta_sync?: string; zta_status?: CrowdStrikeZtaStatus; sync_version?: number }): void {
+    this.ensureSettingsDir();
+    const existing = this.getRawFileSettings() ?? {};
+
+    // Write timestamps into the correct section (org-specific or top-level)
+    // but ONLY if that section already exists — never create a crowdstrike
+    // entry just for timestamps, as that would shadow env var credentials.
+    // Note: sync_version is persisted in the section too (the Defender
+    // equivalent only round-trips it via the standalone defender_sync key,
+    // which means file-based Defender installs never record it — we don't
+    // replicate that quirk).
+    if (this.orgId && existing.orgs?.[this.orgId]?.crowdstrike) {
+      const orgCrowdStrike = existing.orgs![this.orgId]!.crowdstrike!;
+      if (timestamps.last_alert_sync !== undefined) orgCrowdStrike.last_alert_sync = timestamps.last_alert_sync;
+      if (timestamps.last_zta_sync !== undefined) orgCrowdStrike.last_zta_sync = timestamps.last_zta_sync;
+      if (timestamps.zta_status !== undefined) orgCrowdStrike.zta_status = timestamps.zta_status;
+      if (timestamps.sync_version !== undefined) orgCrowdStrike.sync_version = timestamps.sync_version;
+    } else if (existing.crowdstrike) {
+      if (timestamps.last_alert_sync !== undefined) existing.crowdstrike.last_alert_sync = timestamps.last_alert_sync;
+      if (timestamps.last_zta_sync !== undefined) existing.crowdstrike.last_zta_sync = timestamps.last_zta_sync;
+      if (timestamps.zta_status !== undefined) existing.crowdstrike.zta_status = timestamps.zta_status;
+      if (timestamps.sync_version !== undefined) existing.crowdstrike.sync_version = timestamps.sync_version;
+    } else {
+      // No existing crowdstrike section in file — credentials come from env vars.
+      // Store timestamps in a lightweight top-level key that won't shadow env vars.
+      (existing as any).crowdstrike_sync = {
+        ...(existing as any).crowdstrike_sync,
+        ...timestamps,
+      };
+    }
+
+    fs.writeFileSync(SETTINGS_FILE, JSON.stringify(existing, null, 2), { mode: 0o600 });
+  }
+
+  // ---------------------------------------------------------------------------
+  // CrowdStrike Auto-Resolve mode
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Read the current auto-resolve mode for the CrowdStrike integration.
+   * Defaults to 'disabled' when the field is missing or the integration is
+   * not yet configured — the auto-resolve pillar is opt-in.
+   */
+  getCrowdStrikeAutoResolveMode(): AutoResolveMode {
+    const settings = this.getCrowdStrikeSettings();
+    const mode = settings?.auto_resolve_mode;
+    if (mode && AUTO_RESOLVE_MODES.includes(mode)) return mode;
+    return DEFAULT_AUTO_RESOLVE_MODE;
+  }
+
+  /**
+   * Persist a new auto-resolve mode without touching any other CrowdStrike
+   * credentials. Throws if the mode string is not one of the valid values.
+   * Does nothing (and throws) if CrowdStrike is not yet configured — we never
+   * want to create a crowdstrike settings entry with empty credentials just to
+   * hold a mode, since that would shadow env var credentials.
+   */
+  setCrowdStrikeAutoResolveMode(mode: AutoResolveMode): void {
+    if (!AUTO_RESOLVE_MODES.includes(mode)) {
+      throw new Error(`Invalid auto_resolve_mode: ${mode}. Must be one of: ${AUTO_RESOLVE_MODES.join(', ')}`);
+    }
+
+    const current = this.getCrowdStrikeSettings();
+    if (!current?.configured) {
+      throw new Error('Cannot set auto_resolve_mode: CrowdStrike integration is not configured');
+    }
+
+    // Partial update preserves credentials (encrypted) and existing sync timestamps.
+    this.saveCrowdStrikeSettings({ auto_resolve_mode: mode });
   }
 
   // ---------------------------------------------------------------------------

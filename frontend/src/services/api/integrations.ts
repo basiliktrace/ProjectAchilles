@@ -109,7 +109,67 @@ export interface DefenderSyncStatus {
   lastError?: { stage: 'scores' | 'controls' | 'alerts'; message: string; at: string } | null;
 }
 
-// --- Defender Auto-Resolve (Wave 7) ---
+// --- CrowdStrike Falcon ---
+
+export type CrowdStrikeRegion = 'us-1' | 'us-2' | 'eu-1' | 'us-gov-1';
+
+export type CrowdStrikeZtaStatus = 'ok' | 'not_licensed' | 'unknown';
+
+export interface CrowdStrikeSettingsMasked {
+  configured: boolean;
+  /** Server-DERIVED from `region` (display-only) — the backend no longer
+      accepts or stores a custom base URL; the Falcon client resolves URLs
+      from a server-side region map. */
+  base_url?: string;
+  region?: CrowdStrikeRegion;
+  client_id?: string;
+  client_secret_set?: boolean;
+  label?: string;
+  env_configured?: boolean;
+  zta_status?: CrowdStrikeZtaStatus | null;
+}
+
+export interface SaveCrowdStrikeSettingsRequest {
+  region?: CrowdStrikeRegion;
+  client_id?: string;
+  client_secret?: string;
+  label?: string;
+}
+
+export interface TestCrowdStrikeRequest {
+  region?: CrowdStrikeRegion;
+  client_id?: string;
+  client_secret?: string;
+}
+
+export interface TestCrowdStrikeResult {
+  success: boolean;
+  message?: string;
+  error?: string;
+}
+
+// --- CrowdStrike sync ---
+
+export interface CrowdStrikeSyncStageResult {
+  synced: number;
+  errors: string[];
+}
+
+export interface CrowdStrikeSyncRunResult {
+  alerts: CrowdStrikeSyncStageResult;
+  zta_scores: CrowdStrikeSyncStageResult;
+  timestamp: string;
+}
+
+export interface CrowdStrikeSyncStatus {
+  lastAlertSync: string | null;
+  lastZtaSync: string | null;
+  lastAttemptAt?: string | null;
+  ztaStatus?: CrowdStrikeZtaStatus | null;
+  lastError?: { stage: 'alerts' | 'zta_scores'; message: string; at: string } | null;
+}
+
+// --- Auto-Resolve (shared by Defender and CrowdStrike) ---
 
 export type AutoResolveMode = 'disabled' | 'dry_run' | 'enabled';
 
@@ -241,6 +301,61 @@ export const integrationsApi = {
 
   async getAutoResolveReceipts(limit = 20, offset = 0): Promise<AutoResolveReceiptsResponse> {
     const response = await apiClient.get(`/integrations/defender/auto-resolve/receipts?limit=${limit}&offset=${offset}`);
+    return response.data.data;
+  },
+
+  // --- CrowdStrike ---
+
+  async getCrowdStrikeSettings(): Promise<CrowdStrikeSettingsMasked> {
+    try {
+      const response = await apiClient.get('/integrations/crowdstrike');
+      return response.data;
+    } catch {
+      return { configured: false };
+    }
+  },
+
+  async saveCrowdStrikeSettings(settings: SaveCrowdStrikeSettingsRequest): Promise<{ success: boolean }> {
+    const response = await apiClient.post('/integrations/crowdstrike', settings);
+    return response.data;
+  },
+
+  async testCrowdStrikeConnection(settings: TestCrowdStrikeRequest): Promise<TestCrowdStrikeResult> {
+    const response = await apiClient.post('/integrations/crowdstrike/test', settings);
+    return response.data;
+  },
+
+  async deleteCrowdStrikeSettings(): Promise<{ success: boolean }> {
+    const response = await apiClient.delete('/integrations/crowdstrike');
+    return response.data;
+  },
+
+  // --- CrowdStrike sync ---
+
+  async getCrowdStrikeSyncStatus(): Promise<CrowdStrikeSyncStatus> {
+    const response = await apiClient.get('/integrations/crowdstrike/sync/status');
+    return response.data;
+  },
+
+  async triggerCrowdStrikeSync(): Promise<CrowdStrikeSyncRunResult> {
+    const response = await apiClient.post('/integrations/crowdstrike/sync');
+    return response.data.data;
+  },
+
+  // --- CrowdStrike Auto-Resolve ---
+
+  async getCrowdStrikeAutoResolveStatus(): Promise<AutoResolveStatus> {
+    const response = await apiClient.get('/integrations/crowdstrike/auto-resolve/status');
+    return response.data.data;
+  },
+
+  async setCrowdStrikeAutoResolveMode(mode: AutoResolveMode): Promise<{ mode: AutoResolveMode }> {
+    const response = await apiClient.put('/integrations/crowdstrike/auto-resolve/mode', { mode });
+    return response.data.data;
+  },
+
+  async getCrowdStrikeAutoResolveReceipts(limit = 20, offset = 0): Promise<AutoResolveReceiptsResponse> {
+    const response = await apiClient.get(`/integrations/crowdstrike/auto-resolve/receipts?limit=${limit}&offset=${offset}`);
     return response.data.data;
   },
 };

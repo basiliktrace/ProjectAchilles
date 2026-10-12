@@ -13,6 +13,7 @@ export interface TrendPoint {
   date: string;
   defense?: number | null;
   secure?: number | null;
+  zta?: number | null;
   errorRate?: number | null;
 }
 
@@ -20,6 +21,7 @@ interface TrendOverviewChartProps {
   data: TrendPoint[];
   description: string;
   hasSecureScore: boolean;
+  hasZtaScore?: boolean;
   /** Selected time window label, e.g. "90d". */
   rangeLabel: string;
   loading?: boolean;
@@ -28,15 +30,18 @@ interface TrendOverviewChartProps {
 const SERIES = [
   { key: 'defense', label: 'defense score', color: 'var(--chart-protected)' },
   { key: 'secure', label: 'secure score', color: 'var(--chart-series-alert)' },
+  { key: 'zta', label: 'zta score', color: 'var(--chart-warn)' },
   { key: 'errorRate', label: 'error rate', color: 'var(--chart-bypassed)' },
 ] as const;
 
-export function TrendOverviewChart({ data, description, hasSecureScore, rangeLabel, loading }: TrendOverviewChartProps) {
+export function TrendOverviewChart({ data, description, hasSecureScore, hasZtaScore = false, rangeLabel, loading }: TrendOverviewChartProps) {
   if (loading) {
     return <div className="h-72 animate-pulse rounded-lg border border-border bg-raised" aria-hidden="true" />;
   }
 
-  const series = SERIES.filter((s) => s.key !== 'secure' || hasSecureScore);
+  const series = SERIES.filter(
+    (s) => (s.key !== 'secure' || hasSecureScore) && (s.key !== 'zta' || hasZtaScore),
+  );
 
   return (
     <Card>
@@ -100,6 +105,18 @@ export function TrendOverviewChart({ data, description, hasSecureScore, rangeLab
                   strokeWidth={2}
                   fill="var(--chart-series-alert)"
                   fillOpacity={0.06}
+                  connectNulls
+                />
+              )}
+              {hasZtaScore && (
+                <Area
+                  type="monotone"
+                  dataKey="zta"
+                  name="zta score"
+                  stroke="var(--chart-warn)"
+                  strokeWidth={2}
+                  strokeDasharray="6 3"
+                  fill="none"
                   connectNulls
                 />
               )}

@@ -33,7 +33,9 @@ import {
 } from '@/components/ui/select';
 import { browserApi } from '@/services/api/browser';
 import { defenderApi, type RelatedAlertsResponse } from '@/services/api/defender';
+import { crowdstrikeApi, type RelatedCrowdStrikeAlertsResponse } from '@/services/api/crowdstrike';
 import { useDefenderConfig } from '@/hooks/useDefenderConfig';
+import { useCrowdStrikeConfig } from '@/hooks/useCrowdStrikeConfig';
 import TestInfoModal from './TestInfoModal';
 import {
   EXPORT_COLUMNS,
@@ -92,6 +94,7 @@ export default function ExecutionsDataTable({
   sbReportExporting,
 }: ExecutionsDataTableProps) {
   const { configured: defenderConfigured } = useDefenderConfig();
+  const { configured: crowdstrikeConfigured } = useCrowdStrikeConfig();
 
   // Master-detail selection (controlled when the parent passes props)
   const [internalSelectedKey, setInternalSelectedKey] = useState<string | null>(null);
@@ -200,6 +203,48 @@ export default function ExecutionsDataTable({
     }
   }, [defenderConfigured, stageAlertsCacheKey]);
 
+  // Related CrowdStrike alerts cache — same per-stage pattern as Defender
+  // above, keyed identically (separate map, so no cross-vendor collision).
+  const csAlertsCache = useRef<Map<string, RelatedCrowdStrikeAlertsResponse | null>>(new Map());
+  const [csAlertsLoading, setCsAlertsLoading] = useState<Set<string>>(new Set());
+  const [csAlertsMap, setCsAlertsMap] = useState<Map<string, RelatedCrowdStrikeAlertsResponse | null>>(new Map());
+
+  const fetchRelatedCrowdStrikeAlerts = useCallback(async (exec: EnrichedTestExecution) => {
+    if (!crowdstrikeConfigured) return;
+    const techniques = exec.techniques;
+    if (!techniques || techniques.length === 0) return;
+
+    const cacheKey = stageAlertsCacheKey(exec);
+    if (csAlertsCache.current.has(cacheKey)) return;
+
+    const baseUuid = exec.test_uuid.includes('::')
+      ? exec.test_uuid.split('::')[0]
+      : exec.test_uuid;
+    const binaryName = `${baseUuid}.exe`;
+
+    setCsAlertsLoading(prev => {
+      const next = new Set(prev);
+      next.add(cacheKey);
+      return next;
+    });
+    try {
+      const result = await crowdstrikeApi.getAlertsForTest(
+        techniques, exec.timestamp, 30, exec.hostname, binaryName, exec.bundle_name,
+      );
+      csAlertsCache.current.set(cacheKey, result);
+      setCsAlertsMap(prev => new Map(prev).set(cacheKey, result));
+    } catch {
+      csAlertsCache.current.set(cacheKey, null);
+      setCsAlertsMap(prev => new Map(prev).set(cacheKey, null));
+    } finally {
+      setCsAlertsLoading(prev => {
+        const next = new Set(prev);
+        next.delete(cacheKey);
+        return next;
+      });
+    }
+  }, [crowdstrikeConfigured, stageAlertsCacheKey]);
+
   const groups = data?.groups || [];
   const pagination = data?.pagination;
 
@@ -228,11 +273,15 @@ export default function ExecutionsDataTable({
       if (row.type === 'standalone') {
         void fetchDescription(row.execution);
         void fetchRelatedAlerts(row.execution);
+        void fetchRelatedCrowdStrikeAlerts(row.execution);
       } else {
-        for (const ctrl of row.controls) void fetchRelatedAlerts(ctrl);
+        for (const ctrl of row.controls) {
+          void fetchRelatedAlerts(ctrl);
+          void fetchRelatedCrowdStrikeAlerts(ctrl);
+        }
       }
     },
-    [displayRows, fetchDescription, fetchRelatedAlerts],
+    [displayRows, fetchDescription, fetchRelatedAlerts, fetchRelatedCrowdStrikeAlerts],
   );
 
   const handleSelect = useCallback(
@@ -264,10 +313,11 @@ export default function ExecutionsDataTable({
         if (prev === index) return null;
         void fetchDescription(ctrl);
         void fetchRelatedAlerts(ctrl);
+        void fetchRelatedCrowdStrikeAlerts(ctrl);
         return index;
       });
     },
-    [fetchDescription, fetchRelatedAlerts],
+    [fetchDescription, fetchRelatedAlerts, fetchRelatedCrowdStrikeAlerts],
   );
 
   // Bulk selection helpers
@@ -546,10 +596,13 @@ export default function ExecutionsDataTable({
           <RunDetailPanel
             row={selectedRow}
             defenderConfigured={defenderConfigured}
+            crowdstrikeConfigured={crowdstrikeConfigured}
             descriptionMap={descriptionMap}
             descriptionLoadingKey={descriptionLoading}
             alertsMap={alertsMap}
             alertsLoading={alertsLoading}
+            csAlertsMap={csAlertsMap}
+            csAlertsLoading={csAlertsLoading}
             stageAlertsCacheKey={stageAlertsCacheKey}
             getAcceptanceForExec={getAcceptanceForExec}
             riskEnabled={riskEnabled}

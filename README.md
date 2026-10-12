@@ -66,7 +66,7 @@ ProjectAchilles is a continuous security validation platform with four core comp
 
 All four are driven from one console: a flat six-destination interface — Dashboard, Tests, Analytics, Agents, Tasks, Settings — with a single unified Security Dashboard as the landing page.
 
-The platform is open-source, deploys in minutes via Docker Compose, and integrates with Microsoft Defender for cross-correlation between your internal validation results and your EDR's own security posture data.
+The platform is open-source, deploys in minutes via Docker Compose, and integrates with Microsoft Defender and CrowdStrike Falcon for cross-correlation between your internal validation results and your EDR's own security posture data.
 
 ## Quick Start
 
@@ -144,7 +144,7 @@ A single dark **f0 design language** across every screen — terminal-green acce
 |-------------|------------------|
 | **Dashboard** | Unified posture across tests, endpoints, and analytics |
 | **Tests** | The test library with a faceted browse rail |
-| **Analytics** | Defense Score, executions, risk acceptances, Defender |
+| **Analytics** | Defense Score, executions, risk acceptances, Defender, CrowdStrike |
 | **Agents** | Fleet table plus the fleet-pulse utility rail |
 | **Tasks** | Live task stream, scheduled tasks, task detail |
 | **Settings** | Integrations, tests, agent binaries, users, API keys |
@@ -211,6 +211,7 @@ A Bun-powered command-line interface for managing the entire platform from the t
 - **Test browser** — Search, inspect, and build tests
 - **Analytics** — Query defense scores, trends, and execution history
 - **Defender** — Secure Score, alerts, controls, cross-correlation
+- **CrowdStrike** — ZTA posture score, alerts, cross-correlation
 - **Build system** — Trigger cross-compilation, manage certificates
 - **Risk acceptance** — Accept/revoke risk on individual controls
 - **User management** — List and inspect Clerk users
@@ -285,6 +286,7 @@ Quantify your security posture with 30+ query endpoints powered by Elasticsearch
 - **Executions Master-Detail** — grouped runs on the left, per-control Protected/Unprotected results on the right; keyboard selection, bulk archive / accept-risk, CSV + JSON export, and a deep-linkable `?expanded=<id>`
 - **Risk Acceptance** — Accept risk on individual controls with audit tracking
 - **Microsoft Defender Integration** — Sync Secure Score, alerts, and control profiles with cross-correlation analytics; dedicated Defender tab with alert drill-down drawer, correlation timeline, per-execution detection rate with MITRE roll-up, and control ↔ alert linking
+- **CrowdStrike Falcon Integration** — Sync ZTA posture score and alerts with cross-correlation analytics; dedicated CrowdStrike tab with alert drill-down drawer (Falcon console links), correlation timeline, and per-execution detection rate; optional auto-resolve closes correlated alerts with an audit-trail comment
 - **Trend Alerting** — Threshold-based Slack and email notifications with in-app notification bell
 - **Write-Index Rollover** — Results ingest into dated write indices (`achilles-results-YYYY.MM.DD`) with daily, monthly, or static rollover; per-task index targeting for isolated result sets
 - **90-day default window** — weekly and monthly bundle schedules produced empty charts on a 30-day default
@@ -299,7 +301,7 @@ Quantify your security posture with 30+ query endpoints powered by Elasticsearch
   <img src="docs/screenshots/executions-table.png" alt="Executions — master-detail view with grouped bundle runs on the left and per-control Protected/Unprotected results on the right" width="800">
 </p>
 
-The Defense Score renders as a **ledger** — a ring gauge beside four reconciling lines (Actual, EDR-only, Risk-accepted, Inconclusive) — rather than one big number with the reconciliation left implicit. Secure Score and Top Remediation Controls appear only when Microsoft Defender is configured; without it the remaining cards reflow to fill the row.
+The Defense Score renders as a **ledger** — a ring gauge beside four reconciling lines (Actual, EDR-only, Risk-accepted, Inconclusive) — rather than one big number with the reconciliation left implicit. Secure Score and Top Remediation Controls appear only when Microsoft Defender is configured; without it the remaining cards reflow to fill the row. A CrowdStrike ZTA score card follows the same pattern when CrowdStrike Falcon is configured.
 </details>
 
 ### Build System
@@ -363,6 +365,7 @@ graph TB
         AGS[Agent Service]
         BDS[Build Service]
         DFS[Defender Service]
+        CSF[CrowdStrike Service]
         ALS[Alerting Service]
     end
 
@@ -371,6 +374,7 @@ graph TB
     AGS --> DB[(SQLite)]
     BDS --> GO[Go Toolchain + Code Signing]
     DFS --> GRAPH[Microsoft Graph API]
+    CSF --> FALCON[CrowdStrike Falcon API]
     ALS --> NOTIFY[Slack · Email]
 
     AGS <-->|Agent API Key| AGENT
@@ -521,7 +525,7 @@ Runtime state (agents, tokens, settings, certificates, compiled binaries) is sto
 |------|----------|
 | `agents.db` | SQLite database: agents, enrollment tokens, tasks, schedules, agent_versions |
 | `analytics.json` | Encrypted Elasticsearch credentials (AES-256-GCM) |
-| `integrations.json` | Encrypted Defender, Slack, and email credentials |
+| `integrations.json` | Encrypted Defender, CrowdStrike, Slack, and email credentials |
 | `tests.json` | Test library configuration |
 | `certs/cert-*/` | Code-signing PFX certificates (max 5, active cert tracked in `active-cert.txt`) |
 | `binaries/<os>-<arch>/` | Compiled Go agents ready to download |
@@ -529,7 +533,7 @@ Runtime state (agents, tokens, settings, certificates, compiled binaries) is sto
 | `signing/` | Agent API key signing keypair |
 | `custom-tests/` | User-authored tests outside the git-synced library |
 
-Additionally, test results and Defender alerts are stored in **Elasticsearch** (`achilles-results-*`, `achilles-defender` indices) — that data lives in your ES cluster, not on the local filesystem.
+Additionally, test results and EDR alerts are stored in **Elasticsearch** (`achilles-results-*`, `achilles-defender`, `achilles-crowdstrike` indices) — that data lives in your ES cluster, not on the local filesystem.
 
 > **Why this matters**: deleting or renaming `/ProjectAchilles` and doing a fresh `git clone` does **not** reset your installation. The backend will start up against the same `agents.db` and show the same agents, tokens, schedules, and settings.
 
@@ -648,6 +652,29 @@ Restart the backend afterwards so it reopens the database cleanly.
 | `GET` | `/api/integrations/defender/config` | Defender configuration status |
 | `POST` | `/api/integrations/defender/config` | Save Defender credentials |
 | `POST` | `/api/integrations/defender/sync` | Trigger manual data sync |
+
+### CrowdStrike Integration
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/api/analytics/crowdstrike/zta-score` | Current Zero Trust Assessment posture score |
+| `GET` | `/api/analytics/crowdstrike/zta-score/trend` | ZTA score trend over time |
+| `GET` | `/api/analytics/crowdstrike/alerts` | CrowdStrike alerts with filtering |
+| `GET` | `/api/analytics/crowdstrike/alerts/summary` | Alert counts by severity and status |
+| `GET` | `/api/analytics/crowdstrike/alerts/trend` | Alert volume over time |
+| `GET` | `/api/analytics/crowdstrike/correlation/scores` | Defense Score vs ZTA score correlation |
+| `GET` | `/api/analytics/crowdstrike/correlation/techniques` | MITRE technique overlap |
+| `GET` | `/api/analytics/crowdstrike/correlation/detection-rate` | Per-execution detection rate |
+| `GET` | `/api/analytics/crowdstrike/correlation/alerts-for-test` | Alerts matched to a test execution |
+| `GET` | `/api/integrations/crowdstrike` | CrowdStrike configuration status (secrets masked) |
+| `POST` | `/api/integrations/crowdstrike` | Save CrowdStrike credentials |
+| `DELETE` | `/api/integrations/crowdstrike` | Remove CrowdStrike configuration |
+| `POST` | `/api/integrations/crowdstrike/test` | Validate credentials against the Falcon API |
+| `POST` | `/api/integrations/crowdstrike/sync` | Trigger manual data sync |
+| `GET` | `/api/integrations/crowdstrike/sync/status` | Last sync timestamps and ZTA licensing status |
+| `GET` | `/api/integrations/crowdstrike/auto-resolve/status` | Auto-resolve mode and receipt counts |
+| `PUT` | `/api/integrations/crowdstrike/auto-resolve/mode` | Set auto-resolve mode (`disabled`/`dry_run`/`enabled`) |
+| `GET` | `/api/integrations/crowdstrike/auto-resolve/receipts` | Paginated auto-resolve receipt history |
 
 ### Alerting
 

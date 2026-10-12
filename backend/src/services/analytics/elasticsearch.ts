@@ -207,8 +207,8 @@ export class ElasticsearchService {
   }
 
   /**
-   * Run a score query that returns both combined (is_protected OR defender_detected)
-   * and strict (is_protected only) counts in a single ES request.
+   * Run a score query that returns both combined (is_protected OR defender_detected
+   * OR crowdstrike_detected) and strict (is_protected only) counts in a single ES request.
    */
   private async runCombinedScoreQuery(filters: any[]): Promise<{
     total: number;
@@ -229,6 +229,7 @@ export class ElasticsearchService {
               should: [
                 { term: { 'f0rtika.is_protected': true } },
                 { term: { 'f0rtika.defender_detected': true } },
+                { term: { 'f0rtika.crowdstrike_detected': true } },
               ],
               minimum_should_match: 1,
             },
@@ -266,6 +267,7 @@ export class ElasticsearchService {
                   should: [
                     { term: { 'f0rtika.is_protected': true } },
                     { term: { 'f0rtika.defender_detected': true } },
+                    { term: { 'f0rtika.crowdstrike_detected': true } },
                   ],
                   minimum_should_match: 1,
                 },
@@ -286,6 +288,7 @@ export class ElasticsearchService {
                       should: [
                         { term: { 'f0rtika.is_protected': true } },
                         { term: { 'f0rtika.defender_detected': true } },
+                        { term: { 'f0rtika.crowdstrike_detected': true } },
                       ],
                       minimum_should_match: 1,
                     },
@@ -324,7 +327,8 @@ export class ElasticsearchService {
   /**
    * Build the "has_detected" filter for per-bundle scoring. A stage is
    * "detected" if the agent reported is_protected:true OR the Defender
-   * enrichment pass marked defender_detected:true.
+   * enrichment pass marked defender_detected:true OR the CrowdStrike
+   * enrichment pass marked crowdstrike_detected:true.
    */
   private buildDetectedFilter(): Record<string, any> {
     return {
@@ -333,6 +337,7 @@ export class ElasticsearchService {
           should: [
             { term: { 'f0rtika.is_protected': true } },
             { term: { 'f0rtika.defender_detected': true } },
+            { term: { 'f0rtika.crowdstrike_detected': true } },
           ],
           minimum_should_match: 1,
         },
@@ -1615,12 +1620,13 @@ export class ElasticsearchService {
       };
     });
 
-    // Roll up defender_detected from member docs.
-    // The enrichment pass (DefenderEnrichmentService) populates
-    // f0rtika.defender_detected on each eligible doc; the badge shows
+    // Roll up defender_detected / crowdstrike_detected from member docs.
+    // The enrichment passes (DefenderEnrichmentService / CrowdStrikeEnrichmentService)
+    // populate f0rtika.*_detected on each eligible doc; the badges show
     // "Detected" if any stage of a bundle group is detected.
     for (const group of groups) {
       group.defenderDetected = group.members.some((m) => m.defender_detected === true);
+      group.crowdstrikeDetected = group.members.some((m) => m.crowdstrike_detected === true);
     }
 
     return {
@@ -1668,6 +1674,8 @@ export class ElasticsearchService {
       is_bundle_control: getField(source, 'f0rtika.is_bundle_control') ?? false,
       defender_detected: getField(source, 'f0rtika.defender_detected') ?? false,
       defender_stage_detected: getField(source, 'f0rtika.defender_stage_detected') ?? false,
+      crowdstrike_detected: getField(source, 'f0rtika.crowdstrike_detected') ?? false,
+      crowdstrike_stage_detected: getField(source, 'f0rtika.crowdstrike_stage_detected') ?? false,
     };
   }
 

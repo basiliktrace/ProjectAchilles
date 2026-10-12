@@ -1,7 +1,9 @@
 // Type definitions for external integration settings (Azure / Entra ID, etc.)
 
 import type { AutoResolveMode } from './defender.js';
+import type { CrowdStrikeRegion, CrowdStrikeZtaStatus } from './crowdstrike.js';
 export type { AutoResolveMode };
+export type { CrowdStrikeRegion };
 
 export type DefenderAuthMethod = 'client_secret' | 'certificate';
 
@@ -38,6 +40,43 @@ export interface DefenderIntegrationSettings {
 export type DefenderCredentials =
   | { authMethod: 'client_secret'; tenant_id: string; client_id: string; client_secret: string }
   | { authMethod: 'certificate'; tenant_id: string; client_id: string; cert_thumbprint: string; private_key_pem: string };
+
+// ---------------------------------------------------------------------------
+// CrowdStrike Falcon
+// ---------------------------------------------------------------------------
+
+export interface CrowdStrikeIntegrationSettings {
+  /**
+   * Falcon cloud region (the ONLY determinant of the API base URL — resolved
+   * via CROWDSTRIKE_REGION_BASE_URLS in falcon-client.ts). Missing = 'us-1'.
+   */
+  region?: CrowdStrikeRegion;
+  client_id: string;
+  // Encrypted at rest
+  client_secret: string;
+  configured: boolean;
+  label?: string;
+  /** Persisted sync timestamps so incremental syncs survive invocations. */
+  last_alert_sync?: string;
+  last_zta_sync?: string;
+  /** Alert schema version of the last completed sync — mismatch forces a full re-sync. */
+  sync_version?: number;
+  /** Last known Zero Trust Assessment availability ('not_licensed' after a 403). */
+  zta_status?: CrowdStrikeZtaStatus;
+  /** Auto-resolve pillar mode. Missing/undefined = 'disabled' (default). */
+  auto_resolve_mode?: AutoResolveMode;
+}
+
+/**
+ * Raw credentials for the Falcon OAuth2 client (secret-only auth). Region
+ * only: the client resolves the base URL from its constant region map, so no
+ * user-supplied string ever reaches a fetch URL (request-forgery guard).
+ */
+export interface CrowdStrikeCredentials {
+  region?: CrowdStrikeRegion;
+  client_id: string;
+  client_secret: string;
+}
 
 // ---------------------------------------------------------------------------
 // Alert & Notification Settings
@@ -89,5 +128,6 @@ export interface AlertSettings {
 export interface IntegrationsSettings {
   azure?: AzureIntegrationSettings;
   defender?: DefenderIntegrationSettings;
+  crowdstrike?: CrowdStrikeIntegrationSettings;
   alerts?: AlertSettings;
 }

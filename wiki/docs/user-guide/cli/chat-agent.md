@@ -178,6 +178,12 @@ These tools only query data and are executed immediately:
 | `get_technique_distribution` | MITRE technique distribution |
 | `get_secure_score` | Microsoft Secure Score |
 | `get_defender_alerts` | Defender alerts |
+| `get_zta_score` | CrowdStrike ZTA posture score |
+| `get_zta_score_trend` | CrowdStrike ZTA score trend |
+| `get_crowdstrike_alerts` | CrowdStrike alerts |
+| `get_crowdstrike_alert_trend` | CrowdStrike alert trend |
+| `get_crowdstrike_score_correlation` | Defense Score vs ZTA score |
+| `get_crowdstrike_technique_correlation` | Tests vs CrowdStrike alerts by technique |
 | `get_score_correlation` | Defense Score vs Secure Score |
 | `get_build_info` | Build info for a test |
 | `get_dependencies` | Embed dependencies for a test |

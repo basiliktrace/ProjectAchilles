@@ -15,7 +15,7 @@ registerCommand({
     const profile = getActiveProfile();
     const user = getUserInfo();
 
-    if (ctx.output['mode' as keyof typeof ctx.output] === 'json') {
+    if (ctx.output.isJson) {
       // Structured output for LLMs
       const result: Record<string, unknown> = {
         cli_version: VERSION,

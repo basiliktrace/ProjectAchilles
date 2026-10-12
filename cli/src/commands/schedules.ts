@@ -1,5 +1,6 @@
 import { registerCommand } from './registry.js';
 import * as api from '../api/schedules.js';
+import type { ScheduleStatus } from '../api/types.js';
 import { colors, timeAgo } from '../output/colors.js';
 import { status as statusIcons } from '../output/colors.js';
 
@@ -47,7 +48,7 @@ registerCommand({
       },
       handler: async (ctx) => {
         const schedules = await api.listSchedules({
-          status: ctx.flags.status as string | undefined,
+          status: ctx.flags.status as ScheduleStatus | undefined,
         });
         ctx.output.table(
           schedules as unknown as Record<string, unknown>[],

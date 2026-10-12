@@ -10,6 +10,7 @@ import {
 import { format } from 'date-fns';
 import type { TrendDataPoint, ErrorRateTrendDataPoint } from '../../../services/api/analytics';
 import type { SecureScoreTrendPoint } from '@/services/api/defender';
+import type { ZtaScoreTrendPoint } from '@/services/api/crowdstrike';
 import {
   ChartContainer,
   ChartTooltip,
@@ -44,6 +45,7 @@ interface TrendChartProps {
   errorRateData?: ErrorRateTrendDataPoint[];
   errorRateOverall?: number | null;
   secureScoreTrendData?: SecureScoreTrendPoint[];
+  ztaScoreTrendData?: ZtaScoreTrendPoint[];
   loading?: boolean;
   title?: string;
   windowDays?: number;
@@ -66,13 +68,18 @@ const chartConfig = {
     label: 'Secure Score',
     color: 'var(--chart-series-alert)',
   },
+  ztaScore: {
+    label: 'ZTA Score',
+    color: 'var(--chart-warn)',
+  },
 } satisfies ChartConfig;
 
-function TrendChart({ data, errorRateData, errorRateOverall, secureScoreTrendData, loading, title = 'Trend Overview', windowDays }: TrendChartProps) {
+function TrendChart({ data, errorRateData, errorRateOverall, secureScoreTrendData, ztaScoreTrendData, loading, title = 'Trend Overview', windowDays }: TrendChartProps) {
   const hasErrorRate = errorRateData && errorRateData.length > 0;
   const hasSecureScore = secureScoreTrendData && secureScoreTrendData.length > 0;
+  const hasZtaScore = ztaScoreTrendData && ztaScoreTrendData.length > 0;
   const hasRealScore = data.some(d => d.realScore !== undefined && d.realScore !== d.score);
-  const hasExtraData = hasErrorRate || hasSecureScore || hasRealScore;
+  const hasExtraData = hasErrorRate || hasSecureScore || hasZtaScore || hasRealScore;
 
   if (loading) {
     return (
@@ -118,12 +125,21 @@ function TrendChart({ data, errorRateData, errorRateOverall, secureScoreTrendDat
     }
   }
 
+  // Build ZTA score lookup by date key (same normalization as secure score)
+  const ztaScoreByDate = new Map<string, ZtaScoreTrendPoint>();
+  if (hasZtaScore) {
+    for (const point of ztaScoreTrendData) {
+      ztaScoreByDate.set(toDateKey(point.date), point);
+    }
+  }
+
   // Merge datasets: defense score is the primary axis, error rate + secure score joined by date
   const chartData = data.map(point => {
     const date = parseTimestamp(point.timestamp);
     const dateKey = toDateKey(point.timestamp);
     const errPoint = errorRateByDate.get(dateKey);
     const ssPoint = secureScoreByDate.get(dateKey);
+    const ztaPoint = ztaScoreByDate.get(dateKey);
     return {
       ...point,
       realScore: point.realScore ?? null,
@@ -135,6 +151,8 @@ function TrendChart({ data, errorRateData, errorRateOverall, secureScoreTrendDat
       secureScore: ssPoint?.percentage ?? null,
       secureScorePoints: ssPoint?.score ?? 0,
       secureScoreMax: ssPoint?.maxScore ?? 0,
+      ztaScore: ztaPoint?.overallScore ?? null,
+      ztaDeviceCount: ztaPoint?.deviceCount ?? 0,
       date: format(date, 'MMM d'),
       fullDate: format(date, 'MMM d, yyyy'),
     };
@@ -157,6 +175,10 @@ function TrendChart({ data, errorRateData, errorRateOverall, secureScoreTrendDat
     ? (secureScoreTrendData.reduce((sum, d) => sum + d.percentage, 0) / secureScoreTrendData.length).toFixed(1)
     : null;
 
+  const avgZtaScore = hasZtaScore
+    ? (ztaScoreTrendData.reduce((sum, d) => sum + d.overallScore, 0) / ztaScoreTrendData.length).toFixed(1)
+    : null;
+
   // Show only 5-7 ticks max to prevent overflow
   const tickCount = Math.min(7, chartData.length);
   const tickInterval = chartData.length > tickCount ? Math.floor(chartData.length / tickCount) : 0;
@@ -177,6 +199,12 @@ function TrendChart({ data, errorRateData, errorRateOverall, secureScoreTrendDat
             <>
               <span className="text-muted-foreground">|</span>
               <span>Secure Score: {avgSecureScore}%</span>
+            </>
+          )}
+          {avgZtaScore !== null && (
+            <>
+              <span className="text-muted-foreground">|</span>
+              <span>ZTA Score: {avgZtaScore}%</span>
             </>
           )}
           {avgErrorRate !== null && (
@@ -290,6 +318,11 @@ function TrendChart({ data, errorRateData, errorRateOverall, secureScoreTrendDat
                             {payload.secureScorePoints}/{payload.secureScoreMax} pts
                           </span>
                         )}
+                        {name === 'ztaScore' && payload.ztaDeviceCount > 0 && (
+                          <span className="text-xs text-muted-foreground ml-[18px]">
+                            {payload.ztaDeviceCount} devices assessed
+                          </span>
+                        )}
                       </div>
                     );
                   }}
@@ -331,6 +364,17 @@ function TrendChart({ data, errorRateData, errorRateOverall, secureScoreTrendDat
                 connectNulls
               />
             )}
+            {hasZtaScore && (
+              <Area
+                type="monotone"
+                isAnimationActive={false}
+                dataKey="ztaScore"
+                stroke="var(--color-ztaScore)"
+                strokeWidth={2}
+                fill="none"
+                connectNulls
+              />
+            )}
             {hasErrorRate && (
               <Area
                 type="monotone"
@@ -348,7 +392,7 @@ function TrendChart({ data, errorRateData, errorRateOverall, secureScoreTrendDat
         {hasExtraData && (
           <div className="flex items-center justify-center gap-4 pt-2 flex-shrink-0">
             {Object.entries(chartConfig)
-              .filter(([key]) => key === 'score' || (key === 'realScore' && hasRealScore) || (key === 'errorRate' && hasErrorRate) || (key === 'secureScore' && hasSecureScore))
+              .filter(([key]) => key === 'score' || (key === 'realScore' && hasRealScore) || (key === 'errorRate' && hasErrorRate) || (key === 'secureScore' && hasSecureScore) || (key === 'ztaScore' && hasZtaScore))
               .map(([key, cfg]) => (
               <div key={key} className="flex items-center gap-1.5 text-xs text-muted-foreground">
                 <div
