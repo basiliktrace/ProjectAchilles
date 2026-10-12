@@ -22,9 +22,10 @@ export class FalconApiError extends Error {
 }
 
 /**
- * Falcon cloud region → API base URL. Exported so schemas/frontend can
- * mirror the region list conceptually. A custom base_url in settings
- * wins over this map.
+ * Falcon cloud region → API base URL. This closed, known set is the ONLY
+ * source of fetch targets — user-supplied strings never reach a fetch URL
+ * (request-forgery guard; there is deliberately no custom base_url option).
+ * Exported so schemas/frontend can mirror the region list conceptually.
  */
 export const CROWDSTRIKE_REGION_BASE_URLS: Record<CrowdStrikeRegion, string> = {
   'us-1': 'https://api.crowdstrike.com',
@@ -33,7 +34,7 @@ export const CROWDSTRIKE_REGION_BASE_URLS: Record<CrowdStrikeRegion, string> = {
   'us-gov-1': 'https://api.laggar.gcw.crowdstrike.com',
 };
 
-export const DEFAULT_CROWDSTRIKE_BASE_URL = CROWDSTRIKE_REGION_BASE_URLS['us-1'];
+export const DEFAULT_CROWDSTRIKE_REGION: CrowdStrikeRegion = 'us-1';
 
 const TOKEN_REFRESH_MARGIN_S = 300; // Refresh 5 min before expiry
 const MAX_RETRIES = 3;
@@ -64,9 +65,18 @@ export class FalconClient {
   private readonly baseUrl: string;
 
   constructor(private config: CrowdStrikeCredentials) {
-    // Custom base_url always wins; settings.ts resolves region → URL before
-    // constructing credentials, so this is a plain string here.
-    this.baseUrl = config.base_url.replace(/\/+$/, '');
+    // The base URL is resolved ONLY from the constant region map — never from
+    // a caller-supplied string. An unknown region (e.g. unvalidated data read
+    // from disk) throws rather than silently fetching a default or garbage
+    // host: fail closed, surface the misconfiguration immediately.
+    const region = config.region ?? DEFAULT_CROWDSTRIKE_REGION;
+    const baseUrl = (CROWDSTRIKE_REGION_BASE_URLS as Record<string, string>)[region];
+    if (!baseUrl) {
+      throw new Error(
+        `Unknown CrowdStrike region: ${region}. Must be one of: ${Object.keys(CROWDSTRIKE_REGION_BASE_URLS).join(', ')}`,
+      );
+    }
+    this.baseUrl = baseUrl;
   }
 
   // ---------------------------------------------------------------------------

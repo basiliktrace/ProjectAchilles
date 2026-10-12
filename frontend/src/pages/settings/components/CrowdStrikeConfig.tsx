@@ -9,8 +9,10 @@ import { Alert } from '@/components/shared/ui/Alert';
 import { Spinner } from '@/components/shared/ui/Spinner';
 import { CrowdStrikeAutoResolveSection } from './CrowdStrikeAutoResolveSection';
 
-type RegionChoice = CrowdStrikeRegion | 'custom';
-
+// Server-side region→URL mirror (display-only helper text). The backend
+// resolves API URLs from its own constant region map — custom base URLs are
+// intentionally not configurable (SSRF hardening); the masked settings GET
+// returns a derived `base_url` for display.
 const REGION_BASE_URLS: Record<CrowdStrikeRegion, string> = {
   'us-1': 'https://api.crowdstrike.com',
   'us-2': 'https://api.us-2.crowdstrike.com',
@@ -23,7 +25,6 @@ const REGION_OPTIONS = [
   { value: 'us-2', label: 'US-2' },
   { value: 'eu-1', label: 'EU-1' },
   { value: 'us-gov-1', label: 'US Gov (GovCloud)' },
-  { value: 'custom', label: 'Custom base URL' },
 ];
 
 interface CrowdStrikeConfigProps {
@@ -32,8 +33,8 @@ interface CrowdStrikeConfigProps {
 
 export function CrowdStrikeConfig({ onStatusChange }: CrowdStrikeConfigProps) {
   const [editMode, setEditMode] = useState(false);
-  const [region, setRegion] = useState<RegionChoice>('us-1');
-  const [baseUrl, setBaseUrl] = useState('');
+  const [region, setRegion] = useState<CrowdStrikeRegion>('us-1');
+  const [derivedBaseUrl, setDerivedBaseUrl] = useState<string | null>(null);
   const [clientId, setClientId] = useState('');
   const [clientSecret, setClientSecret] = useState('');
   const [label, setLabel] = useState('');
@@ -60,6 +61,9 @@ export function CrowdStrikeConfig({ onStatusChange }: CrowdStrikeConfigProps) {
         setLabel(settings.label ?? '');
         setEnvConfigured(settings.env_configured ?? false);
         if (settings.region) setRegion(settings.region);
+        // Derived display value from the masked GET; falls back to the local
+        // region→URL mirror when absent.
+        if (settings.base_url) setDerivedBaseUrl(settings.base_url);
         onStatusChange?.(true);
       }
     } catch {
@@ -71,9 +75,7 @@ export function CrowdStrikeConfig({ onStatusChange }: CrowdStrikeConfigProps) {
   };
 
   const buildPayload = () => ({
-    ...(region === 'custom'
-      ? { base_url: baseUrl || undefined }
-      : { region }),
+    region,
     client_id: clientId || undefined,
     client_secret: clientSecret || undefined,
   });
@@ -122,7 +124,6 @@ export function CrowdStrikeConfig({ onStatusChange }: CrowdStrikeConfigProps) {
       onStatusChange?.(true);
 
       // Clear sensitive fields after save
-      setBaseUrl('');
       setClientId('');
       setClientSecret('');
     } catch (err) {
@@ -139,7 +140,7 @@ export function CrowdStrikeConfig({ onStatusChange }: CrowdStrikeConfigProps) {
       await integrationsApi.deleteCrowdStrikeSettings();
       setEditMode(false);
       setRegion('us-1');
-      setBaseUrl('');
+      setDerivedBaseUrl(null);
       setClientId('');
       setClientSecret('');
       setLabel('');
@@ -154,9 +155,7 @@ export function CrowdStrikeConfig({ onStatusChange }: CrowdStrikeConfigProps) {
     }
   };
 
-  const isValid = editMode
-    ? true
-    : !!(clientId && clientSecret && (region !== 'custom' || baseUrl));
+  const isValid = editMode ? true : !!(clientId && clientSecret);
 
   if (loading) {
     return (
@@ -201,26 +200,17 @@ export function CrowdStrikeConfig({ onStatusChange }: CrowdStrikeConfigProps) {
         </Alert>
       )}
 
-      {/* Cloud / region */}
+      {/* Cloud / region — region-only; the backend resolves the API base URL
+          from a server-side map (custom URLs are not accepted). */}
       <Select
         label="Falcon Cloud"
         value={region}
-        onChange={(e) => { setRegion(e.target.value as RegionChoice); setTestResult(null); }}
+        onChange={(e) => { setRegion(e.target.value as CrowdStrikeRegion); setDerivedBaseUrl(null); setTestResult(null); }}
         options={REGION_OPTIONS}
       />
-      {region === 'custom' ? (
-        <Input
-          label="Base URL"
-          placeholder="https://api.example.crowdstrike.com"
-          value={baseUrl}
-          onChange={(e) => { setBaseUrl(e.target.value); setTestResult(null); }}
-          helperText="Full API base URL for a custom or private Falcon cloud"
-        />
-      ) : (
-        <p className="text-xs text-muted-foreground -mt-4">
-          API base URL: <span className="font-mono">{REGION_BASE_URLS[region]}</span>
-        </p>
-      )}
+      <p className="text-xs text-muted-foreground -mt-4">
+        API base URL: <span className="font-mono">{derivedBaseUrl ?? REGION_BASE_URLS[region]}</span>
+      </p>
 
       {/* Core identity fields */}
       <Input

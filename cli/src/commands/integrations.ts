@@ -115,14 +115,14 @@ registerCommand({
     'crowdstrike-set': {
       description: 'Configure CrowdStrike credentials',
       flags: {
-        'base-url': { type: 'string' as const, description: 'API base URL (region cloud or custom)' },
+        region: { type: 'string' as const, choices: ['us-1', 'us-2', 'eu-1', 'us-gov-1'], default: 'us-1', description: 'CrowdStrike cloud region' },
         'client-id': { type: 'string' as const, description: 'Client ID' },
         'client-secret': { type: 'string' as const, description: 'Client secret' },
         label: { type: 'string' as const, description: 'Display label' },
       },
       handler: async (ctx) => {
         await api.setCrowdStrikeConfig({
-          base_url: ctx.flags['base-url'] as string | undefined,
+          region: ctx.flags.region as string | undefined,
           client_id: ctx.flags['client-id'] as string | undefined,
           client_secret: ctx.flags['client-secret'] as string | undefined,
           label: ctx.flags.label as string | undefined,

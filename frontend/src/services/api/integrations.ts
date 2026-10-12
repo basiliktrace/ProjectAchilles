@@ -117,6 +117,9 @@ export type CrowdStrikeZtaStatus = 'ok' | 'not_licensed' | 'unknown';
 
 export interface CrowdStrikeSettingsMasked {
   configured: boolean;
+  /** Server-DERIVED from `region` (display-only) — the backend no longer
+      accepts or stores a custom base URL; the Falcon client resolves URLs
+      from a server-side region map. */
   base_url?: string;
   region?: CrowdStrikeRegion;
   client_id?: string;
@@ -127,7 +130,6 @@ export interface CrowdStrikeSettingsMasked {
 }
 
 export interface SaveCrowdStrikeSettingsRequest {
-  base_url?: string;
   region?: CrowdStrikeRegion;
   client_id?: string;
   client_secret?: string;
@@ -135,7 +137,6 @@ export interface SaveCrowdStrikeSettingsRequest {
 }
 
 export interface TestCrowdStrikeRequest {
-  base_url?: string;
   region?: CrowdStrikeRegion;
   client_id?: string;
   client_secret?: string;

@@ -496,8 +496,9 @@ export interface IntegrationConfig {
 
 export interface CrowdStrikeIntegrationConfig {
   configured: boolean;
-  base_url?: string;
   region?: string;
+  /** Server-derived from region; display-only in show output */
+  base_url?: string;
   client_id?: string;
   client_secret_set?: boolean;
   label?: string;

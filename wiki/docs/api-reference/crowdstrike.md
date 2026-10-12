@@ -116,7 +116,9 @@ POST   /api/integrations/crowdstrike/test
 ```
 
 - **`GET /crowdstrike`** — returns whether CrowdStrike is configured, with
-  secrets masked (`integrations:read`).
+  secrets masked (`integrations:read`). The response includes the selected
+  `region` plus a server-derived, display-only `base_url` resolved from that
+  region.
 - **`POST /crowdstrike`** — save credentials. Stored AES-256-GCM encrypted.
   Kicks off a background sync after saving (`integrations:write`).
 - **`DELETE /crowdstrike`** — remove the stored configuration
@@ -127,15 +129,16 @@ POST   /api/integrations/crowdstrike/test
 **`POST /crowdstrike` body:**
 ```json
 {
-  "baseUrl": "https://api.crowdstrike.com",
+  "region": "us-1",
   "clientId": "...",
   "clientSecret": "...",
   "label": "Production Falcon"
 }
 ```
 
-`baseUrl` must be one of the Falcon cloud region endpoints (US-1 default,
-US-2, EU-1, US-GOV-1) or a custom URL; see
+`region` must be one of `us-1` (default), `us-2`, `eu-1`, or `us-gov-1` —
+custom base URLs are not accepted; the API base URL is derived server-side
+from the region. See
 [Integrations → CrowdStrike Falcon](../user-guide/integrations/crowdstrike#cloud-regions).
 
 ### Sync

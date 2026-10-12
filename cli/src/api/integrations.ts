@@ -73,7 +73,7 @@ export async function getCrowdStrikeConfig(): Promise<CrowdStrikeIntegrationConf
 }
 
 export async function setCrowdStrikeConfig(params: {
-  base_url?: string;
+  region?: string;
   client_id?: string;
   client_secret?: string;
   label?: string;
@@ -86,7 +86,7 @@ export async function deleteCrowdStrikeConfig(): Promise<void> {
 }
 
 export async function testCrowdStrikeConnection(params?: {
-  base_url?: string;
+  region?: string;
   client_id?: string;
   client_secret?: string;
 }): Promise<{ success: boolean; error?: string; message?: string }> {

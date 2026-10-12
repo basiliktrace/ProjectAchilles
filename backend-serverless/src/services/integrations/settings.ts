@@ -4,7 +4,7 @@ import * as crypto from 'crypto';
 import type { AzureIntegrationSettings, AzureCredentials, DefenderIntegrationSettings, DefenderCredentials, CrowdStrikeIntegrationSettings, CrowdStrikeCredentials, IntegrationsSettings } from '../../types/integrations.js';
 import type { AutoResolveMode } from '../../types/defender.js';
 import type { CrowdStrikeRegion, CrowdStrikeZtaStatus } from '../../types/crowdstrike.js';
-import { CROWDSTRIKE_REGION_BASE_URLS, DEFAULT_CROWDSTRIKE_BASE_URL } from '../crowdstrike/falcon-client.js';
+import { CROWDSTRIKE_REGION_BASE_URLS, DEFAULT_CROWDSTRIKE_REGION } from '../crowdstrike/falcon-client.js';
 import { blobReadText, blobWrite } from '../storage.js';
 
 const SETTINGS_KEY = 'settings/integrations.json';
@@ -428,6 +428,22 @@ export class IntegrationsSettingsService {
 
   // ── CrowdStrike Falcon ────────────────────────────────────────────
 
+  /**
+   * Read and validate CROWDSTRIKE_REGION from the environment. An invalid
+   * value is IGNORED with a clear warning (falls back to the us-1 default) —
+   * the region feeds the constant region map in falcon-client.ts, and a
+   * garbage value must never influence a fetch target.
+   */
+  private getEnvCrowdStrikeRegion(): CrowdStrikeRegion | undefined {
+    const region = process.env.CROWDSTRIKE_REGION;
+    if (!region) return undefined;
+    if (region in CROWDSTRIKE_REGION_BASE_URLS) return region as CrowdStrikeRegion;
+    console.warn(
+      `[integrations] Ignoring invalid CROWDSTRIKE_REGION='${region}' — must be one of: ${Object.keys(CROWDSTRIKE_REGION_BASE_URLS).join(', ')}. Falling back to '${DEFAULT_CROWDSTRIKE_REGION}'.`,
+    );
+    return undefined;
+  }
+
   private getEnvCrowdStrikeSettings(): CrowdStrikeIntegrationSettings | null {
     const clientId = process.env.CROWDSTRIKE_CLIENT_ID;
     const clientSecret = process.env.CROWDSTRIKE_CLIENT_SECRET;
@@ -435,7 +451,7 @@ export class IntegrationsSettingsService {
     if (!clientId || !clientSecret) return null;
 
     return {
-      base_url: process.env.CROWDSTRIKE_BASE_URL || DEFAULT_CROWDSTRIKE_BASE_URL,
+      region: this.getEnvCrowdStrikeRegion(),
       client_id: clientId,
       client_secret: clientSecret,
       configured: true,
@@ -446,13 +462,6 @@ export class IntegrationsSettingsService {
   /** Check if CrowdStrike credentials are provided via environment variables. */
   isEnvCrowdStrikeConfigured(): boolean {
     return this.getEnvCrowdStrikeSettings() !== null;
-  }
-
-  /** Resolve a region key to its API base URL (custom base_url always wins). */
-  private resolveCrowdStrikeBaseUrl(baseUrl?: string, region?: CrowdStrikeRegion): string {
-    if (baseUrl) return baseUrl;
-    if (region && CROWDSTRIKE_REGION_BASE_URLS[region]) return CROWDSTRIKE_REGION_BASE_URLS[region];
-    return DEFAULT_CROWDSTRIKE_BASE_URL;
   }
 
   async getCrowdStrikeSettings(): Promise<CrowdStrikeIntegrationSettings | null> {
@@ -466,17 +475,14 @@ export class IntegrationsSettingsService {
   async saveCrowdStrikeSettings(settings: Partial<CrowdStrikeIntegrationSettings>): Promise<void> {
     const existing = await this.getFileSettings() ?? {};
     const current = existing.crowdstrike ?? {
-      base_url: '',
       client_id: '',
       client_secret: '',
       configured: false,
     };
     const merged: CrowdStrikeIntegrationSettings = {
-      base_url: this.resolveCrowdStrikeBaseUrl(
-        settings.base_url || current.base_url || undefined,
-        settings.region !== undefined ? settings.region : current.region,
-      ),
-      region: settings.region !== undefined ? settings.region : current.region,
+      // Region only — the API base URL is derived from the constant region
+      // map at use time, never stored.
+      region: settings.region !== undefined ? settings.region : (current.region ?? DEFAULT_CROWDSTRIKE_REGION),
       client_id: settings.client_id || current.client_id,
       client_secret: settings.client_secret || current.client_secret,
       configured: true,
@@ -504,13 +510,13 @@ export class IntegrationsSettingsService {
     return !!settings.client_secret;
   }
 
-  /** Returns raw decrypted credentials for the Falcon OAuth2 client. */
+  /** Returns raw decrypted credentials for the Falcon OAuth2 client (region only — the client resolves the base URL from its constant map). */
   async getCrowdStrikeCredentials(): Promise<CrowdStrikeCredentials | null> {
     const settings = await this.getCrowdStrikeSettings();
     if (!settings?.configured) return null;
     if (!settings.client_id || !settings.client_secret) return null;
     return {
-      base_url: this.resolveCrowdStrikeBaseUrl(settings.base_url, settings.region),
+      region: settings.region ?? DEFAULT_CROWDSTRIKE_REGION,
       client_id: settings.client_id,
       client_secret: settings.client_secret,
     };

@@ -29,7 +29,7 @@ vi.mock('../falcon-client.js', () => ({
     'eu-1': 'https://api.eu-1.crowdstrike.com',
     'us-gov-1': 'https://api.laggar.gcw.crowdstrike.com',
   },
-  DEFAULT_CROWDSTRIKE_BASE_URL: 'https://api.crowdstrike.com',
+  DEFAULT_CROWDSTRIKE_REGION: 'us-1',
 }));
 
 // Mock integrations settings.
@@ -42,7 +42,7 @@ let mockConfigured = true;
 vi.mock('../../integrations/settings.js', () => ({
   IntegrationsSettingsService: class {
     getCrowdStrikeCredentials = () => ({
-      base_url: 'https://api.crowdstrike.com',
+      region: 'us-1',
       client_id: 'a'.repeat(32),
       client_secret: 'test-secret',
     });

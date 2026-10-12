@@ -48,7 +48,7 @@ describe('IntegrationsSettingsService — CrowdStrike', () => {
 
   afterEach(() => {
     delete process.env.ENCRYPTION_SECRET;
-    delete process.env.CROWDSTRIKE_BASE_URL;
+    delete process.env.CROWDSTRIKE_REGION;
     delete process.env.CROWDSTRIKE_CLIENT_ID;
     delete process.env.CROWDSTRIKE_CLIENT_SECRET;
     delete process.env.CROWDSTRIKE_LABEL;
@@ -64,7 +64,6 @@ describe('IntegrationsSettingsService — CrowdStrike', () => {
       });
 
       service.saveCrowdStrikeSettings({
-        base_url: 'https://api.us-2.crowdstrike.com',
         region: 'us-2',
         client_id: CLIENT_ID,
         client_secret: 'super-secret-value',
@@ -75,8 +74,8 @@ describe('IntegrationsSettingsService — CrowdStrike', () => {
       const saved = JSON.parse(writtenData);
       expect(saved.crowdstrike.client_id).toMatch(/^enc:/);
       expect(saved.crowdstrike.client_secret).toMatch(/^enc:/);
-      expect(saved.crowdstrike.base_url).toBe('https://api.us-2.crowdstrike.com'); // not encrypted
-      expect(saved.crowdstrike.region).toBe('us-2');
+      expect(saved.crowdstrike.region).toBe('us-2'); // not encrypted
+      expect(saved.crowdstrike.base_url).toBeUndefined(); // never stored — derived from the region map at use time
       expect(saved.crowdstrike.label).toBe('Falcon Production'); // label not encrypted
 
       // Read back
@@ -85,7 +84,6 @@ describe('IntegrationsSettingsService — CrowdStrike', () => {
 
       const loaded = service.getCrowdStrikeSettings();
       expect(loaded).not.toBeNull();
-      expect(loaded!.base_url).toBe('https://api.us-2.crowdstrike.com');
       expect(loaded!.region).toBe('us-2');
       expect(loaded!.client_id).toBe(CLIENT_ID);
       expect(loaded!.client_secret).toBe('super-secret-value');
@@ -93,7 +91,7 @@ describe('IntegrationsSettingsService — CrowdStrike', () => {
       expect(loaded!.configured).toBe(true);
     });
 
-    it('defaults base_url to the us-1 region URL when none is given', () => {
+    it('defaults region to us-1 when none is given', () => {
       let writtenData = '';
       mockWriteFileSync.mockImplementation((_p: string, data: string) => {
         writtenData = data;
@@ -105,10 +103,11 @@ describe('IntegrationsSettingsService — CrowdStrike', () => {
       });
 
       const saved = JSON.parse(writtenData);
-      expect(saved.crowdstrike.base_url).toBe('https://api.crowdstrike.com');
+      expect(saved.crowdstrike.region).toBe('us-1');
+      expect(saved.crowdstrike.base_url).toBeUndefined();
     });
 
-    it('resolves base_url from region when only region is given', () => {
+    it('derives the base URL from the region map in credentials (never a stored string)', () => {
       let writtenData = '';
       mockWriteFileSync.mockImplementation((_p: string, data: string) => {
         writtenData = data;
@@ -120,8 +119,16 @@ describe('IntegrationsSettingsService — CrowdStrike', () => {
         client_secret: 'secret',
       });
 
-      const saved = JSON.parse(writtenData);
-      expect(saved.crowdstrike.base_url).toBe('https://api.eu-1.crowdstrike.com');
+      mockExistsSync.mockImplementation((p: string) => p === SETTINGS_FILE || p === SETTINGS_DIR);
+      mockReadFileSync.mockReturnValue(writtenData);
+
+      const creds = service.getCrowdStrikeCredentials();
+      // Credentials carry the region only — falcon-client resolves the URL.
+      expect(creds).toEqual({
+        region: 'eu-1',
+        client_id: CLIENT_ID,
+        client_secret: 'secret',
+      });
     });
 
     it('does not interfere with Defender settings in same file', () => {
@@ -168,17 +175,31 @@ describe('IntegrationsSettingsService — CrowdStrike', () => {
       const settings = service.getCrowdStrikeSettings();
       expect(settings).not.toBeNull();
       expect(settings!.client_id).toBe('env-client-id');
-      expect(settings!.base_url).toBe('https://api.crowdstrike.com'); // us-1 default
+      expect(settings!.region).toBeUndefined(); // unset → client defaults to us-1
       expect(settings!.configured).toBe(true);
     });
 
-    it('honors CROWDSTRIKE_BASE_URL', () => {
-      process.env.CROWDSTRIKE_BASE_URL = 'https://api.eu-1.crowdstrike.com';
+    it('honors CROWDSTRIKE_REGION', () => {
+      process.env.CROWDSTRIKE_REGION = 'eu-1';
       process.env.CROWDSTRIKE_CLIENT_ID = 'env-client-id';
       process.env.CROWDSTRIKE_CLIENT_SECRET = 'env-secret';
 
       const settings = service.getCrowdStrikeSettings();
-      expect(settings!.base_url).toBe('https://api.eu-1.crowdstrike.com');
+      expect(settings!.region).toBe('eu-1');
+      expect(service.getCrowdStrikeCredentials()!.region).toBe('eu-1');
+    });
+
+    it('ignores an invalid CROWDSTRIKE_REGION with a warning (falls back to us-1)', () => {
+      process.env.CROWDSTRIKE_REGION = 'garbage-region';
+      process.env.CROWDSTRIKE_CLIENT_ID = 'env-client-id';
+      process.env.CROWDSTRIKE_CLIENT_SECRET = 'env-secret';
+
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const settings = service.getCrowdStrikeSettings();
+      expect(settings!.region).toBeUndefined();
+      expect(service.getCrowdStrikeCredentials()!.region).toBe('us-1');
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('CROWDSTRIKE_REGION'));
+      warnSpy.mockRestore();
     });
 
     it('returns null when env vars are incomplete', () => {
@@ -309,7 +330,7 @@ describe('IntegrationsSettingsService — CrowdStrike', () => {
 
       // Initial save
       service.saveCrowdStrikeSettings({
-        base_url: 'https://api.us-2.crowdstrike.com',
+        region: 'us-2',
         client_id: CLIENT_ID,
         client_secret: 'original-secret',
         label: 'Original',
@@ -326,7 +347,7 @@ describe('IntegrationsSettingsService — CrowdStrike', () => {
       mockReadFileSync.mockReturnValue(writtenData);
       const loaded = service.getCrowdStrikeSettings();
 
-      expect(loaded!.base_url).toBe('https://api.us-2.crowdstrike.com');
+      expect(loaded!.region).toBe('us-2');
       expect(loaded!.client_id).toBe(CLIENT_ID);
       expect(loaded!.client_secret).toBe('original-secret');
       expect(loaded!.label).toBe('Updated Label');
@@ -361,14 +382,14 @@ describe('IntegrationsSettingsService — CrowdStrike', () => {
   // ── getCrowdStrikeCredentials ────────────────────────────────
 
   describe('getCrowdStrikeCredentials', () => {
-    it('returns raw credentials object', () => {
-      process.env.CROWDSTRIKE_BASE_URL = 'https://api.us-2.crowdstrike.com';
+    it('returns raw credentials object (region only — no stored URL)', () => {
+      process.env.CROWDSTRIKE_REGION = 'us-2';
       process.env.CROWDSTRIKE_CLIENT_ID = 'cid-456';
       process.env.CROWDSTRIKE_CLIENT_SECRET = 'secret-789';
 
       const creds = service.getCrowdStrikeCredentials();
       expect(creds).toEqual({
-        base_url: 'https://api.us-2.crowdstrike.com',
+        region: 'us-2',
         client_id: 'cid-456',
         client_secret: 'secret-789',
       });
@@ -382,14 +403,13 @@ describe('IntegrationsSettingsService — CrowdStrike', () => {
   // ── Masked settings ───────────────────────────────────────────
 
   describe('getCrowdStrikeSettingsMasked', () => {
-    it('shows client_id/base_url/label but only client_secret presence', () => {
+    it('shows client_id/label, derived base_url, and only client_secret presence', () => {
       let writtenData = '';
       mockWriteFileSync.mockImplementation((_p: string, data: string) => {
         writtenData = data;
       });
 
       service.saveCrowdStrikeSettings({
-        base_url: 'https://api.eu-1.crowdstrike.com',
         region: 'eu-1',
         client_id: CLIENT_ID,
         client_secret: 'super-secret-value',
@@ -402,6 +422,7 @@ describe('IntegrationsSettingsService — CrowdStrike', () => {
       const masked = service.getCrowdStrikeSettingsMasked();
       expect(masked.configured).toBe(true);
       expect(masked.client_id).toBe(CLIENT_ID);
+      // base_url is derived from the constant region map, not stored
       expect(masked.base_url).toBe('https://api.eu-1.crowdstrike.com');
       expect(masked.region).toBe('eu-1');
       expect(masked.label).toBe('Falcon EU');
@@ -501,7 +522,7 @@ describe('IntegrationsSettingsService — CrowdStrike', () => {
       mockWriteFileSync.mockImplementation((_p: string, data: string) => { writtenData = data; });
 
       service.saveCrowdStrikeSettings({
-        base_url: 'https://api.us-2.crowdstrike.com',
+        region: 'us-2',
         client_id: CLIENT_ID,
         client_secret: 'original-secret',
         label: 'Original Cloud',
@@ -514,7 +535,7 @@ describe('IntegrationsSettingsService — CrowdStrike', () => {
 
       mockReadFileSync.mockReturnValue(writtenData);
       const settings = service.getCrowdStrikeSettings();
-      expect(settings!.base_url).toBe('https://api.us-2.crowdstrike.com');
+      expect(settings!.region).toBe('us-2');
       expect(settings!.client_id).toBe(CLIENT_ID);
       expect(settings!.client_secret).toBe('original-secret');
       expect(settings!.label).toBe('Original Cloud');
@@ -523,7 +544,7 @@ describe('IntegrationsSettingsService — CrowdStrike', () => {
 
     it('ignores unknown mode values read from disk (forward compat)', () => {
       // Simulate a forward-compat scenario where disk has a mode string the current code doesn't know about
-      const onDisk = { crowdstrike: { base_url: 'https://api.crowdstrike.com', client_id: 'enc:y', client_secret: 'enc:z', configured: true, auto_resolve_mode: 'future-mode-v2' } };
+      const onDisk = { crowdstrike: { region: 'us-1', client_id: 'enc:y', client_secret: 'enc:z', configured: true, auto_resolve_mode: 'future-mode-v2' } };
       mockExistsSync.mockImplementation((p: string) => p === SETTINGS_FILE || p === SETTINGS_DIR);
       mockReadFileSync.mockReturnValue(JSON.stringify(onDisk));
 

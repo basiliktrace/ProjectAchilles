@@ -54,7 +54,9 @@ client later — the read-only integration runs fine without it.
 ## Cloud Regions
 
 The integration must point at the Falcon cloud that hosts your tenant. Pick
-the region in Settings, or set a custom base URL.
+the region in Settings. Configuration is **region-only** — custom base URLs
+are not accepted (this prevents SSRF through the integration's outbound HTTP
+client).
 
 | Region | Base URL |
 |--------|----------|
@@ -69,7 +71,7 @@ failures: a client created in US-2 does not authenticate against US-1.
 ## Configuration
 
 1. Navigate to **Settings** → **Integrations** → **CrowdStrike Falcon**
-2. Select your **cloud region** (or enter a custom base URL)
+2. Select your **cloud region** (US-1 by default)
 3. Enter:
    - **Client ID** — the API client's Client ID
    - **Client Secret** — the API client's Client Secret
@@ -87,7 +89,7 @@ Defender):
 
 | Variable | Description |
 |----------|-------------|
-| `CROWDSTRIKE_BASE_URL` | Falcon API base URL (region endpoint or custom) |
+| `CROWDSTRIKE_REGION` | Falcon cloud region: `us-1` (default), `us-2`, `eu-1`, or `us-gov-1` |
 | `CROWDSTRIKE_CLIENT_ID` | API client Client ID |
 | `CROWDSTRIKE_CLIENT_SECRET` | API client Client Secret |
 | `CROWDSTRIKE_LABEL` | Optional display label |

@@ -46,9 +46,10 @@ export type DefenderCredentials =
 // ---------------------------------------------------------------------------
 
 export interface CrowdStrikeIntegrationSettings {
-  /** Resolved API base URL (custom value wins over the region map). */
-  base_url: string;
-  /** Falcon cloud region used to derive base_url when no custom URL is set. */
+  /**
+   * Falcon cloud region (the ONLY determinant of the API base URL — resolved
+   * via CROWDSTRIKE_REGION_BASE_URLS in falcon-client.ts). Missing = 'us-1'.
+   */
   region?: CrowdStrikeRegion;
   client_id: string;
   // Encrypted at rest
@@ -66,9 +67,13 @@ export interface CrowdStrikeIntegrationSettings {
   auto_resolve_mode?: AutoResolveMode;
 }
 
-/** Raw credentials for the Falcon OAuth2 client (secret-only auth). */
+/**
+ * Raw credentials for the Falcon OAuth2 client (secret-only auth). Region
+ * only: the client resolves the base URL from its constant region map, so no
+ * user-supplied string ever reaches a fetch URL (request-forgery guard).
+ */
 export interface CrowdStrikeCredentials {
-  base_url: string;
+  region?: CrowdStrikeRegion;
   client_id: string;
   client_secret: string;
 }

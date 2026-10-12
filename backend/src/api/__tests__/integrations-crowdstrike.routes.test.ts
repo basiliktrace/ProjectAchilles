@@ -208,7 +208,6 @@ describe('CrowdStrike integration routes', () => {
       expect(res.status).toBe(200);
       expect(res.body).toEqual({ success: true });
       expect(mockSaveCrowdStrikeSettings).toHaveBeenCalledWith({
-        base_url: undefined,
         region: 'us-2',
         client_id: VALID_CLIENT_ID,
         client_secret: 'my-secret',
@@ -301,11 +300,14 @@ describe('CrowdStrike integration routes', () => {
       expect(mockFetch.mock.calls[0][0]).toBe('https://api.eu-1.crowdstrike.com/oauth2/token');
     });
 
-    it('lets a custom base_url win over region', async () => {
+    it('ignores a base_url sent in the body — fetch target comes from the region map only (SSRF regression)', async () => {
+      // CodeQL js/request-forgery fix: the schema carries no base_url field,
+      // so a client-supplied URL is stripped by validation and never reaches
+      // fetch. Pin that at the route level.
       mockFalconTestSuccess();
 
       const app = createApp();
-      await request(app)
+      const res = await request(app)
         .post('/api/integrations/crowdstrike/test')
         .send({
           base_url: 'https://falcon-proxy.internal.example.com',
@@ -314,7 +316,11 @@ describe('CrowdStrike integration routes', () => {
           client_secret: 'valid-secret',
         });
 
-      expect(mockFetch.mock.calls[0][0]).toBe('https://falcon-proxy.internal.example.com/oauth2/token');
+      expect(res.status).toBe(200);
+      expect(mockFetch.mock.calls[0][0]).toBe('https://api.eu-1.crowdstrike.com/oauth2/token');
+      for (const call of mockFetch.mock.calls) {
+        expect(call[0] as string).not.toContain('falcon-proxy.internal.example.com');
+      }
     });
 
     it('returns error on OAuth2 failure', async () => {
@@ -337,9 +343,9 @@ describe('CrowdStrike integration routes', () => {
       expect(res.body.error).toMatch(/Invalid client secret/);
     });
 
-    it('falls back to stored credentials', async () => {
+    it('falls back to stored credentials (stored region wins over us-1 default)', async () => {
       mockGetCrowdStrikeCredentials.mockReturnValue({
-        base_url: 'https://api.us-2.crowdstrike.com',
+        region: 'us-2',
         client_id: VALID_CLIENT_ID,
         client_secret: 'stored-secret',
       });

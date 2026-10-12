@@ -11,7 +11,7 @@ describe('FalconClient', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    client = new FalconClient({ base_url: 'https://api.crowdstrike.com', client_id: 'a'.repeat(32), client_secret: 'client-secret' });
+    client = new FalconClient({ region: 'us-1', client_id: 'a'.repeat(32), client_secret: 'client-secret' });
   });
 
   // Helper: mock a successful token response
@@ -93,7 +93,7 @@ describe('FalconClient', () => {
 
     it('uses the region-specific base URL for both token and API calls', async () => {
       const us2Client = new FalconClient({
-        base_url: CROWDSTRIKE_REGION_BASE_URLS['us-2'],
+        region: 'us-2',
         client_id: 'b'.repeat(32),
         client_secret: 'secret',
       });
@@ -107,9 +107,11 @@ describe('FalconClient', () => {
       expect(mockFetch.mock.calls[1][0]).toContain('https://api.us-2.crowdstrike.com/alerts/combined/alerts/v1');
     });
 
-    it('lets a custom base_url win over the region map', async () => {
-      const customClient = new FalconClient({
-        base_url: 'https://falcon-proxy.internal.example.com/',
+    // Request-forgery guard (CodeQL js/request-forgery): the base URL is
+    // resolved ONLY from the constant region map. There is no custom-URL
+    // path; an unknown region throws rather than fetching a garbage host.
+    it('defaults to us-1 when no region is given', async () => {
+      const defaultClient = new FalconClient({
         client_id: 'c'.repeat(32),
         client_secret: 'secret',
       });
@@ -117,10 +119,45 @@ describe('FalconClient', () => {
       mockTokenResponse();
       mockFalconResponse([]);
 
-      await customClient.getAlertsCombined({ limit: 1 });
+      await defaultClient.getAlertsCombined({ limit: 1 });
 
-      // Trailing slash is stripped
-      expect(mockFetch.mock.calls[0][0]).toBe('https://falcon-proxy.internal.example.com/oauth2/token');
+      expect(mockFetch.mock.calls[0][0]).toBe('https://api.crowdstrike.com/oauth2/token');
+    });
+
+    it('throws on an unknown region instead of fetching (fail closed)', () => {
+      expect(() => new FalconClient({
+        // @ts-expect-error — deliberately invalid region, as could arrive from unvalidated disk/env data
+        region: 'evil-region',
+        client_id: 'd'.repeat(32),
+        client_secret: 'secret',
+      })).toThrow(/Unknown CrowdStrike region/);
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    it('every fetch target across all methods comes from the constant region map', async () => {
+      // Pin the SSRF invariant end-to-end: token, alerts read, alerts write,
+      // and ZTA calls must all land on map-derived hosts.
+      const allowedHosts = new Set(Object.values(CROWDSTRIKE_REGION_BASE_URLS).map((u) => new URL(u).host));
+
+      mockTokenResponse();
+      mockFalconResponse([]);
+      await client.getAlertsCombined({ limit: 1 });
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({ meta: { writes: { resources_affected: 1 } }, resources: [], errors: [] }),
+      });
+      await client.updateAlerts(['cid-1'], { status: 'closed' });
+      mockFalconResponse([]);
+      await client.getZtaDeviceIds({ limit: 1 });
+      mockFalconResponse([]);
+      await client.getZtaAssessments(['aid-1']);
+
+      expect(mockFetch.mock.calls.length).toBeGreaterThanOrEqual(4);
+      for (const call of mockFetch.mock.calls) {
+        const host = new URL(call[0] as string).host;
+        expect(allowedHosts.has(host)).toBe(true);
+      }
     });
   });
 

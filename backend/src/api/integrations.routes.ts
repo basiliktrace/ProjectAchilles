@@ -24,7 +24,7 @@ import {
 import { DEFENDER_INDEX } from '../services/defender/index-management.js';
 import { CROWDSTRIKE_INDEX } from '../services/crowdstrike/index-management.js';
 import { buildClientAssertionForTest } from '../services/defender/graph-client.js';
-import { FalconClient, CROWDSTRIKE_REGION_BASE_URLS, DEFAULT_CROWDSTRIKE_BASE_URL } from '../services/crowdstrike/falcon-client.js';
+import { FalconClient } from '../services/crowdstrike/falcon-client.js';
 import { CrowdStrikeSyncService } from '../services/crowdstrike/sync.service.js';
 import { parsePfx } from '../services/defender/pfx-parser.js';
 import multer from 'multer';
@@ -565,7 +565,7 @@ router.get('/crowdstrike', requirePermission('integrations:read'), (req, res) =>
 /** POST /api/integrations/crowdstrike — Save credentials (partial update supported) */
 router.post('/crowdstrike', requirePermission('integrations:write'), validate(CrowdStrikeCredentialsSchema), asyncHandler(async (req, res) => {
   const svc = getSettingsService(req);
-  const { base_url, region, client_id, client_secret, label } = req.body;
+  const { region, client_id, client_secret, label } = req.body;
 
   const isEdit = svc.isCrowdStrikeConfigured();
 
@@ -573,7 +573,7 @@ router.post('/crowdstrike', requirePermission('integrations:write'), validate(Cr
     throw new AppError('client_id and client_secret are required for initial setup', 400);
   }
 
-  svc.saveCrowdStrikeSettings({ base_url, region, client_id, client_secret, label });
+  svc.saveCrowdStrikeSettings({ region, client_id, client_secret, label });
 
   // Kick off a sync with the new credentials rather than waiting for the
   // next timer tick (up to 6h for ZTA scores). Outcome lands in /sync/status.
@@ -588,7 +588,7 @@ router.post('/crowdstrike', requirePermission('integrations:write'), validate(Cr
 router.delete('/crowdstrike', requirePermission('integrations:write'), asyncHandler(async (req, res) => {
   if (settingsService.isEnvCrowdStrikeConfigured()) {
     throw new AppError(
-      'Cannot disconnect: CrowdStrike credentials are set via environment variables (CROWDSTRIKE_BASE_URL, CROWDSTRIKE_CLIENT_ID, CROWDSTRIKE_CLIENT_SECRET). Remove these env vars to disconnect.',
+      'Cannot disconnect: CrowdStrike credentials are set via environment variables (CROWDSTRIKE_REGION, CROWDSTRIKE_CLIENT_ID, CROWDSTRIKE_CLIENT_SECRET). Remove these env vars to disconnect.',
       400
     );
   }
@@ -598,7 +598,7 @@ router.delete('/crowdstrike', requirePermission('integrations:write'), asyncHand
 
 /** POST /api/integrations/crowdstrike/test — Real OAuth2 token acquisition against CrowdStrike */
 router.post('/crowdstrike/test', requirePermission('integrations:write'), validate(CrowdStrikeTestSchema), asyncHandler(async (req, res) => {
-  const { base_url, region, client_id, client_secret } = req.body;
+  const { region, client_id, client_secret } = req.body;
 
   // Resolve: use provided values or fall back to stored
   const stored = getSettingsService(req).getCrowdStrikeCredentials();
@@ -610,15 +610,13 @@ router.post('/crowdstrike/test', requirePermission('integrations:write'), valida
     return;
   }
 
-  // Custom base_url wins; otherwise the region map; otherwise stored; us-1 default.
-  const effectiveBaseUrl = base_url
-    || (region ? CROWDSTRIKE_REGION_BASE_URLS[region as keyof typeof CROWDSTRIKE_REGION_BASE_URLS] : undefined)
-    || stored?.base_url
-    || DEFAULT_CROWDSTRIKE_BASE_URL;
+  // Region only — the client resolves the base URL from its constant region
+  // map. Body region > stored region > the client's us-1 default.
+  const effectiveRegion = region || stored?.region;
 
   try {
     const client = new FalconClient({
-      base_url: effectiveBaseUrl,
+      region: effectiveRegion,
       client_id: effectiveClientId,
       client_secret: effectiveClientSecret,
     });

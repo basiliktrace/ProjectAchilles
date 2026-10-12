@@ -4,7 +4,9 @@ import type { AutoResolveMode, EnrichmentPassOptions, EnrichmentPassResult, Auto
 
 export type { AutoResolveMode, EnrichmentPassOptions, EnrichmentPassResult, AutoResolvePassOptions, AutoResolvePassResult };
 
-/** Falcon cloud regions. Custom base_url in settings wins over this map. */
+/** Falcon cloud regions. The region is the ONLY determinant of the API base
+ *  URL — resolved via CROWDSTRIKE_REGION_BASE_URLS in falcon-client.ts; no
+ *  user-supplied URL ever reaches a fetch target (request-forgery guard). */
 export type CrowdStrikeRegion = 'us-1' | 'us-2' | 'eu-1' | 'us-gov-1';
 
 // ---------------------------------------------------------------------------
