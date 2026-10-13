@@ -398,13 +398,16 @@ describe('DefenderAnalyticsService (serverless)', () => {
       const must = searchCall.query.bool.must as Array<Record<string, unknown>>;
       const windowWrapper = must.find((f: any) =>
         'bool' in f && Array.isArray(f.bool.should) && f.bool.should.some((s: any) =>
-          'range' in s && 'timestamp' in s.range,
+          'range' in s && 'created_at' in s.range,
         ),
       ) as any;
       expect(windowWrapper).toBeDefined();
       expect(windowWrapper.bool.minimum_should_match).toBe(1);
 
-      const tsRange = windowWrapper.bool.should.find((s: any) => 'range' in s && 'timestamp' in s.range);
+      const tsRange = windowWrapper.bool.should.find((s: any) => 'bool' in s)?.bool.filter
+        .find((f: any) => 'range' in f && 'timestamp' in f.range);
+      expect(windowWrapper.bool.should.find((s: any) => 'bool' in s)?.bool.must_not)
+        .toEqual([{ terms: { status: ['resolved', 'closed'] } }]);
       expect(tsRange.range.timestamp.gte).toBe('2026-02-25T11:55:00.000Z');
       expect(tsRange.range.timestamp.lte).toBe('2026-02-25T12:30:00.000Z');
 

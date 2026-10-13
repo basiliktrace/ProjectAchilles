@@ -71,11 +71,26 @@ export function buildAlertTimeWindowQuery(
   fromIso: string,
   toIso: string,
 ): Record<string, unknown> {
+  // Two paths into the window:
+  //   - created_at: the alert fired in the window — always a valid match.
+  //   - timestamp (vendor last-update): only for ACTIVE alerts. Terminal
+  //     alerts (resolved/closed) are excluded here because the dominant
+  //     in-window update for them is a lifecycle event — most notably our
+  //     own auto-resolve PATCH, which would otherwise re-float an alert from
+  //     a previous run into the new run's window (observed in prod: two
+  //     "49h before" Defender alerts attached to a fresh run after the
+  //     auto-resolve pass resolved them mid-window). A genuinely re-fired
+  //     aggregated alert comes back as new/reopened, so it still matches.
   return {
     bool: {
       should: [
-        { range: { timestamp:  { gte: fromIso, lte: toIso } } },
         { range: { created_at: { gte: fromIso, lte: toIso } } },
+        {
+          bool: {
+            filter: [{ range: { timestamp: { gte: fromIso, lte: toIso } } }],
+            must_not: [{ terms: { status: ['resolved', 'closed'] } }],
+          },
+        },
       ],
       minimum_should_match: 1,
     },
