@@ -338,7 +338,11 @@ Falcon reports what it *did* about each alert via `pattern_disposition`
 (e.g. "Prevention, process killed."). The sync extracts this into
 `prevention_action` (`quarantined` / `process_killed` / `blocked` /
 `kill_failed`) on the alert doc, and enrichment upgrades matched test stages
-with `crowdstrike_prevented: true` (plus the action). Prevented stages render
+with `crowdstrike_prevented: true` (plus the action) under a deliberate
+qualification rule: stage-binary matches always qualify, while bundle-level
+matches qualify only when the stage never reached a conclusive outcome — a
+sibling stage that already ran to completion was not prevented by the kill
+of a later stage. Prevented stages render
 as **Prevented** in the executions view — stronger than Detected — count as
 protected in the Defense Score, and report as PREVENTED with
 `preventedBy: ['CrowdStrike Falcon']` in the SB compliance report. A failed

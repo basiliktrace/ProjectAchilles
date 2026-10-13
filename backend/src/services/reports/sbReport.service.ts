@@ -198,11 +198,14 @@ function isoWithTz(ts: unknown): string {
 /** Decide the SB outcome for one bundle-control doc. */
 function mapOutcome(exitCode: number | undefined, rawTactics: string[], edrDetected: boolean, edrPrevented: boolean): SbOutcome {
   if (exitCode !== undefined && PREVENTED_EXIT_CODES.has(exitCode)) return 'PREVENTED';
-  // Vendor-confirmed prevention (CrowdStrike prevention disposition on the
-  // correlated alert) upgrades an executed stage to PREVENTED. Enrichment
-  // only writes the flag on conclusive-code docs, so this can't fire on
-  // inconclusive/error exits in practice — the guard documents that intent.
-  if (edrPrevented && (exitCode === undefined || EXECUTED_EXIT_CODES.has(exitCode))) return 'PREVENTED';
+  // Vendor-confirmed prevention (prevention disposition on the correlated
+  // alert) → PREVENTED, including error/inconclusive exits (999/259/0) — a
+  // stage killed at launch never reaches a conclusive code. The one exception
+  // is 101 (conclusively executed unprotected): a succeeded attack cannot have
+  // been prevented. Enrichment writes the flag under the same rule (stage
+  // matches always qualify; wide matches only for non-conclusive docs), so a
+  // 101 + flag combo shouldn't occur — the guard is belt-and-braces.
+  if (edrPrevented && exitCode !== 101) return 'PREVENTED';
   if (exitCode !== undefined && EXECUTED_EXIT_CODES.has(exitCode)) {
     if (edrDetected) return 'DETECTED';
     if (rawTactics.some((t) => EXPOSED_TACTICS.has(t))) return 'EXPOSED';

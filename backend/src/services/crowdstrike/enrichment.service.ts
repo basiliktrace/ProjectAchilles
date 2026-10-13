@@ -20,6 +20,12 @@ const DEFAULT_MAX_DURATION_MS = 60_000;
 // See docs/edr-killed-stage-detection.md.
 const ENRICHMENT_ELIGIBLE_ERROR_CODES = [0, 1, 101, 105, 126, 127, 259, 999];
 
+// Exit codes proving a stage reached a conclusive outcome on its own
+// (101 executed unprotected; 105/126/127 policy-prevented). A wide/bundle-level
+// alert match must not claim vendor prevention for those stages — only
+// stage-binary matches may. See docs/edr-prevention-action-detection.md.
+const CONCLUSIVE_OUTCOME_CODES = new Set([101, 105, 126, 127]);
+
 /**
  * Cap on the number of alert hits we pull back per sub-query. A single test
  * doc rarely matches more than a handful of CrowdStrike alerts; this bound
@@ -177,11 +183,21 @@ export class CrowdStrikeEnrichmentService {
           const alertIds = alertHits
             .map((h) => h._id)
             .filter((id): id is string => typeof id === 'string');
-          // Wide and stage matches both qualify: any matched alert with a
-          // prevention disposition is vendor-confirmed prevention of this test.
+          // Prevention-flag qualification rule (docs/edr-prevention-action-detection.md):
+          //   - stage matches always qualify — the alert names this stage's own binary;
+          //   - wide/bundle matches qualify only when this stage did NOT reach a
+          //     conclusive outcome (101 executed; 105/126/127 policy-prevented) —
+          //     a sibling stage that ran to completion was not prevented by the
+          //     alert that killed a later stage (prod: Falcon killed T1486 while
+          //     stages 1–4 had already exited 101).
           const preventionActions = alertHits
             .map((h) => h._source?.prevention_action)
             .filter((a): a is string => typeof a === 'string' && PREVENTION_ACTIONS.has(a));
+
+          const docErrorCode = q.hit._source?.event?.ERROR as number | undefined;
+          const preventionQualifies = q.kind === 'stage'
+            || docErrorCode === undefined
+            || !CONCLUSIVE_OUTCOME_CODES.has(docErrorCode);
 
           const hitId = q.hit._id as string;
           let entry = updatesByHitId.get(hitId);
@@ -192,7 +208,7 @@ export class CrowdStrikeEnrichmentService {
           if (q.kind === 'wide')  entry.wideMatched = true;
           if (q.kind === 'stage') entry.stageMatched = true;
           for (const id of alertIds) entry.alertIds.add(id);
-          entry.preventionActions.push(...preventionActions);
+          if (preventionQualifies) entry.preventionActions.push(...preventionActions);
         }
 
         // 5. Bulk update matched docs.
@@ -218,8 +234,9 @@ export class CrowdStrikeEnrichmentService {
             const f0rtika: Record<string, unknown> = {};
             if (u.wideMatched)  f0rtika.crowdstrike_detected       = true;
             if (u.stageMatched) f0rtika.crowdstrike_stage_detected = true;
-            // Vendor-confirmed prevention (wide OR stage match with a
-            // prevention disposition) — rides alongside the detected flags.
+            // Vendor-confirmed prevention — rides alongside the detected flags.
+            // preventionActions is already qualification-filtered above
+            // (stage matches always; wide matches only for non-conclusive docs).
             // Prevention ⊆ detection: a prevention flag implies a matched alert.
             if (u.preventionActions.length > 0) {
               f0rtika.crowdstrike_prevented = true;
