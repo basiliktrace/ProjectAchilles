@@ -934,3 +934,152 @@ describe('ExecutionsDataTable — Defender prevention (vendor-confirmed)', () =>
     );
   });
 });
+
+describe('ExecutionsDataTable — re-fired alert annotation (resolution watermark)', () => {
+  // Stage runs at 2026-05-12T12:00:00Z (makeStage fixture). An alert created
+  // at 12:05 annotates "5m after" under the existing rule.
+  const RUN_TIME = '2026-05-12T12:00:00.000Z';
+
+  function renderStageWithAlert(alert: DefenderAlertItem) {
+    getAlertsForTestMock.mockResolvedValue({
+      alerts: [alert],
+      matchedTechniques: ['T1083'],
+      total: 1,
+    });
+    const stage = makeStage({
+      test_uuid: `${BUNDLE_UUID}::T1083`,
+      control_id: 'T1083',
+      techniques: ['T1083'],
+      timestamp: RUN_TIME,
+      defender_detected: true,
+    });
+    renderTable(makeData([stage], { defenderDetected: true }));
+    return stage;
+  }
+
+  async function openStageDetail(stage: EnrichedTestExecution) {
+    await userEvent.click(screen.getAllByText(stage.bundle_name!)[0]);
+    await waitFor(() => expect(getAlertsForTestMock).toHaveBeenCalled());
+    await userEvent.click(screen.getByText(stage.test_name));
+    await waitFor(() => expect(screen.getByText(/suspicious/i)).toBeInTheDocument());
+  }
+
+  it('annotates a re-fired terminal alert from updated_at with the first-seen date', async () => {
+    // Born-resolved aggregated alert (resolved_at == created_at on May 10)
+    // re-fired 3 minutes into the May 12 run: Defender bumped
+    // lastUpdateDateTime while status stayed resolved. Must NOT render the
+    // misleading created-relative "49h before" annotation.
+    const stage = renderStageWithAlert(
+      makeAlert({
+        alert_id: 'da-refire',
+        alert_title: 'Suspicious tamper attempt (re-fired)',
+        status: 'resolved',
+        created_at: '2026-05-10T08:00:00.000Z',
+        updated_at: '2026-05-12T12:03:00.000Z',
+        resolved_at: '2026-05-10T08:00:00.000Z',
+        attribution: 'stage',
+        attributed_control_id: 't1083',
+      }),
+    );
+    await openStageDetail(stage);
+
+    expect(screen.getByText('re-fired 3m after · first seen May 10')).toBeInTheDocument();
+    expect(screen.queryByText(/\d+h before/)).toBeNull();
+  });
+
+  it('keeps the created-relative annotation for a terminal alert with no post-resolution bump', async () => {
+    // Resolved at creation, never updated afterwards → lifecycle bump only,
+    // no re-fire: updated_at == resolved_at is NOT > resolved_at + 60s.
+    const stage = renderStageWithAlert(
+      makeAlert({
+        alert_id: 'da-terminal',
+        alert_title: 'Suspicious binary (resolved at creation)',
+        status: 'resolved',
+        created_at: '2026-05-12T12:05:00.000Z',
+        updated_at: '2026-05-12T12:05:00.000Z',
+        resolved_at: '2026-05-12T12:05:00.000Z',
+        attribution: 'stage',
+        attributed_control_id: 't1083',
+      }),
+    );
+    await openStageDetail(stage);
+
+    expect(screen.getByText('5m after')).toBeInTheDocument();
+    expect(screen.queryByText(/re-fired/)).toBeNull();
+  });
+
+  it('keeps the created-relative annotation for active alerts regardless of updated_at', async () => {
+    const stage = renderStageWithAlert(
+      makeAlert({
+        alert_id: 'da-active',
+        alert_title: 'Suspicious binary (active)',
+        status: 'inProgress',
+        created_at: '2026-05-12T12:05:00.000Z',
+        updated_at: '2026-05-13T09:00:00.000Z',
+        resolved_at: null,
+        attribution: 'stage',
+        attributed_control_id: 't1083',
+      }),
+    );
+    await openStageDetail(stage);
+
+    expect(screen.getByText('5m after')).toBeInTheDocument();
+    expect(screen.queryByText(/re-fired/)).toBeNull();
+  });
+
+  it('falls back to the created-relative annotation when resolved_at is missing', async () => {
+    const stage = renderStageWithAlert(
+      makeAlert({
+        alert_id: 'da-noresolved',
+        alert_title: 'Suspicious binary (no resolved_at)',
+        status: 'resolved',
+        created_at: '2026-05-12T12:05:00.000Z',
+        updated_at: '2026-05-13T09:00:00.000Z',
+        resolved_at: null,
+        attribution: 'stage',
+        attributed_control_id: 't1083',
+      }),
+    );
+    await openStageDetail(stage);
+
+    expect(screen.getByText('5m after')).toBeInTheDocument();
+    expect(screen.queryByText(/re-fired/)).toBeNull();
+  });
+
+  it('applies the same re-fired annotation in the CrowdStrike alerts section', async () => {
+    csConfigured.value = true;
+    getAlertsForTestMock.mockResolvedValue({ alerts: [], matchedTechniques: [], total: 0 });
+    csGetAlertsForTestMock.mockResolvedValue({
+      alerts: [
+        makeCsAlert({
+          alert_id: 'cs-refire',
+          alert_title: 'Falcon: suspicious activity (re-fired)',
+          status: 'closed',
+          created_at: '2026-05-10T08:00:00.000Z',
+          updated_at: '2026-05-12T12:03:00.000Z',
+          resolved_at: '2026-05-10T08:00:00.000Z',
+          attribution: 'stage',
+          attributed_control_id: 't1083',
+        }),
+      ],
+      matchedTechniques: ['T1083'],
+      total: 1,
+    });
+    const stage = makeStage({
+      test_uuid: `${BUNDLE_UUID}::T1083`,
+      control_id: 'T1083',
+      techniques: ['T1083'],
+      timestamp: RUN_TIME,
+      crowdstrike_detected: true,
+    });
+    renderTable(makeData([stage], { defenderDetected: false, crowdstrikeDetected: true }));
+
+    await userEvent.click(screen.getAllByText(stage.bundle_name!)[0]);
+    await waitFor(() => expect(csGetAlertsForTestMock).toHaveBeenCalled());
+    await userEvent.click(screen.getByText(stage.test_name));
+
+    await waitFor(() => {
+      expect(screen.getByText('re-fired 3m after · first seen May 10')).toBeInTheDocument();
+    });
+  });
+});

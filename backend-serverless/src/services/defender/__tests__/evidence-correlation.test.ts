@@ -310,9 +310,15 @@ describe('buildAlertTimeWindowQuery', () => {
   const TO   = '2026-05-13T12:41:22.000Z';
   const inWindow = (iso: string) => iso >= FROM && iso <= TO;
 
+  // The helper output is a JSON-shaped clause; this evaluates it against a
+  // synthetic alert doc the way ES would, so the test asserts behavior
+  // rather than structure. Keeps the test robust to non-semantic shape
+  // changes (e.g., clause reordering). Branch (c) embeds a Painless script
+  // (the resolution watermark) — simulated here with the same semantics:
+  // timestamp > resolved_at + 60s, with both fields required.
   const alertMatches = (
     clause: any,
-    alert: { timestamp?: string; created_at?: string; status?: string },
+    alert: { timestamp?: string; created_at?: string; status?: string; resolved_at?: string },
   ): boolean => {
     const should = clause.bool?.should ?? [];
     return should.some((s: any) => {
@@ -323,13 +329,26 @@ describe('buildAlertTimeWindowQuery', () => {
         return inWindow(val) && val >= range.gte && val <= range.lte;
       }
       if ('bool' in s) {
-        // updated-timestamp path: terminal alerts (resolved/closed) are excluded
-        const range = s.bool.filter?.[0]?.range?.timestamp;
+        const filters = s.bool.filter ?? [];
+        const range = filters.find((f: any) => 'range' in f && 'timestamp' in f.range)?.range?.timestamp;
         if (!range) return false;
-        const terminal = s.bool.must_not?.[0]?.terms?.status ?? [];
-        if (alert.status && terminal.includes(alert.status)) return false;
         const val = alert.timestamp;
-        return typeof val === 'string' && inWindow(val) && val >= range.gte && val <= range.lte;
+        if (typeof val !== 'string' || !inWindow(val) || val < range.gte || val > range.lte) return false;
+
+        // Branch (b): active alerts only — terminal statuses excluded.
+        const excluded = s.bool.must_not?.[0]?.terms?.status ?? [];
+        if (excluded.length) {
+          if (alert.status && excluded.includes(alert.status)) return false;
+          return true;
+        }
+
+        // Branch (c): terminal alerts only, and only past the resolution
+        // watermark (simulates the Painless script; the script's field
+        // guards mean a missing resolved_at never matches).
+        const termFilter = filters.find((f: any) => 'terms' in f && 'status' in f.terms)?.terms?.status ?? [];
+        if (!alert.status || !termFilter.includes(alert.status)) return false;
+        if (typeof alert.resolved_at !== 'string') return false;
+        return Date.parse(val) > Date.parse(alert.resolved_at) + 60_000;
       }
       return false;
     });
@@ -362,18 +381,83 @@ describe('buildAlertTimeWindowQuery', () => {
   it('does NOT match a terminal alert re-floated by an in-window update (auto-resolve echo)', () => {
     // The alert fired weeks ago; our auto-resolve (or an analyst) resolved it
     // inside the test window, bumping lastUpdateDateTime into the window.
-    // created_at is stale and status is terminal — no match.
+    // The resolution and the bump are the SAME event — resolved_at ≈
+    // timestamp — so the resolution watermark (branch c) does not re-admit
+    // it. created_at is stale and status is terminal — no match.
+    const clause = buildAlertTimeWindowQuery(FROM, TO);
+    expect(alertMatches(clause, {
+      timestamp:   '2026-05-13T12:15:00.000Z',
+      created_at:  '2026-04-01T08:00:00.000Z',
+      status:      'closed',
+      resolved_at: '2026-05-13T12:15:00.000Z', // resolution bump, not a re-fire
+    })).toBe(false);
+    expect(alertMatches(clause, {
+      timestamp:   '2026-05-13T12:15:00.000Z',
+      created_at:  '2026-04-01T08:00:00.000Z',
+      status:      'resolved',
+      resolved_at: '2026-05-13T12:14:30.000Z', // 30s after resolution — absorbed by the 60s epsilon
+    })).toBe(false);
+  });
+
+  it('matches a terminal alert updated >60s after its resolution (genuine re-fire, branch c)', () => {
+    // Defender aggregates re-fires into the same alert: resolved weeks ago,
+    // re-fired during this run — lastUpdateDateTime bumps into the window but
+    // status stays resolved. Branch (c) re-admits it.
+    const clause = buildAlertTimeWindowQuery(FROM, TO);
+    expect(alertMatches(clause, {
+      timestamp:   '2026-05-13T12:15:00.000Z',
+      created_at:  '2026-04-01T08:00:00.000Z',
+      status:      'resolved',
+      resolved_at: '2026-04-01T08:05:00.000Z', // resolved weeks ago — bump is a re-fire
+    })).toBe(true);
+    expect(alertMatches(clause, {
+      timestamp:   '2026-05-13T12:15:00.000Z',
+      created_at:  '2026-04-01T08:00:00.000Z',
+      status:      'closed',
+      resolved_at: '2026-04-01T08:05:00.000Z',
+    })).toBe(true);
+  });
+
+  it('born-resolved alert (resolved_at == created_at) matches on ANY in-window post-creation update', () => {
+    // AV auto-remediation completes at creation: no lifecycle bump is
+    // possible, so every post-creation update is evidence activity.
+    const clause = buildAlertTimeWindowQuery(FROM, TO);
+    expect(alertMatches(clause, {
+      timestamp:   '2026-05-13T12:15:00.000Z',
+      created_at:  '2026-04-01T08:00:00.000Z',
+      status:      'resolved',
+      resolved_at: '2026-04-01T08:00:00.000Z', // == created_at
+    })).toBe(true);
+  });
+
+  it('does NOT match a terminal alert missing resolved_at (conservative exclusion)', () => {
     const clause = buildAlertTimeWindowQuery(FROM, TO);
     expect(alertMatches(clause, {
       timestamp:  '2026-05-13T12:15:00.000Z',
       created_at: '2026-04-01T08:00:00.000Z',
-      status:     'closed',
-    })).toBe(false);
-    expect(alertMatches(clause, {
-      timestamp:  '2026-05-13T12:15:00.000Z',
-      created_at: '2026-04-01T08:00:00.000Z',
       status:     'resolved',
+      // no resolved_at
     })).toBe(false);
+  });
+
+  it('emits three should branches: created_at range, active-update, and the watermark script', () => {
+    const clause = buildAlertTimeWindowQuery(FROM, TO);
+    const should = (clause.bool as any).should as any[];
+    expect(should).toHaveLength(3);
+
+    // Branch (c): terminal status filter + Painless watermark script.
+    const branchC = should.find((s) => 'bool' in s && (s.bool.filter ?? []).some((f: any) => 'script' in f));
+    expect(branchC).toBeDefined();
+    expect(branchC.bool.filter).toContainEqual({ terms: { status: ['resolved', 'closed'] } });
+    const script = branchC.bool.filter.find((f: any) => 'script' in f).script.script;
+    expect(script.lang).toBe('painless');
+    // toInstant().toEpochMilli() — toMillis() does not exist on ZonedDateTime.
+    expect(script.source).toContain("doc['timestamp'].value.toInstant().toEpochMilli()");
+    expect(script.source).toContain("doc['resolved_at'].value.toInstant().toEpochMilli()");
+    expect(script.source).toContain('+ 60000');
+    // Missing-field guards
+    expect(script.source).toContain("doc['resolved_at'].size() > 0");
+    expect(script.source).toContain("doc['timestamp'].size() > 0");
   });
 
   it('still matches a re-fired aggregated alert via timestamp when status is active (reopened)', () => {

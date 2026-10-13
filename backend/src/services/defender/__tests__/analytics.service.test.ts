@@ -975,6 +975,52 @@ describe('DefenderAnalyticsService', () => {
       expect(tier3).toContain('SB11284');
     });
 
+    it('returns a re-fire-matched terminal alert with resolved_at populated (branch c)', async () => {
+      // Resolution-watermark rule (docs/edr-alert-refire-watermark.md): a
+      // born-resolved aggregated alert whose timestamp was bumped by a
+      // re-fire during the run is matched via branch (c). The drill-down
+      // must return it carrying its resolved_at (the frontend annotates it
+      // as "re-fired", so the field must be present).
+      mockSearch.mockResolvedValueOnce({
+        hits: {
+          total: { value: 1 },
+          hits: [{
+            _source: {
+              alert_id: 'da91cdf52c',
+              alert_title: 'Attempt to turn off Microsoft Defender Antivirus protection',
+              description: '',
+              severity: 'high',
+              status: 'resolved',          // aggregated re-fire — never reopened
+              category: 'DefenseEvasion',
+              service_source: 'MDE',
+              mitre_techniques: ['T1562.001'],
+              created_at: '2026-10-10T09:00:00Z',
+              updated_at: '2026-10-12T16:50:59Z',
+              resolved_at: '2026-10-10T09:00:00Z', // born resolved
+              recommended_actions: '',
+            },
+          }],
+        },
+      });
+
+      const result = await service.getAlertsForTest(
+        ['T1562.001'],
+        '2026-10-12T16:47:00Z',
+        30,
+      );
+
+      // The tier-3 (technique-only) query must embed the branch-(c)
+      // watermark script — that's what admits this alert at all.
+      const queryStr = JSON.stringify(mockSearch.mock.calls[0][0].query);
+      expect(queryStr).toContain('toEpochMilli');
+      expect(queryStr).toContain('resolved_at');
+
+      expect(result.total).toBe(1);
+      expect(result.alerts[0].alert_id).toBe('da91cdf52c');
+      expect(result.alerts[0].status).toBe('resolved');
+      expect(result.alerts[0].resolved_at).toBe('2026-10-10T09:00:00Z');
+    });
+
     it('uses the shared evidence-correlation helper when binaryName + hostname + bundleName are provided', async () => {
       // Drift fix: the per-row drill-down must use the SAME query the
       // enrichment pass uses, otherwise badges and alert lists disagree.

@@ -42,6 +42,10 @@ Specifically **excluded** from auto-resolve:
 
 What this means in practice: turning auto-resolve on never disrupts in-flight SOC work, and historical alerts your team has already triaged stay exactly as they were left. The only alerts that get PATCHed are the ones nobody has touched yet — which is precisely the intended target of the feature.
 
+### Interaction with correlation windows
+
+Resolving an alert does **not** blind future runs to it. The correlation window matches terminal alerts on `created_at` (when they fired) and additionally on their last-update time when an update lands **more than 60 s after the resolution time** — Defender aggregates repeat detections of the same binary into one alert and bumps its last-update time on a re-fire without reopening it, and that post-resolution bump is what re-admits the alert to a later run's window. The auto-resolve PATCH itself can never trigger this: it sets `resolvedDateTime` and `lastUpdateDateTime` to the same instant, so it stays under the 60 s watermark. See `docs/edr-alert-refire-watermark.md`.
+
 ## Setup walkthrough
 
 ### 1. Grant the extra scope in Azure AD
