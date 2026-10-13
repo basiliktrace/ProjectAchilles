@@ -320,6 +320,7 @@ aligned date histograms — the CrowdStrike analog of Defender's Secure Score
 correlation.
 
 **Stages killed by the EDR**
+See [Exit Codes & Outcomes](../analytics/exit-codes-and-outcomes) for the canonical mapping of exit codes, flags, labels, and outcomes.
 
 A stage the EDR kills at launch or mid-run produces an error-category exit
 code (`999`, `259`, or an unsigned NTSTATUS-style kill code coerced to `999`

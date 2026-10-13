@@ -18,10 +18,15 @@ The Defense Score is an aggregate percentage representing how many of your execu
 Defense Score = (Protected Executions / Total Executions) × 100
 ```
 
-Each test execution is classified by its exit code:
-- **Exit code 1** → "Protected" (defense detected/blocked the test)
-- **Exit code 0** → "Unprotected" (test completed without detection)
-- **Other exit codes** → "Error" (test failed to execute properly)
+Each test execution is classified by its exit code: conclusive outcomes are
+`101` (attack succeeded — unprotected) and `105`/`126`/`127` (blocked or
+quarantined — protected); error/inconclusive codes are excluded from the
+score. EDR correlation flags (`defender_detected`, `crowdstrike_detected`)
+count as protected in the combined score.
+
+See **[Exit Codes & Outcomes](./exit-codes-and-outcomes)** for the canonical
+reference covering every exit code, correlation flag, stage label, and SB
+report outcome.
 
 ## Breakdowns
 

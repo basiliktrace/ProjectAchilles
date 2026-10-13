@@ -2,6 +2,7 @@
 
 **Status:** proposed · **Applies to:** Defender + CrowdStrike integrations, Defense Score, Analytics UI
 **Related:** `docs/defender-asr-exclusion-rationale.md`, `docs/defender-detection-rate.md`, `docs/crowdstrike-detection-rate.md`, PR #484 (exit-code overflow fix)
+**Canonical reference:** `wiki/docs/user-guide/analytics/exit-codes-and-outcomes.md`
 
 ## Problem
 

@@ -2,6 +2,7 @@
 
 **Status:** approved · **Applies to:** CrowdStrike integration (prevention) + both EDR integrations (fallback fix)
 **Related:** `docs/edr-killed-stage-detection.md`, PR #485
+**Canonical reference:** `wiki/docs/user-guide/analytics/exit-codes-and-outcomes.md`
 
 ## Part 1 — Host-scope the technique-only fallback in `alerts-for-test`
 
