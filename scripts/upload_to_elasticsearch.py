@@ -216,6 +216,8 @@ def get_results_index_mapping():
                         "crowdstrike_stage_detected": {"type": "boolean"},
                         "crowdstrike_prevented": {"type": "boolean"},
                         "crowdstrike_prevention_action": {"type": "keyword"},
+                        "defender_prevented": {"type": "boolean"},
+                        "defender_prevention_action": {"type": "keyword"},
                         "tenant_label": kw
                     }
                 },
@@ -286,7 +288,12 @@ def get_defender_index_mapping():
                 "resolved_at": {"type": "date"},
                 "recommended_actions": {"type": "text"},
                 "evidence_hostnames": {"type": "keyword"},
-                "evidence_filenames": {"type": "keyword"}
+                "evidence_filenames": {"type": "keyword"},
+
+                # Prevention disposition (evidence remediationStatus) + console link
+                "prevention_action": {"type": "keyword"},
+                "remediation_status": {"type": "keyword"},
+                "portal_url": {"type": "keyword"}
             }
         }
     }

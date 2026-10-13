@@ -20,6 +20,12 @@ const DEFAULT_MAX_DURATION_MS = 60_000;
 // See docs/edr-killed-stage-detection.md.
 const ENRICHMENT_ELIGIBLE_ERROR_CODES = [0, 1, 101, 105, 126, 127, 259, 999];
 
+// Exit codes proving a stage reached a conclusive outcome on its own
+// (101 executed unprotected; 105/126/127 policy-prevented). A wide/bundle-level
+// alert match must not claim vendor prevention for those stages — only
+// stage-binary matches may. See docs/defender-prevention-action-detection.md.
+const CONCLUSIVE_OUTCOME_CODES = new Set([101, 105, 126, 127]);
+
 /**
  * Cap on the number of alert hits we pull back per sub-query. A single test
  * doc rarely matches more than a handful of Defender alerts; this bound both
@@ -27,6 +33,13 @@ const ENRICHMENT_ELIGIBLE_ERROR_CODES = [0, 1, 101, 105, 126, 127, 259, 999];
  * stages all hit the same orchestrator alert.
  */
 const ALERT_HITS_PER_SUBQUERY = 5;
+
+/**
+ * Prevention actions that count as vendor-confirmed PREVENTION (vs.
+ * detection-only). Derived from evidence[].remediationStatus at sync time —
+ * see docs/defender-prevention-action-detection.md.
+ */
+const PREVENTION_ACTIONS = new Set(['quarantined', 'process_killed', 'blocked']);
 
 export class DefenderEnrichmentService {
   constructor(
@@ -116,11 +129,13 @@ export class DefenderEnrichmentService {
 
       // 3. Execute msearch. size=ALERT_HITS_PER_SUBQUERY so we get back the
       //    matched alert _ids (needed for the alert-side correlation update).
+      //    _source carries only prevention_action — just enough to flip the
+      //    test doc's defender_prevented flags without pulling full docs.
       if (queries.length > 0) {
         const searches: unknown[] = [];
         for (const q of queries) {
           searches.push({ index: DEFENDER_INDEX });
-          searches.push({ size: ALERT_HITS_PER_SUBQUERY, _source: false, query: q.body });
+          searches.push({ size: ALERT_HITS_PER_SUBQUERY, _source: ['prevention_action'], query: q.body });
         }
 
         let msearchResponse;
@@ -145,6 +160,8 @@ export class DefenderEnrichmentService {
           wideMatched: boolean;
           stageMatched: boolean;
           alertIds: Set<string>;
+          /** Qualifying prevention actions from matched alerts (first one wins on the test doc). */
+          preventionActions: string[];
         }
         const updatesByHitId = new Map<string, PerHitUpdate>();
         const responses = (msearchResponse as any).responses ?? [];
@@ -165,16 +182,31 @@ export class DefenderEnrichmentService {
           const alertIds = alertHits
             .map((h) => h._id)
             .filter((id): id is string => typeof id === 'string');
+          // Prevention-flag qualification rule (docs/defender-prevention-action-detection.md):
+          //   - stage matches always qualify — the alert names this stage's own binary;
+          //   - wide/bundle matches qualify only when this stage did NOT reach a
+          //     conclusive outcome (101 executed; 105/126/127 policy-prevented) —
+          //     a sibling stage that ran to completion was not prevented by the
+          //     alert that killed a later stage.
+          const preventionActions = alertHits
+            .map((h) => h._source?.prevention_action)
+            .filter((a): a is string => typeof a === 'string' && PREVENTION_ACTIONS.has(a));
+
+          const docErrorCode = q.hit._source?.event?.ERROR as number | undefined;
+          const preventionQualifies = q.kind === 'stage'
+            || docErrorCode === undefined
+            || !CONCLUSIVE_OUTCOME_CODES.has(docErrorCode);
 
           const hitId = q.hit._id as string;
           let entry = updatesByHitId.get(hitId);
           if (!entry) {
-            entry = { hit: q.hit, bundleUuid: q.bundleUuid, wideMatched: false, stageMatched: false, alertIds: new Set() };
+            entry = { hit: q.hit, bundleUuid: q.bundleUuid, wideMatched: false, stageMatched: false, alertIds: new Set(), preventionActions: [] };
             updatesByHitId.set(hitId, entry);
           }
           if (q.kind === 'wide')  entry.wideMatched = true;
           if (q.kind === 'stage') entry.stageMatched = true;
           for (const id of alertIds) entry.alertIds.add(id);
+          if (preventionQualifies) entry.preventionActions.push(...preventionActions);
         }
 
         // 5. Bulk update matched docs.
@@ -200,6 +232,14 @@ export class DefenderEnrichmentService {
             const f0rtika: Record<string, unknown> = {};
             if (u.wideMatched)  f0rtika.defender_detected       = true;
             if (u.stageMatched) f0rtika.defender_stage_detected = true;
+            // Vendor-confirmed prevention — rides alongside the detected flags.
+            // preventionActions is already qualification-filtered above
+            // (stage matches always; wide matches only for non-conclusive docs).
+            // Prevention ⊆ detection: a prevention flag implies a matched alert.
+            if (u.preventionActions.length > 0) {
+              f0rtika.defender_prevented = true;
+              f0rtika.defender_prevention_action = u.preventionActions[0];
+            }
             operations.push({ update: { _index: u.hit._index, _id: u.hit._id } });
             operations.push({ doc: { f0rtika } });
             testOpMeta.push({ kind: 'test', wide: u.wideMatched, stage: u.stageMatched });

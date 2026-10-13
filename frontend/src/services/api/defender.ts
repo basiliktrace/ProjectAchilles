@@ -70,6 +70,17 @@ export interface DefenderAlertItem {
    * Frontend matches case-insensitively against `f0rtika.control_id`.
    */
   attributed_control_id?: string;
+  /**
+   * Vendor-confirmed prevention disposition (from evidence[].remediationStatus,
+   * normalized to the shared vocabulary: 'prevented' → 'blocked',
+   * 'blocked' → 'process_killed', 'remediated' → 'quarantined'). Absent on
+   * detection-only alerts. Defender has no 'kill_failed' equivalent.
+   */
+  prevention_action?: 'quarantined' | 'process_killed' | 'blocked';
+  /** Raw Defender evidence remediationStatus — display/audit. */
+  remediation_status?: string;
+  /** Exact per-alert Defender portal deep link (from alertWebUrl). */
+  portal_url?: string;
   auto_resolved?: boolean;
   auto_resolved_at?: string | null;
   auto_resolve_mode?: 'disabled' | 'dry_run' | 'enabled' | null;

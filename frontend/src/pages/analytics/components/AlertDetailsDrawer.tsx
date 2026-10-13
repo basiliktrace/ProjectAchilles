@@ -5,8 +5,8 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { defenderApi, type DefenderAlertItem } from '@/services/api/defender';
 import { getSeverityTokens } from '../utils/defenderSeverityTokens';
 import { formatServiceSource } from '../utils/defenderServiceSource';
-
-const DEFENDER_PORTAL_BASE = 'https://security.microsoft.com/alerts';
+import { defenderAlertUrl } from '../utils/defenderPortal';
+import PreventionBadge from './PreventionBadge';
 
 interface AlertDetailsDrawerProps {
   open: boolean;
@@ -219,7 +219,7 @@ export default function AlertDetailsDrawer({
                             {alert.alert_title}
                           </div>
                           <a
-                            href={`${DEFENDER_PORTAL_BASE}/${alert.alert_id}`}
+                            href={defenderAlertUrl(alert.portal_url, alert.alert_id)}
                             target="_blank"
                             rel="noopener noreferrer"
                             className="shrink-0 p-1 -m-1 rounded hover:bg-raised text-muted-foreground hover:text-foreground transition-colors"
@@ -243,6 +243,10 @@ export default function AlertDetailsDrawer({
                               <span>{formatServiceSource(alert.service_source)}</span>
                             </>
                           )}
+                          <PreventionBadge
+                            action={alert.prevention_action}
+                            rawStatus={alert.remediation_status}
+                          />
                         </div>
                         {alert.auto_resolved && (
                           <div className="mt-1 inline-flex items-center gap-1 text-[11px] text-emerald-600 dark:text-emerald-400">

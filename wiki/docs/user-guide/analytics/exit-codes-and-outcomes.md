@@ -40,7 +40,21 @@ them against synced EDR alerts:
 |---|---|---|
 | `defender_detected` / `crowdstrike_detected` | Alert evidence matches hostname + bundle UUID in filename/path, within −5/+30 min of the test | — |
 | `*_stage_detected` | Alert evidence names the **stage's own binary** (`<bundle-uuid>-<control>.exe`) | — |
-| `crowdstrike_prevented` (+ `crowdstrike_prevention_action`) | Matched alert carries a Falcon prevention disposition (`process_killed`, `quarantined`, `blocked`) | **Stage-binary matches always qualify. Bundle-wide matches only if the stage never reached a conclusive outcome** (exit ∉ `{101, 105, 126, 127}`). A failed kill (`kill_action_failed`) never qualifies |
+| `crowdstrike_prevented` / `defender_prevented` (+ `*_prevention_action`) | Matched alert carries a vendor-confirmed prevention disposition | **Stage-binary matches always qualify. Bundle-wide matches only if the stage never reached a conclusive outcome** (exit ∉ `{101, 105, 126, 127}`). A failed kill (CS `kill_action_failed`) never qualifies |
+
+**Vendor prevention dispositions**, normalized to a shared vocabulary
+(`process_killed` / `quarantined` / `blocked`):
+
+| Normalized action | CrowdStrike (`pattern_disposition_details`) | Defender (`evidence[].remediationStatus`) |
+|---|---|---|
+| `process_killed` | `kill_process` ("Prevention, process killed.") | `blocked` (blocked while executing) |
+| `blocked` | `process_blocked` / `*_blocked` | `prevented` (never ran) |
+| `quarantined` | `quarantine_file` | `remediated` (completed) |
+| *(absent — detection only)* | no disposition / `kill_action_failed` | `active`, `none`, `pendingApproval`, … |
+
+Alert docs also carry `portal_url` — the exact per-alert console deep link
+(Falcon's `falcon_host_link`, Defender's `alertWebUrl`) — used by the alert
+drawers and execution detail panels.
 
 **Which documents are scanned:** exit codes `[0, 1, 101, 105, 126, 127, 259, 999]`
 — so EDR-killed stages (999) are eligible. Deliberately **not scanned**:
@@ -59,7 +73,7 @@ precedence (top wins):
 | Label | Condition | Meaning |
 |---|---|---|
 | **Protected** | exit ∈ `{105, 126, 127}` | Endpoint blocked/quarantined at the OS level |
-| **Prevented** | `crowdstrike_prevented` (or detected flags + confirmed prevention action) | Vendor-confirmed kill/quarantine/block — shows the action, e.g. "Prevented (process killed)" |
+| **Prevented** | `crowdstrike_prevented` or `defender_prevented` (or detected flags + confirmed prevention action) | Vendor-confirmed kill/quarantine/block — shows the action, e.g. "Prevented (process killed)" |
 | **Detected** | `*_stage_detected` or `*_detected` | The EDR saw it and alerted, but didn't stop it |
 | **Unprotected** | exit 101 | Attack ran to completion, nothing reacted |
 | **Inconclusive** | everything else (0, 1, 259, 260, 999, missing) | Can't judge — error, timeout, policy block, or unconfirmed kill |
@@ -74,7 +88,7 @@ Protected > Prevented > Detected > Unprotected.
 - **Strict score**: `protected (105/126/127) / conclusive (101 + 105 + 126 + 127)`
 - **Combined score** ("detected counts as protected"): adds
   `defender_detected OR crowdstrike_detected` to the protected side.
-  `crowdstrike_prevented` ⊆ `crowdstrike_detected`, so prevented stages are
+  `*_prevented` ⊆ `*_detected` for both vendors, so prevented stages are
   covered automatically.
 - Error codes (`0`, `1`, `259`, `999`) feed the **Error Rate**, not the score.
 - `200` and `260` are excluded from both.
@@ -86,7 +100,7 @@ Outcomes: `PREVENTED / DETECTED / MISSED / EXPOSED / NOT_RUN / ERROR`.
 | Exit | EDR flags | Outcome | Attribution |
 |---|---|---|---|
 | 105 / 126 / 127 | any | **PREVENTED** | `preventedBy`: vendor(s) |
-| 999 / 259 / 0 / none | `crowdstrike_prevented` | **PREVENTED** | `preventedBy`: CrowdStrike Falcon |
+| 999 / 259 / 0 / none | `crowdstrike_prevented` or `defender_prevented` | **PREVENTED** | `preventedBy`: the preventing vendor(s), both when both flagged |
 | 101 / 0 | detected flag(s) | **DETECTED** | `detectedBy`: vendor(s), both when both flagged |
 | 101 / 0 | none, tactic ∈ `{exfiltration, impact}` | **EXPOSED** | — |
 | 101 / 0 | none, other tactics | **MISSED** | — |
@@ -98,6 +112,7 @@ Outcomes: `PREVENTED / DETECTED / MISSED / EXPOSED / NOT_RUN / ERROR`.
 | Scenario | Exit | Evidence | Label / SB outcome |
 |---|---|---|---|
 | Falcon kills the ransomware stage at launch | `0xE0000027` → 999 | Stage-binary alert match, `process_killed` disposition | **Prevented (process killed)** / PREVENTED |
+| Defender blocks a stage binary mid-execution | 999 | Stage-binary alert match, `remediationStatus: blocked` | **Prevented (process killed)** / PREVENTED |
 | Sibling stage already ran to completion before the kill | 101 | Bundle-wide alert match only | **Detected** / DETECTED — a succeeded stage is never upgraded to Prevented |
 | Stage runs, nothing reacts | 101, no alert | none | **Unprotected** / MISSED (or EXPOSED for exfiltration/impact tactics) |
 | Stage dies, no alert anywhere | 999, no alert | none | **Inconclusive** / ERROR — a kill is never assumed |

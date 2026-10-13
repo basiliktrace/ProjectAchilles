@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   formatPreventionAction,
   isConfirmedPrevention,
-} from '../crowdstrikePrevention';
+} from '../prevention';
 
 describe('formatPreventionAction', () => {
   it('maps known CrowdStrike prevention actions to readable labels', () => {

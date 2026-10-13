@@ -1617,6 +1617,7 @@ export class ElasticsearchService {
     for (const group of groups) {
       group.defenderDetected = group.members.some((m) => m.defender_detected === true);
       group.crowdstrikeDetected = group.members.some((m) => m.crowdstrike_detected === true);
+      group.defenderPrevented = group.members.some((m) => m.defender_prevented === true);
       group.crowdstrikePrevented = group.members.some((m) => m.crowdstrike_prevented === true);
     }
 
@@ -1665,6 +1666,8 @@ export class ElasticsearchService {
       is_bundle_control: getField(source, 'f0rtika.is_bundle_control') ?? false,
       defender_detected: getField(source, 'f0rtika.defender_detected') ?? false,
       defender_stage_detected: getField(source, 'f0rtika.defender_stage_detected') ?? false,
+      defender_prevented: getField(source, 'f0rtika.defender_prevented') ?? false,
+      defender_prevention_action: getField(source, 'f0rtika.defender_prevention_action'),
       crowdstrike_detected: getField(source, 'f0rtika.crowdstrike_detected') ?? false,
       crowdstrike_stage_detected: getField(source, 'f0rtika.crowdstrike_stage_detected') ?? false,
       crowdstrike_prevented: getField(source, 'f0rtika.crowdstrike_prevented') ?? false,

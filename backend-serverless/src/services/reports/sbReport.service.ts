@@ -7,8 +7,9 @@
 // ingested ES docs can observe:
 //
 //   exit 126/105/127                                  -> PREVENTED
-//   crowdstrike_prevented flag (vendor-confirmed)     -> PREVENTED
-//      (Falcon reported a prevention disposition for the correlated alert)
+//   *_prevented flag (vendor-confirmed)               -> PREVENTED
+//      (defender_prevented: remediationStatus on the correlated alert;
+//       crowdstrike_prevented: pattern_disposition on the correlated alert)
 //   exit 101 (or 0) + EDR stage/detected flag         -> DETECTED
 //      (defender_* or crowdstrike_* — either vendor qualifies)
 //   exit 101 (or 0), exfiltration/impact tactics      -> EXPOSED
@@ -196,16 +197,23 @@ function isoWithTz(ts: unknown): string {
 }
 
 /** Decide the SB outcome for one bundle-control doc. */
-function mapOutcome(exitCode: number | undefined, rawTactics: string[], edrDetected: boolean, edrPrevented: boolean): SbOutcome {
+function mapOutcome(
+  exitCode: number | undefined,
+  rawTactics: string[],
+  edrDetected: boolean,
+  defenderPrevented: boolean,
+  crowdstrikePrevented: boolean,
+): SbOutcome {
   if (exitCode !== undefined && PREVENTED_EXIT_CODES.has(exitCode)) return 'PREVENTED';
-  // Vendor-confirmed prevention (prevention disposition on the correlated
-  // alert) → PREVENTED, including error/inconclusive exits (999/259/0) — a
-  // stage killed at launch never reaches a conclusive code. The one exception
-  // is 101 (conclusively executed unprotected): a succeeded attack cannot have
-  // been prevented. Enrichment writes the flag under the same rule (stage
-  // matches always qualify; wide matches only for non-conclusive docs), so a
-  // 101 + flag combo shouldn't occur — the guard is belt-and-braces.
-  if (edrPrevented && exitCode !== 101) return 'PREVENTED';
+  // Vendor-confirmed prevention (prevention disposition/remediationStatus on
+  // the correlated alert) → PREVENTED, including error/inconclusive exits
+  // (999/259/0) — a stage killed at launch never reaches a conclusive code.
+  // The one exception is 101 (conclusively executed unprotected): a succeeded
+  // attack cannot have been prevented. Enrichment writes the flag under the
+  // same rule (stage matches always qualify; wide matches only for
+  // non-conclusive docs), so a 101 + flag combo shouldn't occur — the guard
+  // is belt-and-braces.
+  if ((defenderPrevented || crowdstrikePrevented) && exitCode !== 101) return 'PREVENTED';
   if (exitCode !== undefined && EXECUTED_EXIT_CODES.has(exitCode)) {
     if (edrDetected) return 'DETECTED';
     if (rawTactics.some((t) => EXPOSED_TACTICS.has(t))) return 'EXPOSED';
@@ -340,19 +348,21 @@ export class SbReportService {
       const crowdstrikeDetected = Boolean(
         getField(source, 'f0rtika.crowdstrike_stage_detected') ?? getField(source, 'f0rtika.crowdstrike_detected'),
       );
-      // Vendor-confirmed prevention (CrowdStrike only in v1) — deterministic
-      // evidence from the alert's pattern_disposition, not inference.
+      // Vendor-confirmed prevention — deterministic evidence from the
+      // correlated alert (Defender remediationStatus / Falcon
+      // pattern_disposition), not inference.
+      const defenderPrevented = Boolean(getField(source, 'f0rtika.defender_prevented'));
       const crowdstrikePrevented = Boolean(getField(source, 'f0rtika.crowdstrike_prevented'));
       // Vendor attribution — when both vendors detected the stage, list both.
       const detectingVendors = [
         ...(defenderDetected ? [MICROSOFT_DEFENDER] : []),
         ...(crowdstrikeDetected ? [CROWDSTRIKE_FALCON] : []),
       ];
-      // preventedBy lists actual preventers: Defender attribution follows the
-      // exit-code path (existing behavior), CrowdStrike follows its
-      // vendor-confirmed prevention flag.
+      // preventedBy lists each vendor whose prevented flag is set. Defender
+      // keeps its pre-flag exit-code attribution too (a Defender-detected
+      // stage that ended 105/126/127 was already credited to Defender).
       const preventingVendors = [
-        ...(defenderDetected ? [MICROSOFT_DEFENDER] : []),
+        ...(defenderDetected || defenderPrevented ? [MICROSOFT_DEFENDER] : []),
         ...(crowdstrikePrevented ? [CROWDSTRIKE_FALCON] : []),
       ];
       const edrDetected = detectingVendors.length > 0;
@@ -360,7 +370,7 @@ export class SbReportService {
       const stage = parseStageFromValidator(getField(source, 'f0rtika.control_validator'))
         ?? fallbackStage.get(hit)
         ?? 0;
-      const outcome = mapOutcome(exitCode, rawTactics, edrDetected, crowdstrikePrevented);
+      const outcome = mapOutcome(exitCode, rawTactics, edrDetected, defenderPrevented, crowdstrikePrevented);
       const sourceEventId = String(hit._id ?? '');
 
       const inconclusive = exitCode !== undefined && INCONCLUSIVE_EXIT_CODES.has(exitCode);

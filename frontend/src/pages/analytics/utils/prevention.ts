@@ -1,16 +1,24 @@
 /**
- * Map CrowdStrike alert `prevention_action` tokens to human-readable labels.
+ * Map vendor-normalized alert `prevention_action` tokens to human-readable
+ * labels. Shared by CrowdStrike and Defender — both backends normalize their
+ * native dispositions into the same vocabulary:
  *
- * The backend derives the enum from pattern_disposition_details:
- *   kill_action_failed                          → 'kill_failed'
- *   quarantine_file                             → 'quarantined'
- *   kill_process / kill_parent / kill_subprocess → 'process_killed'
- *   process_blocked / operation_blocked / ...   → 'blocked'
- *   (detection-only)                            → absent
+ *   CrowdStrike (pattern_disposition_details):
+ *     kill_action_failed                           → 'kill_failed'
+ *     quarantine_file                              → 'quarantined'
+ *     kill_process / kill_parent / kill_subprocess → 'process_killed'
+ *     process_blocked / operation_blocked / ...    → 'blocked'
+ *     (detection-only)                             → absent
  *
- * 'kill_failed' is deliberately NOT a prevention outcome — Falcon attempted
- * the kill and failed, so the action counts as detection-only. The other
- * three are vendor-confirmed prevention.
+ *   Defender (evidence[].remediationStatus):
+ *     'remediated' → 'quarantined'
+ *     'blocked'    → 'process_killed'
+ *     'prevented'  → 'blocked'
+ *     (no completed prevention) → absent — Defender has no 'kill_failed'
+ *
+ * 'kill_failed' is deliberately NOT a prevention outcome — the vendor
+ * attempted the kill and failed, so the action counts as detection-only.
+ * The other three are vendor-confirmed prevention.
  */
 
 export type PreventionAction = 'quarantined' | 'process_killed' | 'blocked' | 'kill_failed';

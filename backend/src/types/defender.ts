@@ -37,7 +37,16 @@ export interface GraphControlProfile {
 
 export interface GraphAlertEvidence {
   '@odata.type': string;
+  /**
+   * evidenceRemediationStatus — present on the base alertEvidence type, so
+   * process/file evidence inherit it. Prevention-ish values: 'blocked'
+   * (blocked while executing), 'prevented' (prevented from executing),
+   * 'remediated' (remediation completed). Everything else is detection-only.
+   * See docs/defender-prevention-action-detection.md.
+   */
   remediationStatus: string;
+  /** Additional free-text detail about the remediation action. */
+  remediationStatusDetails?: string;
   verdict: string;
   // deviceEvidence fields
   deviceDnsName?: string;
@@ -63,6 +72,8 @@ export interface GraphAlert {
   mitreTechniques: string[];
   recommendedActions: string;
   evidence: GraphAlertEvidence[];
+  /** Per-alert Defender portal deep link. */
+  alertWebUrl?: string;
 }
 
 /**
@@ -172,6 +183,16 @@ export interface DefenderAlertDoc {
    * bundle-UUID binary in evidence_filenames.
    */
   evidence_filepaths: string[];
+  /**
+   * Derived prevention action from evidence[].remediationStatus:
+   * 'process_killed' | 'blocked' | 'quarantined'. Absent on detection-only
+   * alerts. See docs/defender-prevention-action-detection.md.
+   */
+  prevention_action?: string;
+  /** Raw Defender remediationStatus value behind prevention_action, for audit/display. */
+  remediation_status?: string;
+  /** Per-alert Defender portal deep link (from alertWebUrl). */
+  portal_url?: string;
   /** Achilles correlation + auto-resolve state. Populated by the enrichment
    *  pass (correlation fields) and by the auto-resolve pass (resolve fields).
    *  All fields optional — legacy docs predate these pillars. */

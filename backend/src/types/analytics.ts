@@ -164,6 +164,10 @@ export interface EnrichedTestExecution extends TestExecution {
    * Strictly per-stage; does not propagate across a bundle's stages.
    */
   defender_stage_detected?: boolean;
+  /** Set true when a matched Defender alert carried a prevention-ish remediationStatus (vendor-confirmed prevention; subset of defender_detected). */
+  defender_prevented?: boolean;
+  /** The matched alert's derived prevention action (process_killed / blocked / quarantined). */
+  defender_prevention_action?: string;
   /** Set true by the CrowdStrike enrichment pass when a Falcon alert matches this doc's bundle UUID, hostname, and time window. */
   crowdstrike_detected?: boolean;
   /** CrowdStrike per-stage equivalent of defender_stage_detected. */
@@ -231,6 +235,8 @@ export interface ExecutionGroup {
   totalCount: number;
   /** True when a correlated Defender alert exists for this group's binary + hostname. */
   defenderDetected?: boolean;
+  /** True when a matched Defender alert carried a prevention-ish remediationStatus for any member of this group. */
+  defenderPrevented?: boolean;
   /** True when a correlated CrowdStrike alert exists for this group's binary + hostname. */
   crowdstrikeDetected?: boolean;
   /** True when a matched CrowdStrike alert carried a prevention disposition for any member of this group. */

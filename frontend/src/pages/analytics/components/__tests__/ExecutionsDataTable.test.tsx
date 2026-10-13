@@ -93,7 +93,7 @@ function makeAlert(overrides: Partial<DefenderAlertItem> = {}): DefenderAlertIte
   };
 }
 
-function makeData(controls: EnrichedTestExecution[], opts: { defenderDetected: boolean; crowdstrikeDetected?: boolean; crowdstrikePrevented?: boolean }): GroupedPaginatedResponse {
+function makeData(controls: EnrichedTestExecution[], opts: { defenderDetected: boolean; defenderPrevented?: boolean; crowdstrikeDetected?: boolean; crowdstrikePrevented?: boolean }): GroupedPaginatedResponse {
   const protectedCount = controls.filter((c) => c.error_code !== 101).length;
   const unprotectedCount = controls.length - protectedCount;
   return {
@@ -107,6 +107,7 @@ function makeData(controls: EnrichedTestExecution[], opts: { defenderDetected: b
         unprotectedCount,
         totalCount: controls.length,
         defenderDetected: opts.defenderDetected,
+        defenderPrevented: opts.defenderPrevented,
         crowdstrikeDetected: opts.crowdstrikeDetected,
         crowdstrikePrevented: opts.crowdstrikePrevented,
       },
@@ -813,6 +814,123 @@ describe('ExecutionsDataTable — CrowdStrike prevention (vendor-confirmed)', ()
     expect(link).toHaveAttribute(
       'href',
       'https://falcon.us-2.crowdstrike.com/activity-v2/detections/xyz789?_cid=abc',
+    );
+  });
+});
+
+describe('ExecutionsDataTable — Defender prevention (vendor-confirmed)', () => {
+  it('renders "Prevented" when defender_prevented is set on the stage (no CrowdStrike involved)', async () => {
+    csGetAlertsForTestMock.mockResolvedValue({ alerts: [], matchedTechniques: [], total: 0 });
+    getAlertsForTestMock.mockResolvedValue({ alerts: [], matchedTechniques: [], total: 0 });
+
+    const preventedStage = makeStage({
+      test_uuid: `${BUNDLE_UUID}::T1562.001`,
+      test_name: 'WinDefend Service-Stop Notification Subscription',
+      control_id: 'T1562.001',
+      techniques: ['T1562.001'],
+      defender_detected: true,
+      defender_stage_detected: true,
+      defender_prevented: true,
+      defender_prevention_action: 'process_killed',
+    });
+    const plainStage = makeStage({});
+
+    renderTable(
+      makeData([plainStage, preventedStage], { defenderDetected: true, defenderPrevented: true }),
+    );
+
+    await waitFor(() => {
+      expect(screen.getAllByText('Prevented').length).toBeGreaterThanOrEqual(2);
+    });
+    expect(screen.queryByText('Detected')).toBeNull();
+    expect(screen.getAllByText('Unprotected')).toHaveLength(1);
+  });
+
+  it('renders a single Prevented label when BOTH vendors confirmed prevention', async () => {
+    getAlertsForTestMock.mockResolvedValue({ alerts: [], matchedTechniques: [], total: 0 });
+    const stage = makeStage({
+      defender_detected: true,
+      defender_prevented: true,
+      defender_prevention_action: 'blocked',
+      crowdstrike_detected: true,
+      crowdstrike_prevented: true,
+      crowdstrike_prevention_action: 'quarantined',
+    });
+    renderTable(
+      makeData([stage], {
+        defenderDetected: true,
+        defenderPrevented: true,
+        crowdstrikeDetected: true,
+        crowdstrikePrevented: true,
+      }),
+    );
+
+    // Exactly one Prevented verdict per badge slot — two vendors must not
+    // produce stacked/duplicated labels.
+    const prevented = screen.getAllByText(/^Prevented/);
+    expect(prevented.length).toBeGreaterThanOrEqual(2);
+    for (const el of prevented) {
+      expect(el.textContent).toMatch(/^Prevented/);
+    }
+    expect(screen.queryByText('Detected')).toBeNull();
+  });
+
+  it('still renders "Detected" (not Prevented) for Defender-detected stages without prevention evidence', async () => {
+    getAlertsForTestMock.mockResolvedValue({ alerts: [], matchedTechniques: [], total: 0 });
+    const stage = makeStage({
+      defender_detected: true,
+      defender_stage_detected: true,
+    });
+    renderTable(makeData([stage], { defenderDetected: true }));
+
+    await waitFor(() => {
+      expect(screen.getAllByText('Detected').length).toBeGreaterThanOrEqual(2);
+    });
+    expect(screen.queryByText(/Prevented/)).toBeNull();
+  });
+
+  it('shows the prevention badge and portal_url deep link on stage-detail Defender alert rows', async () => {
+    getAlertsForTestMock.mockResolvedValue({
+      alerts: [
+        makeAlert({
+          alert_id: 'da-prev-1',
+          alert_title: 'Defender blocked the stage binary',
+          attribution: 'stage',
+          attributed_control_id: 't1083',
+          prevention_action: 'process_killed',
+          remediation_status: 'blocked',
+          portal_url: 'https://security.microsoft.com/alerts/da-prev-1?tid=contoso',
+        }),
+      ],
+      matchedTechniques: ['T1083'],
+      total: 1,
+    });
+
+    const stage = makeStage({
+      test_uuid: `${BUNDLE_UUID}::T1083`,
+      control_id: 'T1083',
+      techniques: ['T1083'],
+      defender_detected: true,
+      defender_prevented: true,
+      defender_prevention_action: 'process_killed',
+    });
+    renderTable(
+      makeData([stage], { defenderDetected: true, defenderPrevented: true }),
+    );
+
+    await userEvent.click(screen.getAllByText(stage.bundle_name!)[0]);
+    await waitFor(() => expect(getAlertsForTestMock).toHaveBeenCalled());
+    await userEvent.click(screen.getByText(stage.test_name));
+
+    await waitFor(() => {
+      expect(screen.getByText(/Defender blocked the stage binary/)).toBeInTheDocument();
+    });
+    const badge = screen.getByText('process killed');
+    expect(badge).toHaveAttribute('title', 'blocked');
+    const link = screen.getByLabelText('Open in Microsoft Defender');
+    expect(link).toHaveAttribute(
+      'href',
+      'https://security.microsoft.com/alerts/da-prev-1?tid=contoso',
     );
   });
 });
