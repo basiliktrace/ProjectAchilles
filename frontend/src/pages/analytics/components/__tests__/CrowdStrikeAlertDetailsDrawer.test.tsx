@@ -32,6 +32,9 @@ interface PartialAlert {
   product: string;
   created_at: string;
   mitre_techniques: string[];
+  prevention_action?: 'quarantined' | 'process_killed' | 'blocked' | 'kill_failed';
+  pattern_disposition_description?: string;
+  portal_url?: string;
 }
 
 function makeAlert(overrides: Partial<PartialAlert> = {}): PartialAlert {
@@ -253,5 +256,109 @@ describe('CrowdStrikeAlertDetailsDrawer', () => {
 
     await userEvent.keyboard('{Escape}');
     expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('uses the per-alert portal_url deep link when the alert carries one', async () => {
+    mockGetAlerts.mockResolvedValue({
+      data: [
+        makeAlert({
+          alert_id: 'cs-deep',
+          alert_title: 'Killed stage',
+          portal_url: 'https://falcon.us-2.crowdstrike.com/activity-v2/detections/abc123?_cid=deadbeef',
+        }),
+      ],
+      total: 1,
+      page: 1,
+      pageSize: 100,
+    });
+
+    render(<CrowdStrikeAlertDetailsDrawer open onClose={() => {}} />);
+
+    await waitFor(() => expect(screen.getByText('Killed stage')).toBeInTheDocument());
+    expect(screen.getByLabelText('Open in Falcon console')).toHaveAttribute(
+      'href',
+      'https://falcon.us-2.crowdstrike.com/activity-v2/detections/abc123?_cid=deadbeef',
+    );
+  });
+
+  it('falls back to the region-base /alerts link when portal_url is absent', async () => {
+    mockGetSettings.mockResolvedValue({ configured: true, region: 'us-gov-1' });
+    mockGetAlerts.mockResolvedValue({
+      data: [makeAlert({ alert_id: 'cs-gov', alert_title: 'Gov alert' })],
+      total: 1,
+      page: 1,
+      pageSize: 100,
+    });
+
+    render(<CrowdStrikeAlertDetailsDrawer open onClose={() => {}} />);
+
+    await waitFor(() => expect(screen.getByText('Gov alert')).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByLabelText('Open in Falcon console')).toHaveAttribute(
+        'href',
+        'https://falcon.laggar.gcw.crowdstrike.com/alerts',
+      )
+    );
+  });
+
+  it('renders the prevention badge with the raw disposition as tooltip', async () => {
+    mockGetAlerts.mockResolvedValue({
+      data: [
+        makeAlert({
+          alert_id: 'cs-prev',
+          alert_title: 'Prevented stage',
+          prevention_action: 'process_killed',
+          pattern_disposition_description: 'Prevention, process killed.',
+        }),
+      ],
+      total: 1,
+      page: 1,
+      pageSize: 100,
+    });
+
+    render(<CrowdStrikeAlertDetailsDrawer open onClose={() => {}} />);
+
+    await waitFor(() => expect(screen.getByText('process killed')).toBeInTheDocument());
+    expect(screen.getByText('process killed')).toHaveAttribute(
+      'title',
+      'Prevention, process killed.',
+    );
+  });
+
+  it('styles kill_failed as a warning badge — attempted prevention, not prevention', async () => {
+    mockGetAlerts.mockResolvedValue({
+      data: [
+        makeAlert({
+          alert_id: 'cs-killfail',
+          alert_title: 'Kill failed alert',
+          prevention_action: 'kill_failed',
+          pattern_disposition_description: 'Prevention, kill process failed.',
+        }),
+      ],
+      total: 1,
+      page: 1,
+      pageSize: 100,
+    });
+
+    render(<CrowdStrikeAlertDetailsDrawer open onClose={() => {}} />);
+
+    await waitFor(() => expect(screen.getByText('kill failed')).toBeInTheDocument());
+    const badge = screen.getByText('kill failed');
+    expect(badge.className).toContain('text-warning');
+    expect(badge.className).not.toContain('text-accent');
+  });
+
+  it('renders no prevention badge for detection-only alerts', async () => {
+    mockGetAlerts.mockResolvedValue({
+      data: [makeAlert({ alert_id: 'cs-plain', alert_title: 'Detection only' })],
+      total: 1,
+      page: 1,
+      pageSize: 100,
+    });
+
+    render(<CrowdStrikeAlertDetailsDrawer open onClose={() => {}} />);
+
+    await waitFor(() => expect(screen.getByText('Detection only')).toBeInTheDocument());
+    expect(screen.queryByText(/process killed|quarantined|kill failed/)).not.toBeInTheDocument();
   });
 });

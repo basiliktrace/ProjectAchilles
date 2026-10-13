@@ -502,7 +502,7 @@ describe('CrowdStrikeEnrichmentService', () => {
     expect(ops).toHaveLength(2);
   });
 
-  it('msearch sub-query returns alert hits (size > 0) with _source disabled', async () => {
+  it('msearch sub-query returns alert hits (size > 0) with _source limited to prevention_action', async () => {
     const service = createService();
     mockSearch.mockResolvedValueOnce(makeScanResponse([eligibleDoc('d1', 'a::T1')]));
     mockMsearch.mockResolvedValueOnce(makeMsearchResponse([{ hits: { total: { value: 0 } } }]));
@@ -512,7 +512,9 @@ describe('CrowdStrikeEnrichmentService', () => {
     const searches = mockMsearch.mock.calls[0][0].searches;
     // searches[0] is the header, searches[1] is the body
     expect(searches[1].size).toBeGreaterThan(0);
-    expect(searches[1]._source).toBe(false);
+    // Full _source is not pulled — only prevention_action (needed to flip
+    // crowdstrike_prevented on the test doc).
+    expect(searches[1]._source).toEqual(['prevention_action']);
   });
 
   // ──────────────────────────────────────────────────────────────────────────
@@ -631,5 +633,94 @@ describe('CrowdStrikeEnrichmentService', () => {
     expect(scanQuery).toContain('crowdstrike_detected');
     expect(scanQuery).toContain('crowdstrike_stage_detected');
     expect(scanQuery).toContain('minimum_should_match');
+  });
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // Prevention-action detection (crowdstrike_prevented)
+  // ──────────────────────────────────────────────────────────────────────────
+
+  // msearch hit carrying a prevention_action in _source.
+  const makePreventingMsearchHits = (alertIds: string[], action: string) => ({
+    hits: {
+      total: { value: alertIds.length },
+      hits: alertIds.map((id) => ({ _id: id, _index: 'achilles-crowdstrike', _source: { prevention_action: action } })),
+    },
+  });
+
+  it('wide-match alert with prevention_action process_killed → test doc gains crowdstrike_prevented + action', async () => {
+    const service = createService();
+    mockSearch.mockResolvedValueOnce(makeScanResponse([eligibleDoc('d1', 'bundle-A::T1')]));
+    mockMsearch.mockResolvedValueOnce(
+      makeMsearchResponse([makePreventingMsearchHits(['alert-1'], 'process_killed')]),
+    );
+    // 1 test-doc update + 1 alert-side update
+    mockBulk.mockResolvedValueOnce(makeBulkResponse([{ ok: true }, { ok: true }]));
+
+    const result = await service.runEnrichmentPass();
+
+    expect(result.detected).toBe(1);
+    const ops = mockBulk.mock.calls[0][0].operations;
+    const testPatch = ops[1].doc.f0rtika;
+    expect(testPatch.crowdstrike_detected).toBe(true);
+    expect(testPatch.crowdstrike_prevented).toBe(true);
+    expect(testPatch.crowdstrike_prevention_action).toBe('process_killed');
+  });
+
+  it('stage-match alert with prevention_action blocked → test doc gains prevented flags alongside stage flag', async () => {
+    const service = createService();
+    mockSearch.mockResolvedValueOnce(makeScanResponse([
+      eligibleStageDoc('d1', 'bf448c7a-307e-4458-ba36-341d6d8e671b', 'T1053.005'),
+    ]));
+    mockMsearch.mockResolvedValueOnce(makeMsearchResponse([
+      { hits: { total: { value: 0 } } },                                        // wide: no match
+      makePreventingMsearchHits(['alert-a'], 'blocked'),                        // stage: preventing alert
+    ]));
+    mockBulk.mockResolvedValueOnce(makeBulkResponse([{ ok: true }, { ok: true }]));
+
+    const result = await service.runEnrichmentPass();
+
+    expect(result.detected).toBe(0);       // wide query did not match
+    expect(result.stageDetected).toBe(1);
+    const ops = mockBulk.mock.calls[0][0].operations;
+    const testPatch = ops[1].doc.f0rtika;
+    expect(testPatch.crowdstrike_detected).toBeUndefined();
+    expect(testPatch.crowdstrike_stage_detected).toBe(true);
+    expect(testPatch.crowdstrike_prevented).toBe(true);
+    expect(testPatch.crowdstrike_prevention_action).toBe('blocked');
+  });
+
+  it('detection-only matched alert → detected flags only, NO prevented fields', async () => {
+    const service = createService();
+    mockSearch.mockResolvedValueOnce(makeScanResponse([eligibleDoc('d1', 'bundle-A::T1')]));
+    // Alert hit with no prevention_action in _source (detection-only)
+    mockMsearch.mockResolvedValueOnce(
+      makeMsearchResponse([makeMsearchHits(['alert-1'])]),
+    );
+    mockBulk.mockResolvedValueOnce(makeBulkResponse([{ ok: true }, { ok: true }]));
+
+    const result = await service.runEnrichmentPass();
+
+    expect(result.detected).toBe(1);
+    const ops = mockBulk.mock.calls[0][0].operations;
+    const testPatch = ops[1].doc.f0rtika;
+    expect(testPatch.crowdstrike_detected).toBe(true);
+    expect(testPatch.crowdstrike_prevented).toBeUndefined();
+    expect(testPatch.crowdstrike_prevention_action).toBeUndefined();
+  });
+
+  it('kill_failed does NOT count as prevention', async () => {
+    const service = createService();
+    mockSearch.mockResolvedValueOnce(makeScanResponse([eligibleDoc('d1', 'bundle-A::T1')]));
+    mockMsearch.mockResolvedValueOnce(
+      makeMsearchResponse([makePreventingMsearchHits(['alert-1'], 'kill_failed')]),
+    );
+    mockBulk.mockResolvedValueOnce(makeBulkResponse([{ ok: true }, { ok: true }]));
+
+    await service.runEnrichmentPass();
+
+    const ops = mockBulk.mock.calls[0][0].operations;
+    const testPatch = ops[1].doc.f0rtika;
+    expect(testPatch.crowdstrike_detected).toBe(true);
+    expect(testPatch.crowdstrike_prevented).toBeUndefined();
   });
 });

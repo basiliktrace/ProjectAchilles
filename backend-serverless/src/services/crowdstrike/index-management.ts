@@ -35,6 +35,13 @@ export const CROWDSTRIKE_INDEX_MAPPING = {
       updated_at: { type: 'date' as const },
       resolved_at: { type: 'date' as const },
       recommended_actions: { type: 'text' as const },
+      // Prevention disposition (CrowdStrike-only; additive). prevention_action
+      // is the derived enum (kill_failed/quarantined/process_killed/blocked);
+      // the pattern_disposition* pair keeps the raw values for display/audit.
+      prevention_action: { type: 'keyword' as const },
+      pattern_disposition: { type: 'integer' as const },
+      pattern_disposition_description: { type: 'keyword' as const },
+      portal_url: { type: 'keyword' as const },
       // text + .keyword multi-field: queries target both bare and .keyword
       // paths via should[] disjunction — see evidence-correlation.ts for the
       // rationale (legacy bare-keyword vs newer text+keyword shapes).

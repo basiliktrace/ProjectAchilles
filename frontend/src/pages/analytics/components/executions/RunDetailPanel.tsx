@@ -3,6 +3,7 @@ import {
   Archive,
   ChevronDown,
   ChevronRight,
+  ExternalLink,
   Info,
   Loader2,
   ShieldAlert,
@@ -14,6 +15,8 @@ import type { RelatedCrowdStrikeAlertsResponse } from '@/services/api/crowdstrik
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
+import { falconAlertUrl } from '../../utils/falconConsole';
+import CrowdStrikePreventionBadge from '../CrowdStrikePreventionBadge';
 import {
   ALERT_SEVERITY_CLASSES,
   BundleResultLabel,
@@ -293,11 +296,22 @@ function ExecDetailBody({
                     >
                       {alert.severity}
                     </Badge>
+                    <CrowdStrikePreventionBadge alert={alert} />
                     <span className="flex-1 truncate text-foreground">{alert.alert_title}</span>
                     <Badge variant="default" className="px-1.5 py-0 text-[10px]">
                       {alert.status}
                     </Badge>
                     <span className="whitespace-nowrap text-faint">{deltaLabel}</span>
+                    <a
+                      href={falconAlertUrl(alert.portal_url)}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="shrink-0 rounded p-0.5 text-faint transition-colors hover:text-foreground"
+                      aria-label="Open in Falcon console"
+                      title="Open in Falcon console"
+                    >
+                      <ExternalLink className="h-3 w-3" />
+                    </a>
                   </div>
                 );
               })}
@@ -622,10 +636,21 @@ function BundleBody({
                       >
                         {alert.severity}
                       </Badge>
+                      <CrowdStrikePreventionBadge alert={alert} />
                       <span className="flex-1 truncate text-foreground">{alert.alert_title}</span>
                       <Badge variant="default" className="px-1.5 py-0 text-[10px]">
                         {alert.status}
                       </Badge>
+                      <a
+                        href={falconAlertUrl(alert.portal_url)}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="shrink-0 rounded p-0.5 text-faint transition-colors hover:text-foreground"
+                        aria-label="Open in Falcon console"
+                        title="Open in Falcon console"
+                      >
+                        <ExternalLink className="h-3 w-3" />
+                      </a>
                     </div>
                   ))}
                 </div>

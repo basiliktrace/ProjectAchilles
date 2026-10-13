@@ -7,6 +7,8 @@
 // ingested ES docs can observe:
 //
 //   exit 126/105/127                                  -> PREVENTED
+//   crowdstrike_prevented flag (vendor-confirmed)     -> PREVENTED
+//      (Falcon reported a prevention disposition for the correlated alert)
 //   exit 101 (or 0) + EDR stage/detected flag         -> DETECTED
 //      (defender_* or crowdstrike_* — either vendor qualifies)
 //   exit 101 (or 0), exfiltration/impact tactics      -> EXPOSED
@@ -194,8 +196,13 @@ function isoWithTz(ts: unknown): string {
 }
 
 /** Decide the SB outcome for one bundle-control doc. */
-function mapOutcome(exitCode: number | undefined, rawTactics: string[], edrDetected: boolean): SbOutcome {
+function mapOutcome(exitCode: number | undefined, rawTactics: string[], edrDetected: boolean, edrPrevented: boolean): SbOutcome {
   if (exitCode !== undefined && PREVENTED_EXIT_CODES.has(exitCode)) return 'PREVENTED';
+  // Vendor-confirmed prevention (CrowdStrike prevention disposition on the
+  // correlated alert) upgrades an executed stage to PREVENTED. Enrichment
+  // only writes the flag on conclusive-code docs, so this can't fire on
+  // inconclusive/error exits in practice — the guard documents that intent.
+  if (edrPrevented && (exitCode === undefined || EXECUTED_EXIT_CODES.has(exitCode))) return 'PREVENTED';
   if (exitCode !== undefined && EXECUTED_EXIT_CODES.has(exitCode)) {
     if (edrDetected) return 'DETECTED';
     if (rawTactics.some((t) => EXPOSED_TACTICS.has(t))) return 'EXPOSED';
@@ -330,17 +337,27 @@ export class SbReportService {
       const crowdstrikeDetected = Boolean(
         getField(source, 'f0rtika.crowdstrike_stage_detected') ?? getField(source, 'f0rtika.crowdstrike_detected'),
       );
+      // Vendor-confirmed prevention (CrowdStrike only in v1) — deterministic
+      // evidence from the alert's pattern_disposition, not inference.
+      const crowdstrikePrevented = Boolean(getField(source, 'f0rtika.crowdstrike_prevented'));
       // Vendor attribution — when both vendors detected the stage, list both.
       const detectingVendors = [
         ...(defenderDetected ? [MICROSOFT_DEFENDER] : []),
         ...(crowdstrikeDetected ? [CROWDSTRIKE_FALCON] : []),
+      ];
+      // preventedBy lists actual preventers: Defender attribution follows the
+      // exit-code path (existing behavior), CrowdStrike follows its
+      // vendor-confirmed prevention flag.
+      const preventingVendors = [
+        ...(defenderDetected ? [MICROSOFT_DEFENDER] : []),
+        ...(crowdstrikePrevented ? [CROWDSTRIKE_FALCON] : []),
       ];
       const edrDetected = detectingVendors.length > 0;
 
       const stage = parseStageFromValidator(getField(source, 'f0rtika.control_validator'))
         ?? fallbackStage.get(hit)
         ?? 0;
-      const outcome = mapOutcome(exitCode, rawTactics, edrDetected);
+      const outcome = mapOutcome(exitCode, rawTactics, edrDetected, crowdstrikePrevented);
       const sourceEventId = String(hit._id ?? '');
 
       const inconclusive = exitCode !== undefined && INCONCLUSIVE_EXIT_CODES.has(exitCode);
@@ -361,7 +378,7 @@ export class SbReportService {
         tactics: rawTactics.map((t) => TACTIC_TO_TA[t] ?? t),
         outcome,
         isProtected: outcome === 'PREVENTED' || outcome === 'DETECTED',
-        preventedBy: outcome === 'PREVENTED' ? detectingVendors : [],
+        preventedBy: outcome === 'PREVENTED' ? preventingVendors : [],
         detectedBy: outcome === 'DETECTED' ? detectingVendors : [],
         evidenceRef,
       };

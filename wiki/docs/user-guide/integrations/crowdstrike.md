@@ -332,6 +332,23 @@ exception is exit `260` (blocked before execution by an ASR/app-control
 policy): those are never scanned, since a policy block — including the ASR
 rule the platform excludes by design — is not a detection event.
 
+**Vendor-confirmed prevention**
+
+Falcon reports what it *did* about each alert via `pattern_disposition`
+(e.g. "Prevention, process killed."). The sync extracts this into
+`prevention_action` (`quarantined` / `process_killed` / `blocked` /
+`kill_failed`) on the alert doc, and enrichment upgrades matched test stages
+with `crowdstrike_prevented: true` (plus the action). Prevented stages render
+as **Prevented** in the executions view — stronger than Detected — count as
+protected in the Defense Score, and report as PREVENTED with
+`preventedBy: ['CrowdStrike Falcon']` in the SB compliance report. A failed
+kill (`kill_action_failed`) never qualifies. Alert rows also carry
+`portal_url`, the exact per-alert Falcon console deep link.
+
+The technique-only fallback in *alerts-for-test* is hostname-scoped whenever
+the host is known, so simultaneous fleet-wide runs can't cross-associate one
+host's alerts onto another host's stages.
+
 ### Conditional Frontend Display
 
 All CrowdStrike dashboard elements are conditionally rendered based on the

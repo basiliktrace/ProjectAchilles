@@ -269,6 +269,93 @@ describe('CrowdStrikeSyncService (serverless)', () => {
       expect(result.errors).toHaveLength(1);
       expect(result.errors[0]).toContain('Falcon API down');
     });
+
+    it('sync_version 1 (pre-prevention fields) forces a full re-sync', async () => {
+      // CROWDSTRIKE_ALERT_SYNC_VERSION=2 added prevention_action /
+      // pattern_disposition* / portal_url — existing deployments must
+      // re-fetch the full window once so alert docs gain the new fields.
+      mockGetCrowdStrikeSyncTimestamps.mockReturnValue({
+        last_alert_sync: '2026-09-01T00:00:00Z',
+        sync_version: 1,
+      });
+      mockGetAlertsCombined.mockResolvedValue(emptyPage);
+
+      const freshService = new CrowdStrikeSyncService();
+      await freshService.syncAlerts();
+
+      const filter = mockGetAlertsCombined.mock.calls[0][0].filter as string;
+      expect(filter).not.toContain('2026-09-01T00:00:00Z');
+      expect(filter).toMatch(/^created_timestamp:>='/);
+    });
+  });
+
+  // ── Prevention disposition (transformAlert) ────────────────────
+
+  describe('prevention disposition', () => {
+    const alertWithDisposition = (details: Record<string, unknown> | undefined) =>
+      falconAlert({
+        pattern_disposition: 16,
+        pattern_disposition_description: 'Prevention, process killed.',
+        pattern_disposition_details: details,
+        falcon_host_link: 'https://falcon.us-2.crowdstrike.com/activity-v2/detections/alert-123?_cid=abc',
+      });
+
+    const syncOneAndGetDoc = async (alert: Record<string, unknown>) => {
+      mockGetAlertsCombined.mockResolvedValue({ resources: [alert], after: undefined, total: 1 });
+      await service.syncAlerts();
+      return mockBulk.mock.calls[0][0].operations[1].doc;
+    };
+
+    it('kill_process → process_killed, with raw disposition + portal_url captured', async () => {
+      const doc = await syncOneAndGetDoc(alertWithDisposition({ kill_process: true, kill_action_failed: false }));
+
+      expect(doc.prevention_action).toBe('process_killed');
+      expect(doc.pattern_disposition).toBe(16);
+      expect(doc.pattern_disposition_description).toBe('Prevention, process killed.');
+      expect(doc.portal_url).toBe('https://falcon.us-2.crowdstrike.com/activity-v2/detections/alert-123?_cid=abc');
+    });
+
+    it('quarantine_file → quarantined', async () => {
+      const doc = await syncOneAndGetDoc(alertWithDisposition({ quarantine_file: true }));
+      expect(doc.prevention_action).toBe('quarantined');
+    });
+
+    it('kill_parent / kill_subprocess → process_killed', async () => {
+      expect((await syncOneAndGetDoc(alertWithDisposition({ kill_parent: true }))).prevention_action).toBe('process_killed');
+      expect((await syncOneAndGetDoc(alertWithDisposition({ kill_subprocess: true }))).prevention_action).toBe('process_killed');
+    });
+
+    it('process_blocked / operation_blocked / fs_operation_blocked → blocked', async () => {
+      expect((await syncOneAndGetDoc(alertWithDisposition({ process_blocked: true }))).prevention_action).toBe('blocked');
+      expect((await syncOneAndGetDoc(alertWithDisposition({ operation_blocked: true }))).prevention_action).toBe('blocked');
+      expect((await syncOneAndGetDoc(alertWithDisposition({ fs_operation_blocked: true }))).prevention_action).toBe('blocked');
+    });
+
+    it('kill_action_failed takes precedence over quarantine/kill flags (a FAILED kill is not prevention)', async () => {
+      const doc = await syncOneAndGetDoc(alertWithDisposition({ kill_action_failed: true, kill_process: true, quarantine_file: true }));
+      expect(doc.prevention_action).toBe('kill_failed');
+    });
+
+    it('detection-only alert (no disposition details) gets no prevention_action', async () => {
+      const doc = await syncOneAndGetDoc(falconAlert());
+
+      expect(doc.prevention_action).toBeUndefined();
+      expect(doc.pattern_disposition).toBeUndefined();
+      expect(doc.pattern_disposition_description).toBeUndefined();
+      expect(doc.portal_url).toBeUndefined();
+    });
+
+    it('disposition details with all-false flags yield no prevention_action', async () => {
+      const doc = await syncOneAndGetDoc(alertWithDisposition({
+        kill_process: false, kill_parent: false, kill_subprocess: false,
+        quarantine_file: false, process_blocked: false,
+        operation_blocked: false, fs_operation_blocked: false, kill_action_failed: false,
+      }));
+
+      // Raw disposition still captured for audit; derived action absent.
+      expect(doc.prevention_action).toBeUndefined();
+      expect(doc.pattern_disposition).toBe(16);
+    });
   });
 
   // ── syncZtaScores ──────────────────────────────────────────────

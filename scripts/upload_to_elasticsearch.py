@@ -214,6 +214,8 @@ def get_results_index_mapping():
                         "defender_stage_detected": {"type": "boolean"},
                         "crowdstrike_detected": {"type": "boolean"},
                         "crowdstrike_stage_detected": {"type": "boolean"},
+                        "crowdstrike_prevented": {"type": "boolean"},
+                        "crowdstrike_prevention_action": {"type": "keyword"},
                         "tenant_label": kw
                     }
                 },
@@ -329,6 +331,12 @@ def get_crowdstrike_index_mapping():
                 "evidence_hostnames": {"type": "text", "fields": {"keyword": {"type": "keyword", "ignore_above": 256}}},
                 "evidence_filenames": {"type": "text", "fields": {"keyword": {"type": "keyword", "ignore_above": 256}}},
                 "evidence_filepaths": {"type": "text", "fields": {"keyword": {"type": "keyword", "ignore_above": 1024}}},
+
+                # Prevention disposition (Falcon pattern_disposition) + console link
+                "prevention_action": {"type": "keyword"},
+                "pattern_disposition": {"type": "integer"},
+                "pattern_disposition_description": {"type": "keyword"},
+                "portal_url": {"type": "keyword"},
 
                 # Achilles correlation + auto-resolve fields
                 "f0rtika": {

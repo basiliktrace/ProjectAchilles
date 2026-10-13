@@ -166,6 +166,10 @@ export interface EnrichedTestExecution extends TestExecution {
   crowdstrike_detected?: boolean;
   /** CrowdStrike per-stage equivalent of defender_stage_detected. */
   crowdstrike_stage_detected?: boolean;
+  /** Set true when a matched CrowdStrike alert carried a prevention disposition (vendor-confirmed prevention; subset of crowdstrike_detected). */
+  crowdstrike_prevented?: boolean;
+  /** The matched alert's derived prevention action (quarantined / process_killed / blocked). */
+  crowdstrike_prevention_action?: string;
 }
 
 // Pagination support
@@ -227,6 +231,8 @@ export interface ExecutionGroup {
   defenderDetected?: boolean;
   /** True when a correlated CrowdStrike alert exists for this group's binary + hostname. */
   crowdstrikeDetected?: boolean;
+  /** True when a matched CrowdStrike alert carried a prevention disposition for any member of this group. */
+  crowdstrikePrevented?: boolean;
 }
 
 // Response shape for grouped/collapsed pagination

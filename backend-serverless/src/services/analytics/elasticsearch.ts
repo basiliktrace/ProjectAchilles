@@ -1610,12 +1610,14 @@ export class ElasticsearchService {
       };
     });
 
-    // Roll up defender_detected / crowdstrike_detected from member docs.
-    // The enrichment passes populate f0rtika.*_detected on each eligible doc;
-    // the badges show "Detected" if any stage of a bundle group is detected.
+    // Roll up defender_detected / crowdstrike_detected / crowdstrike_prevented
+    // from member docs. The enrichment passes populate f0rtika.* flags on
+    // each eligible doc; the badges show if any stage of a bundle group is
+    // detected/prevented.
     for (const group of groups) {
       group.defenderDetected = group.members.some((m) => m.defender_detected === true);
       group.crowdstrikeDetected = group.members.some((m) => m.crowdstrike_detected === true);
+      group.crowdstrikePrevented = group.members.some((m) => m.crowdstrike_prevented === true);
     }
 
     return {
@@ -1665,6 +1667,8 @@ export class ElasticsearchService {
       defender_stage_detected: getField(source, 'f0rtika.defender_stage_detected') ?? false,
       crowdstrike_detected: getField(source, 'f0rtika.crowdstrike_detected') ?? false,
       crowdstrike_stage_detected: getField(source, 'f0rtika.crowdstrike_stage_detected') ?? false,
+      crowdstrike_prevented: getField(source, 'f0rtika.crowdstrike_prevented') ?? false,
+      crowdstrike_prevention_action: getField(source, 'f0rtika.crowdstrike_prevention_action'),
     };
   }
 

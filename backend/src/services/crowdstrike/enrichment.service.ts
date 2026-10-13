@@ -28,6 +28,14 @@ const ENRICHMENT_ELIGIBLE_ERROR_CODES = [0, 1, 101, 105, 126, 127, 259, 999];
  */
 const ALERT_HITS_PER_SUBQUERY = 5;
 
+/**
+ * Prevention actions that count as vendor-confirmed PREVENTION (vs.
+ * detection-only). Derived from pattern_disposition_details at sync time —
+ * see docs/edr-prevention-action-detection.md. 'kill_failed' is deliberately
+ * NOT here: a failed kill is not prevention.
+ */
+const PREVENTION_ACTIONS = new Set(['quarantined', 'process_killed', 'blocked']);
+
 export class CrowdStrikeEnrichmentService {
   constructor(
     private readonly client: Client,
@@ -116,11 +124,13 @@ export class CrowdStrikeEnrichmentService {
 
       // 3. Execute msearch. size=ALERT_HITS_PER_SUBQUERY so we get back the
       //    matched alert _ids (needed for the alert-side correlation update).
+      //    _source carries only prevention_action — just enough to flip the
+      //    test doc's crowdstrike_prevented flags without pulling full docs.
       if (queries.length > 0) {
         const searches: unknown[] = [];
         for (const q of queries) {
           searches.push({ index: CROWDSTRIKE_INDEX });
-          searches.push({ size: ALERT_HITS_PER_SUBQUERY, _source: false, query: q.body });
+          searches.push({ size: ALERT_HITS_PER_SUBQUERY, _source: ['prevention_action'], query: q.body });
         }
 
         let msearchResponse;
@@ -145,6 +155,8 @@ export class CrowdStrikeEnrichmentService {
           wideMatched: boolean;
           stageMatched: boolean;
           alertIds: Set<string>;
+          /** Qualifying prevention actions from matched alerts (first one wins on the test doc). */
+          preventionActions: string[];
         }
         const updatesByHitId = new Map<string, PerHitUpdate>();
         const responses = (msearchResponse as any).responses ?? [];
@@ -165,16 +177,22 @@ export class CrowdStrikeEnrichmentService {
           const alertIds = alertHits
             .map((h) => h._id)
             .filter((id): id is string => typeof id === 'string');
+          // Wide and stage matches both qualify: any matched alert with a
+          // prevention disposition is vendor-confirmed prevention of this test.
+          const preventionActions = alertHits
+            .map((h) => h._source?.prevention_action)
+            .filter((a): a is string => typeof a === 'string' && PREVENTION_ACTIONS.has(a));
 
           const hitId = q.hit._id as string;
           let entry = updatesByHitId.get(hitId);
           if (!entry) {
-            entry = { hit: q.hit, bundleUuid: q.bundleUuid, wideMatched: false, stageMatched: false, alertIds: new Set() };
+            entry = { hit: q.hit, bundleUuid: q.bundleUuid, wideMatched: false, stageMatched: false, alertIds: new Set(), preventionActions: [] };
             updatesByHitId.set(hitId, entry);
           }
           if (q.kind === 'wide')  entry.wideMatched = true;
           if (q.kind === 'stage') entry.stageMatched = true;
           for (const id of alertIds) entry.alertIds.add(id);
+          entry.preventionActions.push(...preventionActions);
         }
 
         // 5. Bulk update matched docs.
@@ -200,6 +218,13 @@ export class CrowdStrikeEnrichmentService {
             const f0rtika: Record<string, unknown> = {};
             if (u.wideMatched)  f0rtika.crowdstrike_detected       = true;
             if (u.stageMatched) f0rtika.crowdstrike_stage_detected = true;
+            // Vendor-confirmed prevention (wide OR stage match with a
+            // prevention disposition) — rides alongside the detected flags.
+            // Prevention ⊆ detection: a prevention flag implies a matched alert.
+            if (u.preventionActions.length > 0) {
+              f0rtika.crowdstrike_prevented = true;
+              f0rtika.crowdstrike_prevention_action = u.preventionActions[0];
+            }
             operations.push({ update: { _index: u.hit._index, _id: u.hit._id } });
             operations.push({ doc: { f0rtika } });
             testOpMeta.push({ kind: 'test', wide: u.wideMatched, stage: u.stageMatched });

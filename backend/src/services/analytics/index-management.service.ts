@@ -53,6 +53,10 @@ export const RESULTS_INDEX_MAPPING = {
           // by CrowdStrikeEnrichmentService (bundle-scoped / stage-scoped).
           crowdstrike_detected: { type: 'boolean' as const },
           crowdstrike_stage_detected: { type: 'boolean' as const },
+          // Vendor-confirmed prevention (subset of crowdstrike_detected):
+          // a matched alert carried a prevention disposition.
+          crowdstrike_prevented: { type: 'boolean' as const },
+          crowdstrike_prevention_action: { type: 'keyword' as const },
           tenant_label: { type: 'keyword' as const },
         },
       },
