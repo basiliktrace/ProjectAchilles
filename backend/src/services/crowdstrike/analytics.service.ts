@@ -800,17 +800,35 @@ export class CrowdStrikeAnalyticsService {
       }
     }
 
-    // --- Fallback 2: technique-only (no hostname — alerts may lack evidence metadata) ---
+    // --- Fallback 2: technique-only, host-scoped when the host is known ---
+    // When the caller provides a hostname, keep the hostname constraint even
+    // in this last-resort tier: during fleet-wide simultaneous runs, an
+    // unscoped technique+window match would associate sibling hosts' alerts
+    // with this test (cross-host false positives). Only a genuinely
+    // host-less call (no hostname parameter at all) stays technique-only.
+    const techniqueMust: QueryDslQueryContainer[] = [
+      { term: { doc_type: 'alert' } },
+      { terms: { mitre_techniques: techniques } },
+      buildAlertTimeWindowQuery(from, to),
+    ];
+    if (hostname) {
+      techniqueMust.push({
+        bool: {
+          should: [
+            { wildcard: { 'evidence_hostnames':         { value: `${hostname.toUpperCase()}*` } } },
+            { wildcard: { 'evidence_hostnames.keyword': { value: `${hostname.toUpperCase()}*` } } },
+          ],
+          minimum_should_match: 1,
+        },
+      });
+    }
+
     const techniqueFallbackResult = await client.search({
       index: CROWDSTRIKE_INDEX,
       size: 50,
       query: {
         bool: {
-          must: [
-            { term: { doc_type: 'alert' } },
-            { terms: { mitre_techniques: techniques } },
-            buildAlertTimeWindowQuery(from, to),
-          ],
+          must: techniqueMust,
         },
       },
       sort: [{ created_at: { order: 'asc' } }],

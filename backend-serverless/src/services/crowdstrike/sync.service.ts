@@ -31,7 +31,7 @@ const INITIAL_ALERT_LOOKBACK_DAYS = 90;
  * force a full re-sync on all deployments. The persisted sync_version is
  * compared against this; a mismatch clears lastAlertSync.
  */
-const CROWDSTRIKE_ALERT_SYNC_VERSION = 1;
+const CROWDSTRIKE_ALERT_SYNC_VERSION = 2; // v2: + prevention_action / pattern_disposition* / portal_url
 
 /** Max alerts per /alerts/combined/alerts/v1 page (API ceiling is 1000). */
 const ALERT_PAGE_LIMIT = 1000;
@@ -171,6 +171,20 @@ export class CrowdStrikeSyncService {
       if (m.technique_id) techniques.add(m.technique_id);
     }
 
+    // Derive the prevention action from pattern_disposition_details.
+    // Precedence per docs/edr-prevention-action-detection.md: a failed kill
+    // is surfaced first (the EDR TRIED to prevent and failed — operationally
+    // distinct from "no prevention"), then quarantine, then process kills,
+    // then generic blocks. Absent details → detection-only (undefined).
+    let preventionAction: string | undefined;
+    const d = alert.pattern_disposition_details;
+    if (d) {
+      if (d.kill_action_failed) preventionAction = 'kill_failed';
+      else if (d.quarantine_file) preventionAction = 'quarantined';
+      else if (d.kill_process || d.kill_parent || d.kill_subprocess) preventionAction = 'process_killed';
+      else if (d.process_blocked || d.operation_blocked || d.fs_operation_blocked) preventionAction = 'blocked';
+    }
+
     return {
       doc_type: 'alert',
       timestamp: alert.updated_timestamp || alert.created_timestamp || '',
@@ -190,6 +204,10 @@ export class CrowdStrikeSyncService {
       evidence_hostnames: Array.from(hostnames),
       evidence_filenames: Array.from(filenames),
       evidence_filepaths: Array.from(filepaths),
+      ...(preventionAction ? { prevention_action: preventionAction } : {}),
+      ...(alert.pattern_disposition !== undefined ? { pattern_disposition: alert.pattern_disposition } : {}),
+      ...(alert.pattern_disposition_description ? { pattern_disposition_description: alert.pattern_disposition_description } : {}),
+      ...(alert.falcon_host_link ? { portal_url: alert.falcon_host_link } : {}),
     };
   }
 

@@ -74,6 +74,17 @@ export interface CrowdStrikeAlertItem {
    * Frontend matches case-insensitively against `f0rtika.control_id`.
    */
   attributed_control_id?: string;
+  /**
+   * Vendor-confirmed prevention disposition (from pattern_disposition_details):
+   * 'quarantined' | 'process_killed' | 'blocked' = Falcon prevented the action;
+   * 'kill_failed' = prevention attempted but failed (detection-only signal).
+   * Absent on detection-only alerts.
+   */
+  prevention_action?: 'quarantined' | 'process_killed' | 'blocked' | 'kill_failed';
+  /** Raw CrowdStrike disposition text, e.g. "Prevention, process killed." — display/audit. */
+  pattern_disposition_description?: string;
+  /** Exact per-alert Falcon console deep link (from falcon_host_link). */
+  portal_url?: string;
   auto_resolved?: boolean;
   auto_resolved_at?: string | null;
   auto_resolve_mode?: 'disabled' | 'dry_run' | 'enabled' | null;

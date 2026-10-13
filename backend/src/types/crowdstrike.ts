@@ -41,6 +41,28 @@ export interface FalconAlert {
   scenario?: string;
   created_timestamp?: string;
   updated_timestamp?: string;
+  /**
+   * Structured prevention disposition (verified against the live Alerts API).
+   * `pattern_disposition_details` carries boolean action flags; the derived
+   * `prevention_action` on the ES doc follows the precedence in
+   * docs/edr-prevention-action-detection.md (kill_action_failed →
+   * quarantine_file → kill_* → *_blocked).
+   */
+  pattern_disposition?: number;
+  pattern_disposition_description?: string;
+  pattern_disposition_details?: {
+    kill_process?: boolean;
+    kill_parent?: boolean;
+    kill_subprocess?: boolean;
+    quarantine_file?: boolean;
+    process_blocked?: boolean;
+    operation_blocked?: boolean;
+    fs_operation_blocked?: boolean;
+    kill_action_failed?: boolean;
+    [key: string]: unknown;
+  };
+  /** Exact per-alert Falcon console deep link. */
+  falcon_host_link?: string;
 }
 
 /**
@@ -123,6 +145,18 @@ export interface CrowdStrikeAlertDoc {
    * evidence_filenames.
    */
   evidence_filepaths: string[];
+  /**
+   * Derived prevention action from pattern_disposition_details:
+   * 'kill_failed' | 'quarantined' | 'process_killed' | 'blocked'.
+   * Absent on detection-only alerts.
+   */
+  prevention_action?: string;
+  /** Raw disposition bitmap value, for display/audit. */
+  pattern_disposition?: number;
+  /** Raw disposition description (e.g. "Prevention, process killed."). */
+  pattern_disposition_description?: string;
+  /** Per-alert Falcon console deep link (from falcon_host_link). */
+  portal_url?: string;
   /** Achilles correlation + auto-resolve state. Populated by the enrichment
    *  pass (correlation fields) and by the auto-resolve pass (resolve fields).
    *  Vendor-neutral field names, identical to the Defender alert docs.

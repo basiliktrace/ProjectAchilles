@@ -274,6 +274,10 @@ exception is exit `260` (blocked before execution by an ASR/app-control
 policy): those are never scanned, since a policy block — including the ASR
 rule the platform excludes by design — is not a detection event.
 
+Note: the technique-only fallback in *alerts-for-test* is hostname-scoped
+whenever the host is known, so simultaneous fleet-wide runs can't
+cross-associate one host's alerts onto another host's stages.
+
 ### Conditional Frontend Display
 
 All Defender dashboard elements are conditionally rendered based on the `useDefenderConfig` hook:

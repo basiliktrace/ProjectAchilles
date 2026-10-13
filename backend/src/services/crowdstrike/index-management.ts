@@ -35,6 +35,13 @@ export const CROWDSTRIKE_INDEX_MAPPING = {
       updated_at: { type: 'date' as const },
       resolved_at: { type: 'date' as const },
       recommended_actions: { type: 'text' as const },
+      // Prevention disposition (CrowdStrike-only; additive). prevention_action
+      // is the derived enum (kill_failed/quarantined/process_killed/blocked);
+      // the pattern_disposition* pair keeps the raw values for display/audit.
+      prevention_action: { type: 'keyword' as const },
+      pattern_disposition: { type: 'integer' as const },
+      pattern_disposition_description: { type: 'keyword' as const },
+      portal_url: { type: 'keyword' as const },
       // text + .keyword multi-field: matches the dynamic mapping that ES
       // produced for the original index on Render. Queries target both the
       // bare field and the .keyword subfield in a should[] disjunction —

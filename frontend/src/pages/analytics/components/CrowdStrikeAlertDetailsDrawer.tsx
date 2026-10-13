@@ -3,20 +3,14 @@ import { X, AlertTriangle, ExternalLink, ShieldCheck } from 'lucide-react';
 import { Button } from '@/components/shared/ui/Button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { crowdstrikeApi, type CrowdStrikeAlertItem } from '@/services/api/crowdstrike';
-import { integrationsApi, type CrowdStrikeRegion } from '@/services/api/integrations';
 import { getSeverityTokens } from '../utils/crowdstrikeSeverityTokens';
 import { formatCrowdStrikeProduct } from '../utils/crowdstrikeProduct';
-
-// Falcon console base per cloud region. Alert detail deep-link shapes differ
-// per console version, so we link to the alerts console itself — robust even
-// if the exact detail URL shape changes.
-const FALCON_CONSOLE_BASES: Record<CrowdStrikeRegion, string> = {
-  'us-1': 'https://falcon.crowdstrike.com',
-  'us-2': 'https://falcon.us-2.crowdstrike.com',
-  'eu-1': 'https://falcon.eu-1.crowdstrike.com',
-  'us-gov-1': 'https://falcon.laggar.gcw.crowdstrike.com',
-};
-const DEFAULT_CONSOLE_BASE = FALCON_CONSOLE_BASES['us-1'];
+import {
+  DEFAULT_FALCON_CONSOLE_BASE,
+  falconAlertUrl,
+  resolveFalconConsoleBase,
+} from '../utils/falconConsole';
+import CrowdStrikePreventionBadge from './CrowdStrikePreventionBadge';
 
 interface CrowdStrikeAlertDetailsDrawerProps {
   open: boolean;
@@ -52,7 +46,7 @@ export default function CrowdStrikeAlertDetailsDrawer({
   const [alerts, setAlerts] = useState<CrowdStrikeAlertItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [consoleBase, setConsoleBase] = useState(DEFAULT_CONSOLE_BASE);
+  const [consoleBase, setConsoleBase] = useState(DEFAULT_FALCON_CONSOLE_BASE);
   const dialogRef = useRef<HTMLDivElement | null>(null);
   const closeButtonRef = useRef<HTMLButtonElement | null>(null);
   const previouslyFocusedRef = useRef<HTMLElement | null>(null);
@@ -99,18 +93,14 @@ export default function CrowdStrikeAlertDetailsDrawer({
     };
   }, [open, onClose]);
 
-  // Resolve the Falcon console base from the configured region once per open.
+  // Resolve the Falcon console base from the configured region once per open
+  // (also warms the module-wide cache for the executions panel).
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
-    integrationsApi.getCrowdStrikeSettings()
-      .then((settings) => {
-        if (cancelled) return;
-        if (settings.region && FALCON_CONSOLE_BASES[settings.region]) {
-          setConsoleBase(FALCON_CONSOLE_BASES[settings.region]);
-        }
-      })
-      .catch(() => {});
+    resolveFalconConsoleBase().then((base) => {
+      if (!cancelled) setConsoleBase(base);
+    });
     return () => {
       cancelled = true;
     };
@@ -247,7 +237,7 @@ export default function CrowdStrikeAlertDetailsDrawer({
                             {alert.alert_title}
                           </div>
                           <a
-                            href={`${consoleBase}/alerts`}
+                            href={falconAlertUrl(alert.portal_url, consoleBase)}
                             target="_blank"
                             rel="noopener noreferrer"
                             className="shrink-0 p-1 -m-1 rounded hover:bg-raised text-muted-foreground hover:text-foreground transition-colors"
@@ -271,6 +261,7 @@ export default function CrowdStrikeAlertDetailsDrawer({
                               <span>{formatCrowdStrikeProduct(alert.product)}</span>
                             </>
                           )}
+                          <CrowdStrikePreventionBadge alert={alert} />
                         </div>
                         {alert.auto_resolved && (
                           <div className="mt-1 inline-flex items-center gap-1 text-[11px] text-emerald-600 dark:text-emerald-400">

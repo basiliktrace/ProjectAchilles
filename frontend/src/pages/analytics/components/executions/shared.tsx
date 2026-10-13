@@ -6,6 +6,10 @@ import type {
   ExecutionGroup,
   SeverityLevel,
 } from '@/services/api/analytics';
+import {
+  formatPreventionAction,
+  isConfirmedPrevention,
+} from '../../utils/crowdstrikePrevention';
 
 // ── Timestamps ─────────────────────────────────────────────────────
 
@@ -103,6 +107,7 @@ export interface BundleGroup {
   category?: CategoryType;
   defenderDetected?: boolean;
   crowdstrikeDetected?: boolean;
+  crowdstrikePrevented?: boolean;
 }
 
 export interface StandaloneRow {
@@ -132,6 +137,7 @@ export function mapGroupsToDisplayRows(groups: ExecutionGroup[]): DisplayRow[] {
         category: rep.category,
         defenderDetected: group.defenderDetected,
         crowdstrikeDetected: group.crowdstrikeDetected,
+        crowdstrikePrevented: group.crowdstrikePrevented,
       };
     }
     return {
@@ -145,12 +151,14 @@ export function mapGroupsToDisplayRows(groups: ExecutionGroup[]): DisplayRow[] {
 // ── Result labels ──────────────────────────────────────────────────
 
 /**
- * Result label for a single execution. "Detected" semantics: EDR failed
- * (error_code 101) but the Defender or CrowdStrike enrichment pass correlated
- * this doc to a vendor alert — the cloud SIEM caught what the endpoint missed.
- * Prefers the stage-specific flag; falls back to the bundle-level flag for docs
- * predating stage-specific enrichment (over-detects, but strictly safer
- * than silently showing Unprotected).
+ * Result label for a single execution. Precedence: Protected (EDR blocked) >
+ * Prevented (CrowdStrike vendor-confirmed prevention — quarantine / process
+ * killed / blocked via pattern_disposition) > Detected (a Defender or
+ * CrowdStrike enrichment pass correlated this doc to an alert — the cloud
+ * SIEM caught what the endpoint missed) > Unprotected. Stage-specific flags
+ * are preferred; the bundle-level flags are the fallback for docs predating
+ * stage-specific enrichment (over-detects, but strictly safer than silently
+ * showing Unprotected). 'kill_failed' never counts as Prevented.
  */
 export function ExecResultLabel({ exec, compact }: { exec: EnrichedTestExecution; compact?: boolean }) {
   const iconClass = compact ? 'w-3.5 h-3.5' : 'w-4 h-4';
@@ -174,9 +182,23 @@ export function ExecResultLabel({ exec, compact }: { exec: EnrichedTestExecution
     );
   }
   if (result === 'unprotected') {
+    const csDetected = exec.crowdstrike_stage_detected ?? exec.crowdstrike_detected;
+    const isPrevented =
+      exec.crowdstrike_prevented ||
+      (csDetected && isConfirmedPrevention(exec.crowdstrike_prevention_action));
+    if (isPrevented) {
+      const action = formatPreventionAction(exec.crowdstrike_prevention_action);
+      return (
+        <span className="inline-flex items-center gap-1.5 text-accent">
+          <ShieldCheck className={iconClass} />
+          <span className={textClass}>
+            {compact || !action ? 'Prevented' : `Prevented (${action})`}
+          </span>
+        </span>
+      );
+    }
     const isDetected =
-      (exec.defender_stage_detected ?? exec.defender_detected) ||
-      (exec.crowdstrike_stage_detected ?? exec.crowdstrike_detected);
+      (exec.defender_stage_detected ?? exec.defender_detected) || csDetected;
     if (isDetected) {
       return (
         <span className="inline-flex items-center gap-1.5 text-warning">
@@ -201,18 +223,30 @@ export function ExecResultLabel({ exec, compact }: { exec: EnrichedTestExecution
 }
 
 /**
- * Bundle rollup label. Any-stage rollup with three-tier priority:
- * Protected > Detected > Unprotected — kill-chain semantic: breaking one
- * link breaks the chain. Cyber-hygiene bundles keep per-control ratio
- * scoring since each control is evaluated independently.
+ * Bundle rollup label. Any-stage rollup with four-tier priority:
+ * Protected > Prevented > Detected > Unprotected — kill-chain semantic:
+ * breaking one link breaks the chain. Cyber-hygiene bundles keep per-control
+ * ratio scoring since each control is evaluated independently.
  */
 export function BundleResultLabel({ group, compact }: { group: BundleGroup; compact?: boolean }) {
   const iconClass = compact ? 'w-3.5 h-3.5' : 'w-4 h-4';
   const textClass = compact ? 'text-xs font-medium' : 'text-sm font-medium';
   const isProtected = group.protectedCount > 0;
-  const isDetected = !isProtected && (group.defenderDetected || group.crowdstrikeDetected);
+  const isPrevented = !isProtected && group.crowdstrikePrevented;
+  const isDetected =
+    !isProtected && !isPrevented && (group.defenderDetected || group.crowdstrikeDetected);
 
   if (group.category === 'cyber-hygiene') {
+    if (isPrevented) {
+      return (
+        <span className="inline-flex items-center gap-1.5 text-accent">
+          <ShieldCheck className={iconClass} />
+          <span className={textClass}>
+            {group.protectedCount}/{group.totalCount} Prevented
+          </span>
+        </span>
+      );
+    }
     if (isDetected) {
       return (
         <span className="inline-flex items-center gap-1.5 text-warning">
@@ -235,9 +269,9 @@ export function BundleResultLabel({ group, compact }: { group: BundleGroup; comp
     );
   }
 
-  const label = isProtected ? 'Protected' : isDetected ? 'Detected' : 'Unprotected';
-  const cls = isProtected ? 'text-accent' : isDetected ? 'text-warning' : 'text-danger';
-  const Icon = isProtected ? ShieldCheck : isDetected ? ShieldAlert : ShieldX;
+  const label = isProtected ? 'Protected' : isPrevented ? 'Prevented' : isDetected ? 'Detected' : 'Unprotected';
+  const cls = isProtected || isPrevented ? 'text-accent' : isDetected ? 'text-warning' : 'text-danger';
+  const Icon = isProtected || isPrevented ? ShieldCheck : isDetected ? ShieldAlert : ShieldX;
   return (
     <span className={`inline-flex items-center gap-1.5 ${cls}`}>
       <Icon className={iconClass} />

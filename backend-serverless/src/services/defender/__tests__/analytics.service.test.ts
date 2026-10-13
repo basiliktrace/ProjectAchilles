@@ -416,5 +416,42 @@ describe('DefenderAnalyticsService (serverless)', () => {
       expect(termsFilter).toBeDefined();
       expect(termsFilter.terms.mitre_techniques).toEqual(['T1003', 'T1059']);
     });
+
+    it('technique-only fallback stays technique-only when NO hostname is provided', async () => {
+      mockSearch.mockResolvedValueOnce({
+        hits: { total: { value: 0 }, hits: [] },
+      });
+
+      await service.getAlertsForTest(['T1003'], '2026-02-25T10:00:00Z', 60);
+
+      const queryStr = JSON.stringify(mockSearch.mock.calls[0][0].query);
+      expect(queryStr).toContain('mitre_techniques');
+      expect(queryStr).not.toContain('evidence_hostnames');
+    });
+
+    it('technique-only fallback keeps the hostname filter when a hostname IS provided', async () => {
+      // Fleet-wide simultaneous runs: without the host filter, a host whose
+      // EDR stayed quiet would inherit sibling hosts' same-technique alerts
+      // in the shared time window (observed in production, 2026-10-12).
+      // Evidence tier (binaryName+hostname) misses; technique+hostname tier
+      // misses; tier 3 must STILL be host-scoped.
+      mockSearch.mockResolvedValueOnce({ hits: { total: { value: 0 }, hits: [] } }); // tier 1 (evidence)
+      mockSearch.mockResolvedValueOnce({ hits: { total: { value: 0 }, hits: [] } }); // tier 2 (technique+host)
+      mockSearch.mockResolvedValueOnce({ hits: { total: { value: 0 }, hits: [] } }); // tier 3
+
+      await service.getAlertsForTest(
+        ['T1486'],
+        '2026-02-25T10:00:00Z',
+        30,
+        'SB11284',
+        '92b0b4f6-a09b-4c7b-b593-31ce461f804c.exe',
+      );
+
+      expect(mockSearch).toHaveBeenCalledTimes(3);
+      const tier3 = JSON.stringify(mockSearch.mock.calls[2][0].query);
+      expect(tier3).toContain('mitre_techniques');
+      expect(tier3).toContain('evidence_hostnames');
+      expect(tier3).toContain('SB11284');
+    });
   });
 });

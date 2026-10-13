@@ -93,7 +93,7 @@ function makeAlert(overrides: Partial<DefenderAlertItem> = {}): DefenderAlertIte
   };
 }
 
-function makeData(controls: EnrichedTestExecution[], opts: { defenderDetected: boolean; crowdstrikeDetected?: boolean }): GroupedPaginatedResponse {
+function makeData(controls: EnrichedTestExecution[], opts: { defenderDetected: boolean; crowdstrikeDetected?: boolean; crowdstrikePrevented?: boolean }): GroupedPaginatedResponse {
   const protectedCount = controls.filter((c) => c.error_code !== 101).length;
   const unprotectedCount = controls.length - protectedCount;
   return {
@@ -108,6 +108,7 @@ function makeData(controls: EnrichedTestExecution[], opts: { defenderDetected: b
         totalCount: controls.length,
         defenderDetected: opts.defenderDetected,
         crowdstrikeDetected: opts.crowdstrikeDetected,
+        crowdstrikePrevented: opts.crowdstrikePrevented,
       },
     ],
     pagination: {
@@ -690,5 +691,128 @@ describe('ExecutionsDataTable — CrowdStrike detection + related alerts', () =>
     // returning it.
     expect(screen.getAllByText(/EICAR_Test_File/)).toHaveLength(1);
     expect(screen.getByText(/Bundle-level CrowdStrike alerts/i)).toBeInTheDocument();
+  });
+});
+
+describe('ExecutionsDataTable — CrowdStrike prevention (vendor-confirmed)', () => {
+  it('renders "Prevented" (stronger than Detected) when crowdstrike_prevented is set on the stage', async () => {
+    csConfigured.value = true;
+    getAlertsForTestMock.mockResolvedValue({ alerts: [], matchedTechniques: [], total: 0 });
+
+    const preventedStage = makeStage({
+      test_uuid: `${BUNDLE_UUID}::T1562.001`,
+      test_name: 'WinDefend Service-Stop Notification Subscription',
+      control_id: 'T1562.001',
+      techniques: ['T1562.001'],
+      crowdstrike_detected: true,
+      crowdstrike_stage_detected: true,
+      crowdstrike_prevented: true,
+      crowdstrike_prevention_action: 'process_killed',
+    });
+    const plainStage = makeStage({});
+
+    renderTable(
+      makeData([plainStage, preventedStage], { defenderDetected: false, crowdstrikeDetected: true, crowdstrikePrevented: true }),
+    );
+
+    // Compact stage rows render bare "Prevented"; the non-compact panel
+    // header includes the action — either way, no Detected/Unprotected for
+    // the prevented stage.
+    await waitFor(() => {
+      expect(screen.getAllByText('Prevented').length).toBeGreaterThanOrEqual(2);
+    });
+    expect(screen.queryByText('Detected')).toBeNull();
+    expect(screen.getAllByText('Unprotected')).toHaveLength(1);
+  });
+
+  it('still renders "Detected" (not Prevented) when detected flags are set but no prevention evidence exists', async () => {
+    getAlertsForTestMock.mockResolvedValue({ alerts: [], matchedTechniques: [], total: 0 });
+    const stage = makeStage({
+      crowdstrike_detected: true,
+      crowdstrike_stage_detected: true,
+    });
+    renderTable(makeData([stage], { defenderDetected: false, crowdstrikeDetected: true }));
+
+    await waitFor(() => {
+      expect(screen.getAllByText('Detected').length).toBeGreaterThanOrEqual(2);
+    });
+    expect(screen.queryByText(/Prevented/)).toBeNull();
+  });
+
+  it('treats kill_failed as Detected, never Prevented — the kill was attempted and failed', async () => {
+    getAlertsForTestMock.mockResolvedValue({ alerts: [], matchedTechniques: [], total: 0 });
+    const stage = makeStage({
+      crowdstrike_detected: true,
+      crowdstrike_stage_detected: true,
+      crowdstrike_prevention_action: 'kill_failed',
+    });
+    renderTable(makeData([stage], { defenderDetected: false, crowdstrikeDetected: true }));
+
+    await waitFor(() => {
+      expect(screen.getAllByText('Detected').length).toBeGreaterThanOrEqual(2);
+    });
+    expect(screen.queryByText(/Prevented/)).toBeNull();
+  });
+
+  it('rolls the parent bundle badge up to Prevented when group.crowdstrikePrevented is set', () => {
+    getAlertsForTestMock.mockResolvedValue({ alerts: [], matchedTechniques: [], total: 0 });
+    const stage = makeStage({ crowdstrike_detected: true, crowdstrike_prevented: true });
+    renderTable(
+      makeData([stage], { defenderDetected: false, crowdstrikeDetected: true, crowdstrikePrevented: true }),
+    );
+
+    // Parent badge appears in both the run list and the panel header.
+    expect(screen.getAllByText(/Prevented/).length).toBeGreaterThanOrEqual(2);
+    expect(screen.queryByText('Detected')).toBeNull();
+  });
+
+  it('shows the prevention badge and portal_url deep link on stage-detail CrowdStrike alert rows', async () => {
+    csConfigured.value = true;
+    getAlertsForTestMock.mockResolvedValue({ alerts: [], matchedTechniques: [], total: 0 });
+    csGetAlertsForTestMock.mockResolvedValue({
+      alerts: [
+        makeCsAlert({
+          alert_id: 'cs-prev-1',
+          alert_title: 'Falcon: ransomware process killed',
+          attribution: 'stage',
+          attributed_control_id: 't1486',
+          prevention_action: 'process_killed',
+          pattern_disposition_description: 'Prevention, process killed.',
+          portal_url: 'https://falcon.us-2.crowdstrike.com/activity-v2/detections/xyz789?_cid=abc',
+        }),
+      ],
+      matchedTechniques: ['T1486'],
+      total: 1,
+    } satisfies RelatedCrowdStrikeAlertsResponse);
+
+    const stage = makeStage({
+      test_uuid: `${BUNDLE_UUID}::T1486`,
+      control_id: 'T1486',
+      techniques: ['T1486'],
+      test_name: 'ProcRansomware Simulation',
+      crowdstrike_detected: true,
+      crowdstrike_prevented: true,
+      crowdstrike_prevention_action: 'process_killed',
+    });
+    renderTable(
+      makeData([stage], { defenderDetected: false, crowdstrikeDetected: true, crowdstrikePrevented: true }),
+    );
+
+    await userEvent.click(screen.getAllByText(stage.bundle_name!)[0]);
+    await waitFor(() => expect(csGetAlertsForTestMock).toHaveBeenCalled());
+    await userEvent.click(screen.getByText(stage.test_name));
+
+    await waitFor(() => {
+      expect(screen.getByText(/ransomware process killed/)).toBeInTheDocument();
+    });
+    // Prevention badge with the raw disposition as tooltip
+    const badge = screen.getByText('process killed');
+    expect(badge).toHaveAttribute('title', 'Prevention, process killed.');
+    // Exact per-alert console link (portal_url), not the region-base fallback
+    const link = screen.getByLabelText('Open in Falcon console');
+    expect(link).toHaveAttribute(
+      'href',
+      'https://falcon.us-2.crowdstrike.com/activity-v2/detections/xyz789?_cid=abc',
+    );
   });
 });
