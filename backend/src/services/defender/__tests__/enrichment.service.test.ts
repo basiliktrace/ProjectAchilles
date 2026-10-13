@@ -10,6 +10,7 @@ vi.mock('../index-management.js', () => ({
 }));
 
 const { DefenderEnrichmentService } = await import('../enrichment.service.js');
+const { buildAlertTimeWindowQuery } = await import('../evidence-correlation.js');
 
 describe('DefenderEnrichmentService', () => {
   const mockSearch = vi.fn();
@@ -733,5 +734,111 @@ describe('DefenderEnrichmentService', () => {
     expect(testPatch.defender_detected).toBe(true);
     expect(testPatch.defender_prevented).toBeUndefined();
     expect(testPatch.defender_prevention_action).toBeUndefined();
+  });
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // Resolution-watermark re-fires (docs/edr-alert-refire-watermark.md)
+  //
+  // Defender aggregates repeat detections into one alert: a re-fire of an
+  // already-resolved aggregated alert bumps lastUpdateDateTime but keeps
+  // status=resolved. Branch (c) of buildAlertTimeWindowQuery re-admits these
+  // when the update lands >60s after resolved_at.
+  // ──────────────────────────────────────────────────────────────────────────
+
+  // Evaluate the time-window clause the way ES would — same branch semantics
+  // as the evidence-correlation tests (branch c's Painless watermark script
+  // simulated: terminal + timestamp > resolved_at + 60s, both fields
+  // required). The msearch mock then returns the alert only when the real
+  // query would admit it, tying the window rule to the flag writes.
+  const windowAdmits = (
+    eventTime: string,
+    alert: { timestamp?: string; created_at?: string; status?: string; resolved_at?: string },
+  ): boolean => {
+    const t = new Date(eventTime).getTime();
+    const clause = buildAlertTimeWindowQuery(
+      new Date(t - 5 * 60 * 1000).toISOString(),
+      new Date(t + 30 * 60 * 1000).toISOString(),
+    );
+    const inWindow = (iso: string, gte: string, lte: string) => iso >= gte && iso <= lte;
+    return ((clause.bool as any).should as any[]).some((s: any) => {
+      if ('range' in s) {
+        const [field, range] = Object.entries(s.range)[0] as [string, { gte: string; lte: string }];
+        const val = (alert as any)[field];
+        return typeof val === 'string' && inWindow(val, range.gte, range.lte);
+      }
+      if ('bool' in s) {
+        const filters = s.bool.filter ?? [];
+        const range = filters.find((f: any) => 'range' in f)?.range?.timestamp;
+        const val = alert.timestamp;
+        if (!range || typeof val !== 'string' || !inWindow(val, range.gte, range.lte)) return false;
+        const excluded = s.bool.must_not?.[0]?.terms?.status ?? [];
+        if (excluded.length) {
+          return !(alert.status && excluded.includes(alert.status));
+        }
+        // Branch (c) — terminal + watermark
+        const terms = filters.find((f: any) => 'terms' in f)?.terms?.status ?? [];
+        if (!alert.status || !terms.includes(alert.status)) return false;
+        if (typeof alert.resolved_at !== 'string') return false;
+        return Date.parse(val) > Date.parse(alert.resolved_at) + 60_000;
+      }
+      return false;
+    });
+  };
+
+  // Born-resolved aggregated alert: AV remediation completes at creation, so
+  // resolved_at == created_at and there is no lifecycle bump path — every
+  // post-creation update is evidence activity.
+  const BORN_RESOLVED_ALERT = {
+    _id: 'alert-born-resolved',
+    created_at: '2026-05-10T09:00:00Z',
+    resolved_at: '2026-05-10T09:00:00Z',
+    status: 'resolved',
+  };
+  const STAGE_EVENT_TIME = '2026-05-12T12:19:13Z'; // eligibleStageDoc fixture time
+
+  it('born-resolved aggregated alert whose timestamp re-fired during the run sets detected flags on the new doc', async () => {
+    const service = createService();
+    mockSearch.mockResolvedValueOnce(makeScanResponse([
+      eligibleStageDoc('d1', 'bf448c7a-307e-4458-ba36-341d6d8e671b', 'T1053.005'),
+    ]));
+
+    // The alert re-fired 3 minutes into the new run (status stays resolved).
+    const alert = { ...BORN_RESOLVED_ALERT, timestamp: '2026-05-12T12:22:00Z' };
+    // Sanity: the watermark rule admits this alert into the run's window.
+    expect(windowAdmits(STAGE_EVENT_TIME, alert)).toBe(true);
+
+    const hitResponse = makeMsearchHits([BORN_RESOLVED_ALERT._id]);
+    mockMsearch.mockResolvedValueOnce(makeMsearchResponse([hitResponse, hitResponse])); // wide + stage
+    mockBulk.mockResolvedValueOnce(makeBulkResponse([{ ok: true }, { ok: true }]));
+
+    const result = await service.runEnrichmentPass();
+
+    expect(result.detected).toBe(1);
+    expect(result.stageDetected).toBe(1);
+    const ops = mockBulk.mock.calls[0][0].operations;
+    expect(ops[1].doc.f0rtika.defender_detected).toBe(true);
+    expect(ops[1].doc.f0rtika.defender_stage_detected).toBe(true);
+  });
+
+  it('the same alert WITHOUT the post-resolution bump does not match (no flags)', async () => {
+    const service = createService();
+    mockSearch.mockResolvedValueOnce(makeScanResponse([
+      eligibleStageDoc('d1', 'bf448c7a-307e-4458-ba36-341d6d8e671b', 'T1053.005'),
+    ]));
+
+    // No re-fire: timestamp never moved past resolution.
+    const alert = { ...BORN_RESOLVED_ALERT, timestamp: '2026-05-10T09:00:00Z' };
+    expect(windowAdmits(STAGE_EVENT_TIME, alert)).toBe(false);
+
+    mockMsearch.mockResolvedValueOnce(makeMsearchResponse([
+      { hits: { total: { value: 0 }, hits: [] } },
+      { hits: { total: { value: 0 }, hits: [] } },
+    ]));
+
+    const result = await service.runEnrichmentPass();
+
+    expect(result.detected).toBe(0);
+    expect(result.stageDetected).toBe(0);
+    expect(mockBulk).not.toHaveBeenCalled();
   });
 });

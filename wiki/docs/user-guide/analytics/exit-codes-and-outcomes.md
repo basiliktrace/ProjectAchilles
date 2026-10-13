@@ -68,10 +68,16 @@ drawers and execution detail panels.
 **Time-window semantics:** an alert correlates with a test when its
 `created_at` falls in the −5/+30-minute window, or when its last-update time
 does **and the alert is still active** (`new`/`in_progress`/`reopened`).
-Terminal alerts (`resolved`/`closed`) never re-enter a window via updates —
-this prevents lifecycle events (including our own auto-resolve) from
-re-floating an old alert onto a new run, while aggregated alerts that
-genuinely re-fire (status flips back to active) still correlate.
+Terminal alerts (`resolved`/`closed`) re-enter a window via updates **only
+when the update happened more than 60 s after the alert's resolution time** —
+a post-resolution bump is a genuine re-fire of an aggregated alert (Defender
+reuses one alert for repeat detections of the same binary on a host, bumping
+its last-update time without reopening it), while the resolution itself —
+including our own auto-resolve — never qualifies. In the execution detail
+panels such alerts are annotated from the re-fire time, e.g.
+"re-fired 3m after · first seen Oct 10", rather than by their original
+creation time. (Defender only — see `docs/edr-alert-refire-watermark.md`; no
+alert aggregation has been observed for CrowdStrike.)
 
 ## 3. Stage labels in the UI
 

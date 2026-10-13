@@ -23,9 +23,9 @@ import {
   BundleResultLabel,
   ExecResultLabel,
   SEVERITY_VARIANTS,
+  alertRunTimeAnnotation,
   formatTimestamp,
   isSkippedStage,
-  parseTimestamp,
   ERROR_CODE_CATEGORIES,
   ERROR_CATEGORY_COLORS,
   type BundleGroup,
@@ -232,13 +232,7 @@ function ExecDetailBody({
           ) : stageAlerts.length > 0 ? (
             <div className="mt-2 space-y-2">
               {stageAlerts.map((alert) => {
-                const testTime = parseTimestamp(exec.timestamp).getTime();
-                const alertTime = new Date(alert.created_at).getTime();
-                const deltaMin = Math.round(Math.abs(alertTime - testTime) / 60000);
-                const deltaLabel =
-                  deltaMin < 60
-                    ? `${deltaMin}m ${alertTime > testTime ? 'after' : 'before'}`
-                    : `${Math.round(deltaMin / 60)}h ${alertTime > testTime ? 'after' : 'before'}`;
+                const deltaLabel = alertRunTimeAnnotation(exec.timestamp, alert);
                 return (
                   <div key={alert.alert_id} className="flex items-center gap-2 text-xs">
                     <Badge
@@ -296,13 +290,7 @@ function ExecDetailBody({
           ) : csStageAlerts.length > 0 ? (
             <div className="mt-2 space-y-2">
               {csStageAlerts.map((alert) => {
-                const testTime = parseTimestamp(exec.timestamp).getTime();
-                const alertTime = new Date(alert.created_at).getTime();
-                const deltaMin = Math.round(Math.abs(alertTime - testTime) / 60000);
-                const deltaLabel =
-                  deltaMin < 60
-                    ? `${deltaMin}m ${alertTime > testTime ? 'after' : 'before'}`
-                    : `${Math.round(deltaMin / 60)}h ${alertTime > testTime ? 'after' : 'before'}`;
+                const deltaLabel = alertRunTimeAnnotation(exec.timestamp, alert);
                 return (
                   <div key={alert.alert_id} className="flex items-center gap-2 text-xs">
                     <Badge

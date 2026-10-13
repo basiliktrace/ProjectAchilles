@@ -35,6 +35,64 @@ export function formatTimestamp(timestamp: string, relative = true): string {
   }
 }
 
+// ── Alert time annotations (related-alert panels) ──────────────────
+
+/** Fields both vendors' alert items carry for the run-relative annotation. */
+export interface AlertTimingFields {
+  status: string;
+  created_at: string;
+  updated_at: string;
+  resolved_at: string | null;
+}
+
+const TERMINAL_ALERT_STATUSES = new Set(['resolved', 'closed']);
+
+/**
+ * Re-fire watermark (mirrors the backend window rule in
+ * docs/edr-alert-refire-watermark.md): a terminal alert whose updated_at is
+ * more than 60s after its resolved_at re-fired — the bump is vendor evidence
+ * activity, not the resolution itself (resolution-adjacent bumps like comment
+ * POSTs land within the 60s epsilon).
+ */
+const REFIRE_WATERMARK_MS = 60_000;
+
+function toEpochMs(value: string | null | undefined): number | null {
+  if (!value) return null;
+  const ms = parseTimestamp(value).getTime();
+  return Number.isNaN(ms) ? null : ms;
+}
+
+function relativeToRun(runMs: number, alertMs: number): string {
+  const deltaMin = Math.round(Math.abs(alertMs - runMs) / 60000);
+  const direction = alertMs > runMs ? 'after' : 'before';
+  return deltaMin < 60 ? `${deltaMin}m ${direction}` : `${Math.round(deltaMin / 60)}h ${direction}`;
+}
+
+/**
+ * Run-relative annotation for a correlated alert row. Default: created_at vs
+ * the run time ("13m after" / "49h before"). Re-fired terminal alerts (status
+ * resolved/closed with updated_at > resolved_at + 60s) are annotated from the
+ * re-fire time instead, with the original first-seen date — "re-fired 3m
+ * after · first seen Oct 10" — so an old aggregated alert re-surfaced by the
+ * watermark rule doesn't read as a 49-hour-old echo. Missing or unparseable
+ * fields fall back to the created-relative annotation.
+ */
+export function alertRunTimeAnnotation(runTimestamp: string, alert: AlertTimingFields): string {
+  const runMs = parseTimestamp(runTimestamp).getTime();
+  const isTerminal = TERMINAL_ALERT_STATUSES.has(alert.status?.toLowerCase());
+  const resolvedMs = toEpochMs(alert.resolved_at);
+  const updatedMs = toEpochMs(alert.updated_at);
+
+  if (isTerminal && resolvedMs !== null && updatedMs !== null && updatedMs > resolvedMs + REFIRE_WATERMARK_MS) {
+    const createdMs = toEpochMs(alert.created_at);
+    const firstSeen = createdMs !== null ? format(parseTimestamp(alert.created_at), 'MMM d') : 'unknown';
+    return `re-fired ${relativeToRun(runMs, updatedMs)} · first seen ${firstSeen}`;
+  }
+
+  const createdMs = new Date(alert.created_at).getTime();
+  return relativeToRun(runMs, createdMs);
+}
+
 // ── Severity / error-code semantics ────────────────────────────────
 
 export const SEVERITY_VARIANTS: Record<SeverityLevel, string> = {

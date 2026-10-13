@@ -50,45 +50,61 @@ const POST_WINDOW_MS = 30 * 60 * 1000;
 const MIN_BUNDLE_TOKEN_LEN = 6;
 
 /**
- * Time-window clause for Defender correlation queries. Matches if EITHER
- * `timestamp` (= lastUpdateDateTime || createdDateTime, populated by the
- * sync mapper) OR `created_at` falls in the [from, to] range.
+ * Time-window clause for Defender correlation queries. Three disjunctive
+ * branches (see docs/edr-alert-refire-watermark.md):
  *
- * Both fields are needed because either can drift away from the actual
- * alert time:
- *   - `timestamp` is the right field for alerts Defender reuses across
- *     days — an old alert reactivated with new evidence carries a stale
- *     createdDateTime but a fresh lastUpdateDateTime. Querying only
- *     `created_at` would miss those.
- *   - `created_at` is the right field for alerts that fired during a
- *     test and were later resolved — resolution bumps lastUpdateDateTime
- *     forward, eventually past the test's window. Querying only
- *     `timestamp` would miss those after they're closed.
- *
- * Either field falling in range is enough to qualify.
+ *   a. `created_at` in window — the alert fired in the window; always a
+ *      valid match, even for alerts later resolved (resolution bumps
+ *      lastUpdateDateTime forward, eventually past the test's window, so
+ *      created_at is the only field that still carries the fire time).
+ *   b. `timestamp` (= lastUpdateDateTime || createdDateTime) in window AND
+ *      status NOT terminal — an ACTIVE alert updated in the window (Defender
+ *      aggregates repeat detections into one alert: an old alert reactivated
+ *      with new evidence carries a stale createdDateTime but a fresh
+ *      lastUpdateDateTime). Terminal alerts are excluded here because the
+ *      dominant in-window update for them is a lifecycle event — most
+ *      notably our own auto-resolve PATCH, which would otherwise re-float
+ *      an alert from a previous run into the new run's window.
+ *   c. `timestamp` in window AND status terminal AND
+ *      timestamp > resolved_at + 60s — a genuine re-fire of an aggregated
+ *      terminal alert. Defender bumps lastUpdateDateTime on re-fire WITHOUT
+ *      reopening (status stays resolved), so branch (b) alone makes re-fires
+ *      invisible. The 60s watermark absorbs resolution-adjacent bumps (our
+ *      auto-resolve comment POST lands seconds after the status PATCH);
+ *      our PATCH sets resolvedDateTime and lastUpdateDateTime to the same
+ *      instant, so the echo path stays closed. Born-resolved alerts
+ *      (resolved_at == created_at — AV auto-remediation) take this branch on
+ *      any post-creation update, which is correct: they have no lifecycle
+ *      path, so every update is vendor evidence activity.
  */
 export function buildAlertTimeWindowQuery(
   fromIso: string,
   toIso: string,
 ): Record<string, unknown> {
-  // Two paths into the window:
-  //   - created_at: the alert fired in the window — always a valid match.
-  //   - timestamp (vendor last-update): only for ACTIVE alerts. Terminal
-  //     alerts (resolved/closed) are excluded here because the dominant
-  //     in-window update for them is a lifecycle event — most notably our
-  //     own auto-resolve PATCH, which would otherwise re-float an alert from
-  //     a previous run into the new run's window (observed in prod: two
-  //     "49h before" Defender alerts attached to a fresh run after the
-  //     auto-resolve pass resolved them mid-window). A genuinely re-fired
-  //     aggregated alert comes back as new/reopened, so it still matches.
   return {
     bool: {
       should: [
+        // (a) fired in the window
         { range: { created_at: { gte: fromIso, lte: toIso } } },
+        // (b) active alert updated in the window
         {
           bool: {
             filter: [{ range: { timestamp: { gte: fromIso, lte: toIso } } }],
             must_not: [{ terms: { status: ['resolved', 'closed'] } }],
+          },
+        },
+        // (c) terminal alert updated >60s AFTER its resolution — a genuine
+        // re-fire, not the resolution itself. The Painless script guards on
+        // both fields being present (alerts missing resolved_at are
+        // conservatively excluded). NOTE: `.value.toInstant().toEpochMilli()`
+        // is required — `toMillis()` does not exist on ZonedDateTime.
+        {
+          bool: {
+            filter: [
+              { range: { timestamp: { gte: fromIso, lte: toIso } } },
+              { terms: { status: ['resolved', 'closed'] } },
+              { script: { script: { lang: 'painless', source: "doc['resolved_at'].size() > 0 && doc['timestamp'].size() > 0 && doc['timestamp'].value.toInstant().toEpochMilli() > doc['resolved_at'].value.toInstant().toEpochMilli() + 60000" } } },
+            ],
           },
         },
       ],
