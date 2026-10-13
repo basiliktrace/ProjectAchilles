@@ -70,6 +70,28 @@ describe('CrowdStrikeEnrichmentService', () => {
     expect(mockBulk).toHaveBeenCalledTimes(1);
   });
 
+  it('flags an error-category doc (999, EDR-killed stage) when alert evidence matches', async () => {
+    // Production scenario (SB tenant, 2026-10-12): CrowdStrike killed the T1486
+    // stage at launch (exit 0xE0000027, coerced to 999) and raised a ProcRansomware
+    // alert with the exact stage binary in evidence. The doc is error-category but
+    // eligible for scanning; a match must flag it like any conclusive doc.
+    const service = createService();
+    const base = eligibleDoc('d-killed', 'a::T1486');
+    const killedStageDoc = {
+      ...base,
+      _source: { ...base._source, event: { ERROR: 999 } },
+    };
+    mockSearch.mockResolvedValueOnce(makeScanResponse([killedStageDoc]));
+    mockMsearch.mockResolvedValueOnce(makeMsearchResponse([{ hits: { total: { value: 1 } } }]));
+    mockBulk.mockResolvedValueOnce(makeBulkResponse([{ ok: true }]));
+
+    const result = await service.runEnrichmentPass({ batchSize: 200 });
+
+    expect(result.scanned).toBe(1);
+    expect(result.detected).toBe(1);
+    expect(mockBulk).toHaveBeenCalledTimes(1);
+  });
+
   // 2. CH excluded
   it('eligibility filter excludes cyber-hygiene', async () => {
     const service = createService();
@@ -90,6 +112,20 @@ describe('CrowdStrikeEnrichmentService', () => {
     expect(scanQuery).toContain('105');
     expect(scanQuery).toContain('126');
     expect(scanQuery).toContain('127');
+  });
+
+  it('eligibility filter includes error-category codes (EDR-killed stages) and excludes 260', async () => {
+    // EDR-killed stages land as error-category codes (999/259/0/1) — they must be
+    // SCANNED so matching alert evidence can flag them (docs/edr-killed-stage-detection.md).
+    // 260 (BlockedPreExecution) stays out: ASR/app-control policy blocks are not detections.
+    const service = createService();
+    mockSearch.mockResolvedValueOnce(makeScanResponse([]));
+    await service.runEnrichmentPass();
+
+    const query = mockSearch.mock.calls[0][0].query as any;
+    const termsClause = query.bool.filter.find((f: any) => f.terms?.['event.ERROR']);
+    expect(termsClause.terms['event.ERROR']).toEqual([0, 1, 101, 105, 126, 127, 259, 999]);
+    expect(termsClause.terms['event.ERROR']).not.toContain(260);
   });
 
   // 4. Already-detected excluded

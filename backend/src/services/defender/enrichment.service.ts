@@ -10,7 +10,15 @@ import type { EnrichmentPassOptions, EnrichmentPassResult } from '../../types/de
 const DEFAULT_LOOKBACK_DAYS = 90;
 const DEFAULT_BATCH_SIZE = 200;
 const DEFAULT_MAX_DURATION_MS = 60_000;
-const CONCLUSIVE_ERROR_CODES = [101, 105, 126, 127];
+// Conclusive outcomes PLUS error/inconclusive codes (0, 1, 259, 999). Error-category
+// docs are scanned so EDR-killed stages — which land as 999/259, not a conclusive
+// code — can earn detection flags when alert evidence actually matches them.
+// Evidence decides the flag, not the exit code; unmatched error docs stay untouched.
+// 260 (BlockedPreExecution) is deliberately excluded: it stems from ASR/app-control
+// policy blocks, including the ASR rule the platform excludes by design
+// (docs/defender-asr-exclusion-rationale.md).
+// See docs/edr-killed-stage-detection.md.
+const ENRICHMENT_ELIGIBLE_ERROR_CODES = [0, 1, 101, 105, 126, 127, 259, 999];
 
 /**
  * Cap on the number of alert hits we pull back per sub-query. A single test
@@ -265,7 +273,7 @@ export class DefenderEnrichmentService {
       bool: {
         filter: [
           { range: { 'routing.event_time': { gte: `now-${lookbackDays}d` } } },
-          { terms: { 'event.ERROR': CONCLUSIVE_ERROR_CODES } },
+          { terms: { 'event.ERROR': ENRICHMENT_ELIGIBLE_ERROR_CODES } },
           { bool: { must_not: [{ term: { 'f0rtika.category': 'cyber-hygiene' } }] } },
           {
             bool: {

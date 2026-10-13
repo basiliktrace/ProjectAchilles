@@ -261,6 +261,19 @@ Maps MITRE ATT&CK techniques present in both datasets to identify:
 
 Compares the internal Defense Score (from test results) with Microsoft Secure Score over time using aligned date histograms, enabling teams to see whether improving their Secure Score configuration also improves real detection effectiveness.
 
+**Stages killed by the EDR**
+
+A stage the EDR kills at launch or mid-run produces an error-category exit
+code (`999`, `259`, or an unsigned NTSTATUS-style kill code coerced to `999`
+at ingestion — the raw value is kept in `event.ERROR_raw`) rather than a
+conclusive outcome. These stages are still scanned by the enrichment pass,
+and when alert evidence matches (hostname + stage binary + time window) they
+are flagged as detected and count toward the Defense Score like any other
+detection. Genuine test errors with no matching alert stay untouched. The
+exception is exit `260` (blocked before execution by an ASR/app-control
+policy): those are never scanned, since a policy block — including the ASR
+rule the platform excludes by design — is not a detection event.
+
 ### Conditional Frontend Display
 
 All Defender dashboard elements are conditionally rendered based on the `useDefenderConfig` hook:
