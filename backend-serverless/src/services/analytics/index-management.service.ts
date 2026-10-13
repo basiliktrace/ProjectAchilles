@@ -45,6 +45,10 @@ export const RESULTS_INDEX_MAPPING = {
           defender_detected: { type: 'boolean' as const },
           // Stage-specific detection — see backend mirror for rationale.
           defender_stage_detected: { type: 'boolean' as const },
+          // Vendor-confirmed prevention (subset of defender_detected): a
+          // matched alert carried a prevention-ish remediationStatus.
+          defender_prevented: { type: 'boolean' as const },
+          defender_prevention_action: { type: 'keyword' as const },
           // CrowdStrike equivalents, written by CrowdStrikeEnrichmentService.
           crowdstrike_detected: { type: 'boolean' as const },
           crowdstrike_stage_detected: { type: 'boolean' as const },

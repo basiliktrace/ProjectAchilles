@@ -37,7 +37,12 @@ export interface GraphControlProfile {
 
 export interface GraphAlertEvidence {
   '@odata.type': string;
+  // Prevention-ish values: 'blocked' (blocked while executing), 'prevented'
+  // (prevented from executing), 'remediated' (completed). Everything else is
+  // detection-only. See docs/defender-prevention-action-detection.md.
   remediationStatus: string;
+  /** Additional free-text detail about the remediation action. */
+  remediationStatusDetails?: string;
   verdict: string;
   deviceDnsName?: string;
   mdeDeviceId?: string;
@@ -60,6 +65,8 @@ export interface GraphAlert {
   mitreTechniques: string[];
   recommendedActions: string;
   evidence: GraphAlertEvidence[];
+  /** Per-alert Defender portal deep link. */
+  alertWebUrl?: string;
 }
 
 /**
@@ -149,6 +156,16 @@ export interface DefenderAlertDoc {
   evidence_filenames: string[];
   /** Filepaths from evidence (lowercased). Issue #2 / Option B — see backend/ */
   evidence_filepaths: string[];
+  /**
+   * Derived prevention action from evidence[].remediationStatus:
+   * 'process_killed' | 'blocked' | 'quarantined'. Absent on detection-only
+   * alerts. See docs/defender-prevention-action-detection.md.
+   */
+  prevention_action?: string;
+  /** Raw Defender remediationStatus value behind prevention_action, for audit/display. */
+  remediation_status?: string;
+  /** Per-alert Defender portal deep link (from alertWebUrl). */
+  portal_url?: string;
   /** Achilles correlation + auto-resolve state. See backend/ for field semantics. */
   f0rtika?: {
     achilles_correlated?: boolean;

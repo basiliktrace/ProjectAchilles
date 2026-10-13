@@ -502,7 +502,7 @@ describe('DefenderEnrichmentService', () => {
     expect(ops).toHaveLength(2);
   });
 
-  it('msearch sub-query returns alert hits (size > 0) with _source disabled', async () => {
+  it('msearch sub-query returns alert hits (size > 0) with _source limited to prevention_action', async () => {
     const service = createService();
     mockSearch.mockResolvedValueOnce(makeScanResponse([eligibleDoc('d1', 'a::T1')]));
     mockMsearch.mockResolvedValueOnce(makeMsearchResponse([{ hits: { total: { value: 0 } } }]));
@@ -512,7 +512,9 @@ describe('DefenderEnrichmentService', () => {
     const searches = mockMsearch.mock.calls[0][0].searches;
     // searches[0] is the header, searches[1] is the body
     expect(searches[1].size).toBeGreaterThan(0);
-    expect(searches[1]._source).toBe(false);
+    // Full _source is not pulled — only prevention_action (needed to flip
+    // defender_prevented on the test doc).
+    expect(searches[1]._source).toEqual(['prevention_action']);
   });
 
   // ──────────────────────────────────────────────────────────────────────────
@@ -631,5 +633,105 @@ describe('DefenderEnrichmentService', () => {
     expect(scanQuery).toContain('defender_detected');
     expect(scanQuery).toContain('defender_stage_detected');
     expect(scanQuery).toContain('minimum_should_match');
+  });
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // Prevention-action detection (defender_prevented) — mirrors the
+  // CrowdStrike enrichment rules (docs/defender-prevention-action-detection.md)
+  // ──────────────────────────────────────────────────────────────────────────
+
+  // msearch hit carrying a prevention_action in _source.
+  const makePreventingMsearchHits = (alertIds: string[], action: string) => ({
+    hits: {
+      total: { value: alertIds.length },
+      hits: alertIds.map((id) => ({ _id: id, _index: 'achilles-defender', _source: { prevention_action: action } })),
+    },
+  });
+
+  it('stage-match alert with prevention_action blocked → test doc gains defender_prevented + action', async () => {
+    const service = createService();
+    mockSearch.mockResolvedValueOnce(makeScanResponse([
+      eligibleStageDoc('d1', 'bf448c7a-307e-4458-ba36-341d6d8e671b', 'T1053.005'),
+    ]));
+    mockMsearch.mockResolvedValueOnce(makeMsearchResponse([
+      { hits: { total: { value: 0 } } },                                 // wide: no match
+      makePreventingMsearchHits(['alert-a'], 'blocked'),                 // stage: preventing alert
+    ]));
+    mockBulk.mockResolvedValueOnce(makeBulkResponse([{ ok: true }, { ok: true }]));
+
+    const result = await service.runEnrichmentPass();
+
+    expect(result.detected).toBe(0);       // wide query did not match
+    expect(result.stageDetected).toBe(1);
+    const ops = mockBulk.mock.calls[0][0].operations;
+    const testPatch = ops[1].doc.f0rtika;
+    expect(testPatch.defender_detected).toBeUndefined();
+    expect(testPatch.defender_stage_detected).toBe(true);
+    expect(testPatch.defender_prevented).toBe(true);
+    expect(testPatch.defender_prevention_action).toBe('blocked');
+  });
+
+  it('wide-match on a non-conclusive doc (exit 999) qualifies → defender_prevented set', async () => {
+    // A stage killed mid-flight lands as 999 — wide matches MAY claim
+    // prevention for it (docs/defender-prevention-action-detection.md).
+    const service = createService();
+    const base = eligibleDoc('d1', 'bundle-A::T1');
+    const killedDoc = { ...base, _source: { ...base._source, event: { ERROR: 999 } } };
+    mockSearch.mockResolvedValueOnce(makeScanResponse([killedDoc]));
+    mockMsearch.mockResolvedValueOnce(
+      makeMsearchResponse([makePreventingMsearchHits(['alert-1'], 'process_killed')]),
+    );
+    mockBulk.mockResolvedValueOnce(makeBulkResponse([{ ok: true }, { ok: true }]));
+
+    const result = await service.runEnrichmentPass();
+
+    expect(result.detected).toBe(1);
+    const ops = mockBulk.mock.calls[0][0].operations;
+    const testPatch = ops[1].doc.f0rtika;
+    expect(testPatch.defender_detected).toBe(true);
+    expect(testPatch.defender_prevented).toBe(true);
+    expect(testPatch.defender_prevention_action).toBe('process_killed');
+  });
+
+  it('wide-match on a conclusive-executed doc (exit 101) does NOT claim prevention', async () => {
+    // The stage ran to completion on its own — a bundle-level alert match
+    // carrying a prevention disposition belongs to a sibling stage's kill,
+    // not to this one.
+    const service = createService();
+    const base = eligibleDoc('d1', 'bundle-A::T1');
+    const executedDoc = { ...base, _source: { ...base._source, event: { ERROR: 101 } } };
+    mockSearch.mockResolvedValueOnce(makeScanResponse([executedDoc]));
+    mockMsearch.mockResolvedValueOnce(
+      makeMsearchResponse([makePreventingMsearchHits(['alert-1'], 'process_killed')]),
+    );
+    mockBulk.mockResolvedValueOnce(makeBulkResponse([{ ok: true }, { ok: true }]));
+
+    const result = await service.runEnrichmentPass();
+
+    expect(result.detected).toBe(1);
+    const ops = mockBulk.mock.calls[0][0].operations;
+    const testPatch = ops[1].doc.f0rtika;
+    expect(testPatch.defender_detected).toBe(true);
+    expect(testPatch.defender_prevented).toBeUndefined();
+    expect(testPatch.defender_prevention_action).toBeUndefined();
+  });
+
+  it('detection-only matched alert → detected flags only, NO prevented fields', async () => {
+    const service = createService();
+    mockSearch.mockResolvedValueOnce(makeScanResponse([eligibleDoc('d1', 'a::T1')]));
+    // Alert hit with no prevention_action in _source (detection-only)
+    mockMsearch.mockResolvedValueOnce(
+      makeMsearchResponse([makeMsearchHits(['alert-1'])]),
+    );
+    mockBulk.mockResolvedValueOnce(makeBulkResponse([{ ok: true }, { ok: true }]));
+
+    const result = await service.runEnrichmentPass();
+
+    expect(result.detected).toBe(1);
+    const ops = mockBulk.mock.calls[0][0].operations;
+    const testPatch = ops[1].doc.f0rtika;
+    expect(testPatch.defender_detected).toBe(true);
+    expect(testPatch.defender_prevented).toBeUndefined();
+    expect(testPatch.defender_prevention_action).toBeUndefined();
   });
 });

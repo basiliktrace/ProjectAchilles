@@ -10,7 +10,7 @@ import {
   falconAlertUrl,
   resolveFalconConsoleBase,
 } from '../utils/falconConsole';
-import CrowdStrikePreventionBadge from './CrowdStrikePreventionBadge';
+import PreventionBadge from './PreventionBadge';
 
 interface CrowdStrikeAlertDetailsDrawerProps {
   open: boolean;
@@ -261,7 +261,10 @@ export default function CrowdStrikeAlertDetailsDrawer({
                               <span>{formatCrowdStrikeProduct(alert.product)}</span>
                             </>
                           )}
-                          <CrowdStrikePreventionBadge alert={alert} />
+                          <PreventionBadge
+                            action={alert.prevention_action}
+                            rawStatus={alert.pattern_disposition_description}
+                          />
                         </div>
                         {alert.auto_resolved && (
                           <div className="mt-1 inline-flex items-center gap-1 text-[11px] text-emerald-600 dark:text-emerald-400">

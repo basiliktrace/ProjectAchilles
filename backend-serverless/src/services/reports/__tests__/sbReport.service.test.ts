@@ -38,6 +38,7 @@ interface FixtureControl {
   tactics: string[];
   defender_stage_detected?: boolean;
   defender_detected?: boolean;
+  defender_prevented?: boolean;
   crowdstrike_detected?: boolean;
   crowdstrike_prevented?: boolean;
   hostname?: string;
@@ -75,6 +76,9 @@ function makeBundleHit(control: FixtureControl) {
   }
   if (control.defender_detected !== undefined) {
     source['f0rtika.defender_detected'] = control.defender_detected;
+  }
+  if (control.defender_prevented !== undefined) {
+    source['f0rtika.defender_prevented'] = control.defender_prevented;
   }
   if (control.crowdstrike_detected !== undefined) {
     source['f0rtika.crowdstrike_detected'] = control.crowdstrike_detected;
@@ -305,6 +309,51 @@ describe('sbReport.service.ts', () => {
 
       expect(report.executions[0].outcome).toBe('PREVENTED');
       expect(report.executions[0].preventedBy).toEqual(['CrowdStrike Falcon']);
+    });
+
+    it('maps a killed stage (exit 999) with defender_prevented to PREVENTED with preventedBy Microsoft Defender', async () => {
+      // Defender equivalent of the CrowdStrike case: the correlated alert's
+      // evidence[].remediationStatus reported a completed prevention.
+      const hits = [
+        makeBundleHit({ control_id: 'T1486', validator: 'Stage 5', exit_code: 999, techniques: ['T1486'], tactics: ['impact'], defender_prevented: true, defender_detected: true }),
+      ];
+      mockSearch.mockResolvedValue(esSearchResponse(hits));
+
+      const report = await createService().generateSbReport({ ...WINDOW, org: SB_ORG_UUID });
+
+      expect(report.executions[0].outcome).toBe('PREVENTED');
+      expect(report.executions[0].isProtected).toBe(true);
+      expect(report.executions[0].preventedBy).toEqual(['Microsoft Defender for Endpoint']);
+    });
+
+    it('lists both vendors when both vendors prevented the stage', async () => {
+      const hits = [
+        makeBundleHit({
+          control_id: 'T1003.001', validator: 'Stage 2', exit_code: 999, techniques: ['T1003.001'], tactics: ['credential-access'],
+          defender_prevented: true, crowdstrike_prevented: true,
+        }),
+      ];
+      mockSearch.mockResolvedValue(esSearchResponse(hits));
+
+      const report = await createService().generateSbReport({ ...WINDOW, org: SB_ORG_UUID });
+
+      expect(report.executions[0].outcome).toBe('PREVENTED');
+      expect(report.executions[0].preventedBy).toEqual(['Microsoft Defender for Endpoint', 'CrowdStrike Falcon']);
+    });
+
+    it('does NOT upgrade a conclusive-executed stage (exit 101) to PREVENTED on defender_prevented', async () => {
+      // Same guard as the CrowdStrike flag: a succeeded attack cannot have
+      // been prevented.
+      const hits = [
+        makeBundleHit({ control_id: 'T1059.001', validator: 'Stage 1', exit_code: 101, techniques: ['T1059.001'], tactics: ['execution'], defender_prevented: true, defender_detected: true }),
+      ];
+      mockSearch.mockResolvedValue(esSearchResponse(hits));
+
+      const report = await createService().generateSbReport({ ...WINDOW, org: SB_ORG_UUID });
+
+      expect(report.executions[0].outcome).toBe('DETECTED');
+      expect(report.executions[0].preventedBy).toEqual([]);
+      expect(report.executions[0].detectedBy).toEqual(['Microsoft Defender for Endpoint']);
     });
 
     it('maps inconclusive exits (200/259/260) to ERROR with an inconclusive note in evidenceRef', async () => {

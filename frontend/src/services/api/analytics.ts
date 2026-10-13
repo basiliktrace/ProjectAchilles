@@ -174,6 +174,15 @@ export interface EnrichedTestExecution extends TestExecution {
   crowdstrike_prevented?: boolean;
   /** Derived prevention action: 'quarantined' | 'process_killed' | 'blocked'. */
   crowdstrike_prevention_action?: string;
+  /**
+   * Set by the Defender enrichment pass when a correlated alert carried
+   * vendor-confirmed prevention evidence (evidence remediationStatus:
+   * prevented / blocked / remediated). Subset of defender_detected — drives
+   * the same "Prevented" result label.
+   */
+  defender_prevented?: boolean;
+  /** Derived prevention action (normalized, same vocabulary as CrowdStrike). */
+  defender_prevention_action?: string;
 }
 
 export interface PaginatedResponse<T> {
@@ -302,6 +311,7 @@ export interface ExecutionGroup {
   defenderDetected?: boolean;
   crowdstrikeDetected?: boolean;
   crowdstrikePrevented?: boolean;
+  defenderPrevented?: boolean;
 }
 
 // Response shape for grouped/collapsed pagination

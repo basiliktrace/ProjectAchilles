@@ -25,6 +25,9 @@ interface PartialAlert {
   service_source: string;
   created_at: string;
   mitre_techniques: string[];
+  prevention_action?: 'quarantined' | 'process_killed' | 'blocked';
+  remediation_status?: string;
+  portal_url?: string;
 }
 
 function makeAlert(overrides: Partial<PartialAlert> = {}): PartialAlert {
@@ -205,9 +208,68 @@ describe('AlertDetailsDrawer', () => {
 
     await waitFor(() => expect(screen.getByText('PSH abuse')).toBeInTheDocument());
     const link = screen.getByLabelText('Open in Microsoft Defender');
+    // Fallback when the alert carries no portal_url (pre-sync docs)
     expect(link).toHaveAttribute('href', 'https://security.microsoft.com/alerts/da123abc');
     expect(link).toHaveAttribute('target', '_blank');
     expect(link).toHaveAttribute('rel', 'noopener noreferrer');
+  });
+
+  it('uses the per-alert portal_url deep link (alertWebUrl) when the alert carries one', async () => {
+    mockGetAlerts.mockResolvedValue({
+      data: [
+        makeAlert({
+          alert_id: 'da999',
+          alert_title: 'Killed mid-flight',
+          portal_url: 'https://security.microsoft.com/alerts/da999?tid=contoso',
+        }),
+      ],
+      total: 1,
+      page: 1,
+      pageSize: 100,
+    });
+
+    render(<AlertDetailsDrawer open onClose={() => {}} />);
+
+    await waitFor(() => expect(screen.getByText('Killed mid-flight')).toBeInTheDocument());
+    expect(screen.getByLabelText('Open in Microsoft Defender')).toHaveAttribute(
+      'href',
+      'https://security.microsoft.com/alerts/da999?tid=contoso',
+    );
+  });
+
+  it('renders the prevention badge with the raw remediationStatus as tooltip', async () => {
+    mockGetAlerts.mockResolvedValue({
+      data: [
+        makeAlert({
+          alert_id: 'da-prev',
+          alert_title: 'Prevented stage',
+          prevention_action: 'process_killed',
+          remediation_status: 'blocked',
+        }),
+      ],
+      total: 1,
+      page: 1,
+      pageSize: 100,
+    });
+
+    render(<AlertDetailsDrawer open onClose={() => {}} />);
+
+    await waitFor(() => expect(screen.getByText('process killed')).toBeInTheDocument());
+    expect(screen.getByText('process killed')).toHaveAttribute('title', 'blocked');
+  });
+
+  it('renders no prevention badge for detection-only Defender alerts', async () => {
+    mockGetAlerts.mockResolvedValue({
+      data: [makeAlert({ alert_id: 'da-plain', alert_title: 'Detection only' })],
+      total: 1,
+      page: 1,
+      pageSize: 100,
+    });
+
+    render(<AlertDetailsDrawer open onClose={() => {}} />);
+
+    await waitFor(() => expect(screen.getByText('Detection only')).toBeInTheDocument());
+    expect(screen.queryByText(/process killed|quarantined|kill failed/)).not.toBeInTheDocument();
   });
 
   it('calls onClose when the backdrop is clicked', async () => {

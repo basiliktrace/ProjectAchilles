@@ -49,6 +49,10 @@ export const RESULTS_INDEX_MAPPING = {
           // across every stage of a bundle when only one stage was actually
           // detected. Drives the per-stage "Detected" badge in the UI.
           defender_stage_detected: { type: 'boolean' as const },
+          // Vendor-confirmed prevention (subset of defender_detected): a
+          // matched alert carried a prevention-ish remediationStatus.
+          defender_prevented: { type: 'boolean' as const },
+          defender_prevention_action: { type: 'keyword' as const },
           // CrowdStrike equivalents of the two Defender flags above, written
           // by CrowdStrikeEnrichmentService (bundle-scoped / stage-scoped).
           crowdstrike_detected: { type: 'boolean' as const },

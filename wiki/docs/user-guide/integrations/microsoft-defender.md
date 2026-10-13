@@ -279,6 +279,21 @@ Note: the technique-only fallback in *alerts-for-test* is hostname-scoped
 whenever the host is known, so simultaneous fleet-wide runs can't
 cross-associate one host's alerts onto another host's stages.
 
+**Vendor-confirmed prevention**
+
+Defender reports what it *did* about each alert via
+`evidence[].remediationStatus` (`prevented` = blocked at launch, `blocked` =
+killed while executing, `remediated` = quarantined/cleaned). The sync
+normalizes this into `prevention_action` on the alert doc (shared vocabulary
+with CrowdStrike), and enrichment upgrades matched test stages with
+`defender_prevented: true` under the same qualification rule: stage-binary
+matches always qualify; bundle-level matches qualify only when the stage
+never reached a conclusive outcome. Prevented stages render as **Prevented**
+in the executions view and report as PREVENTED with
+`preventedBy: ['Microsoft Defender for Endpoint']` in the SB compliance
+report. Alert rows also carry `portal_url` (the Graph `alertWebUrl`) for
+exact per-alert console deep links.
+
 ### Conditional Frontend Display
 
 All Defender dashboard elements are conditionally rendered based on the `useDefenderConfig` hook:

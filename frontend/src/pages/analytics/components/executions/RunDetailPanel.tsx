@@ -16,7 +16,8 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import { falconAlertUrl } from '../../utils/falconConsole';
-import CrowdStrikePreventionBadge from '../CrowdStrikePreventionBadge';
+import { defenderAlertUrl } from '../../utils/defenderPortal';
+import PreventionBadge from '../PreventionBadge';
 import {
   ALERT_SEVERITY_CLASSES,
   BundleResultLabel,
@@ -246,11 +247,25 @@ function ExecDetailBody({
                     >
                       {alert.severity}
                     </Badge>
+                    <PreventionBadge
+                      action={alert.prevention_action}
+                      rawStatus={alert.remediation_status}
+                    />
                     <span className="flex-1 truncate text-foreground">{alert.alert_title}</span>
                     <Badge variant="default" className="px-1.5 py-0 text-[10px]">
                       {alert.status}
                     </Badge>
                     <span className="whitespace-nowrap text-faint">{deltaLabel}</span>
+                    <a
+                      href={defenderAlertUrl(alert.portal_url, alert.alert_id)}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="shrink-0 rounded p-0.5 text-faint transition-colors hover:text-foreground"
+                      aria-label="Open in Microsoft Defender"
+                      title="Open in Microsoft Defender"
+                    >
+                      <ExternalLink className="h-3 w-3" />
+                    </a>
                   </div>
                 );
               })}
@@ -296,7 +311,10 @@ function ExecDetailBody({
                     >
                       {alert.severity}
                     </Badge>
-                    <CrowdStrikePreventionBadge alert={alert} />
+                    <PreventionBadge
+                      action={alert.prevention_action}
+                      rawStatus={alert.pattern_disposition_description}
+                    />
                     <span className="flex-1 truncate text-foreground">{alert.alert_title}</span>
                     <Badge variant="default" className="px-1.5 py-0 text-[10px]">
                       {alert.status}
@@ -597,10 +615,24 @@ function BundleBody({
                       >
                         {alert.severity}
                       </Badge>
+                      <PreventionBadge
+                        action={alert.prevention_action}
+                        rawStatus={alert.remediation_status}
+                      />
                       <span className="flex-1 truncate text-foreground">{alert.alert_title}</span>
                       <Badge variant="default" className="px-1.5 py-0 text-[10px]">
                         {alert.status}
                       </Badge>
+                      <a
+                        href={defenderAlertUrl(alert.portal_url, alert.alert_id)}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="shrink-0 rounded p-0.5 text-faint transition-colors hover:text-foreground"
+                        aria-label="Open in Microsoft Defender"
+                        title="Open in Microsoft Defender"
+                      >
+                        <ExternalLink className="h-3 w-3" />
+                      </a>
                     </div>
                   ))}
                 </div>
@@ -636,7 +668,10 @@ function BundleBody({
                       >
                         {alert.severity}
                       </Badge>
-                      <CrowdStrikePreventionBadge alert={alert} />
+                      <PreventionBadge
+                      action={alert.prevention_action}
+                      rawStatus={alert.pattern_disposition_description}
+                    />
                       <span className="flex-1 truncate text-foreground">{alert.alert_title}</span>
                       <Badge variant="default" className="px-1.5 py-0 text-[10px]">
                         {alert.status}

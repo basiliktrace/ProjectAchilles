@@ -9,7 +9,7 @@ import type {
 import {
   formatPreventionAction,
   isConfirmedPrevention,
-} from '../../utils/crowdstrikePrevention';
+} from '../../utils/prevention';
 
 // ── Timestamps ─────────────────────────────────────────────────────
 
@@ -108,6 +108,7 @@ export interface BundleGroup {
   defenderDetected?: boolean;
   crowdstrikeDetected?: boolean;
   crowdstrikePrevented?: boolean;
+  defenderPrevented?: boolean;
 }
 
 export interface StandaloneRow {
@@ -138,6 +139,7 @@ export function mapGroupsToDisplayRows(groups: ExecutionGroup[]): DisplayRow[] {
         defenderDetected: group.defenderDetected,
         crowdstrikeDetected: group.crowdstrikeDetected,
         crowdstrikePrevented: group.crowdstrikePrevented,
+        defenderPrevented: group.defenderPrevented,
       };
     }
     return {
@@ -152,13 +154,14 @@ export function mapGroupsToDisplayRows(groups: ExecutionGroup[]): DisplayRow[] {
 
 /**
  * Result label for a single execution. Precedence: Protected (EDR blocked) >
- * Prevented (CrowdStrike vendor-confirmed prevention — quarantine / process
- * killed / blocked via pattern_disposition) > Detected (a Defender or
- * CrowdStrike enrichment pass correlated this doc to an alert — the cloud
- * SIEM caught what the endpoint missed) > Unprotected. Stage-specific flags
- * are preferred; the bundle-level flags are the fallback for docs predating
- * stage-specific enrichment (over-detects, but strictly safer than silently
- * showing Unprotected). 'kill_failed' never counts as Prevented.
+ * Prevented (vendor-confirmed prevention from either EDR — CrowdStrike
+ * pattern_disposition or Defender remediationStatus: quarantine / process
+ * killed / blocked) > Detected (an enrichment pass correlated this doc to an
+ * alert — the cloud SIEM caught what the endpoint missed) > Unprotected.
+ * Stage-specific flags are preferred; the bundle-level flags are the fallback
+ * for docs predating stage-specific enrichment (over-detects, but strictly
+ * safer than silently showing Unprotected). 'kill_failed' never counts as
+ * Prevented.
  */
 export function ExecResultLabel({ exec, compact }: { exec: EnrichedTestExecution; compact?: boolean }) {
   const iconClass = compact ? 'w-3.5 h-3.5' : 'w-4 h-4';
@@ -183,11 +186,16 @@ export function ExecResultLabel({ exec, compact }: { exec: EnrichedTestExecution
   }
   if (result === 'unprotected') {
     const csDetected = exec.crowdstrike_stage_detected ?? exec.crowdstrike_detected;
+    const defDetected = exec.defender_stage_detected ?? exec.defender_detected;
     const isPrevented =
       exec.crowdstrike_prevented ||
-      (csDetected && isConfirmedPrevention(exec.crowdstrike_prevention_action));
+      (csDetected && isConfirmedPrevention(exec.crowdstrike_prevention_action)) ||
+      exec.defender_prevented ||
+      (defDetected && isConfirmedPrevention(exec.defender_prevention_action));
     if (isPrevented) {
-      const action = formatPreventionAction(exec.crowdstrike_prevention_action);
+      const action = formatPreventionAction(
+        exec.crowdstrike_prevention_action ?? exec.defender_prevention_action,
+      );
       return (
         <span className="inline-flex items-center gap-1.5 text-accent">
           <ShieldCheck className={iconClass} />
@@ -197,8 +205,7 @@ export function ExecResultLabel({ exec, compact }: { exec: EnrichedTestExecution
         </span>
       );
     }
-    const isDetected =
-      (exec.defender_stage_detected ?? exec.defender_detected) || csDetected;
+    const isDetected = defDetected || csDetected;
     if (isDetected) {
       return (
         <span className="inline-flex items-center gap-1.5 text-warning">
@@ -232,7 +239,7 @@ export function BundleResultLabel({ group, compact }: { group: BundleGroup; comp
   const iconClass = compact ? 'w-3.5 h-3.5' : 'w-4 h-4';
   const textClass = compact ? 'text-xs font-medium' : 'text-sm font-medium';
   const isProtected = group.protectedCount > 0;
-  const isPrevented = !isProtected && group.crowdstrikePrevented;
+  const isPrevented = !isProtected && (group.crowdstrikePrevented || group.defenderPrevented);
   const isDetected =
     !isProtected && !isPrevented && (group.defenderDetected || group.crowdstrikeDetected);
 

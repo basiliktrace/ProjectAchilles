@@ -19,6 +19,8 @@ vi.mock('../graph-client.js', () => ({
 // Auto-resolve mode is mutable via the exported setter so individual tests
 // can flip it without re-mocking the whole module.
 let mockAutoResolveMode: 'disabled' | 'dry_run' | 'enabled' = 'disabled';
+const mockGetDefenderSyncTimestamps = vi.fn().mockReturnValue({});
+const mockSaveDefenderSyncTimestamps = vi.fn();
 vi.mock('../../integrations/settings.js', () => ({
   IntegrationsSettingsService: class {
     getDefenderCredentials = () => ({
@@ -28,6 +30,8 @@ vi.mock('../../integrations/settings.js', () => ({
     });
     isDefenderConfigured = () => true;
     getAutoResolveMode = () => mockAutoResolveMode;
+    getDefenderSyncTimestamps = mockGetDefenderSyncTimestamps;
+    saveDefenderSyncTimestamps = mockSaveDefenderSyncTimestamps;
   },
 }));
 
@@ -101,6 +105,7 @@ describe('DefenderSyncService', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     service = new DefenderSyncService();
+    mockGetDefenderSyncTimestamps.mockReturnValue({});
 
     // Default: no errors in bulk responses
     mockBulk.mockResolvedValue({ errors: false, items: [] });
@@ -313,6 +318,128 @@ describe('DefenderSyncService', () => {
       expect(mockGetAlerts).toHaveBeenCalledWith(
         expect.stringContaining('lastUpdateDateTime ge'),
       );
+    });
+
+    it('sync_version 3 (pre-prevention fields) forces a full re-sync', async () => {
+      // ALERT_SYNC_VERSION=4 added prevention_action / remediation_status /
+      // portal_url — existing deployments must re-fetch the full window once
+      // so alert docs gain the new fields.
+      mockGetDefenderSyncTimestamps.mockReturnValue({
+        last_alert_sync: '2026-09-01T00:00:00Z',
+        sync_version: 3,
+      });
+      mockGetAlerts.mockResolvedValue([]);
+
+      const freshService = new DefenderSyncService();
+      await freshService.syncAlerts();
+
+      // lastAlertSync must NOT have been adopted — the filter is the 90-day
+      // lookback, not the stale checkpoint.
+      expect(mockGetAlerts).toHaveBeenCalledWith(
+        expect.stringContaining('createdDateTime ge'),
+      );
+    });
+  });
+
+  // ── Prevention disposition (remediationStatus → prevention_action) ──
+
+  describe('prevention disposition', () => {
+    const alertWithEvidence = (evidence: Array<Record<string, unknown>>, extra: Record<string, unknown> = {}) => ({
+      id: 'alert-prev',
+      title: 'Prevention test',
+      description: '',
+      severity: 'high',
+      status: 'new',
+      category: 'Malware',
+      serviceSource: 'microsoftDefenderForEndpoint',
+      createdDateTime: '2026-10-01T12:00:00Z',
+      lastUpdateDateTime: '2026-10-01T12:05:00Z',
+      mitreTechniques: [],
+      recommendedActions: '',
+      evidence,
+      ...extra,
+    });
+
+    const fileEvidence = (status: string) => ({
+      '@odata.type': '#microsoft.graph.security.processEvidence',
+      remediationStatus: status,
+      verdict: 'malicious',
+      imageFile: { fileName: 'stage.exe', filePath: 'C:\\F0\\stage.exe' },
+    });
+    const deviceEvidence = (status: string) => ({
+      '@odata.type': '#microsoft.graph.security.deviceEvidence',
+      remediationStatus: status,
+      verdict: 'malicious',
+      deviceDnsName: 'WIN-LAB-01',
+    });
+
+    const syncOneAndGetDoc = async (alert: Record<string, unknown>) => {
+      mockGetAlerts.mockResolvedValue([alert]);
+      await service.syncAlerts();
+      return mockBulk.mock.calls[0][0].operations[1].doc;
+    };
+
+    it('blocked (blocked while executing) → process_killed', async () => {
+      const doc = await syncOneAndGetDoc(alertWithEvidence([fileEvidence('blocked')]));
+      expect(doc.prevention_action).toBe('process_killed');
+      expect(doc.remediation_status).toBe('blocked');
+    });
+
+    it('prevented (prevented from executing) → blocked', async () => {
+      const doc = await syncOneAndGetDoc(alertWithEvidence([fileEvidence('prevented')]));
+      expect(doc.prevention_action).toBe('blocked');
+      expect(doc.remediation_status).toBe('prevented');
+    });
+
+    it('remediated (completed) → quarantined', async () => {
+      const doc = await syncOneAndGetDoc(alertWithEvidence([fileEvidence('remediated')]));
+      expect(doc.prevention_action).toBe('quarantined');
+      expect(doc.remediation_status).toBe('remediated');
+    });
+
+    it('strongest completed action wins across evidence items (remediated > blocked > prevented)', async () => {
+      const doc = await syncOneAndGetDoc(alertWithEvidence([
+        fileEvidence('prevented'),
+        fileEvidence('remediated'),
+        fileEvidence('blocked'),
+      ]));
+      expect(doc.prevention_action).toBe('quarantined');
+      expect(doc.remediation_status).toBe('remediated');
+    });
+
+    it('prefers filename/path-carrying evidence over other evidence', async () => {
+      // Device evidence says remediated, but the file evidence (the process
+      // actually blocked) says prevented — file evidence wins.
+      const doc = await syncOneAndGetDoc(alertWithEvidence([
+        deviceEvidence('remediated'),
+        fileEvidence('prevented'),
+      ]));
+      expect(doc.prevention_action).toBe('blocked');
+      expect(doc.remediation_status).toBe('prevented');
+    });
+
+    it('falls back to non-file evidence when no file evidence has a prevention-ish status', async () => {
+      const doc = await syncOneAndGetDoc(alertWithEvidence([deviceEvidence('blocked')]));
+      expect(doc.prevention_action).toBe('process_killed');
+      expect(doc.remediation_status).toBe('blocked');
+    });
+
+    it('detection-only statuses (active/running/none/unremediated) yield no prevention fields', async () => {
+      const doc = await syncOneAndGetDoc(alertWithEvidence([
+        fileEvidence('active'),
+        deviceEvidence('unremediated'),
+        deviceEvidence('none'),
+      ]));
+      expect(doc.prevention_action).toBeUndefined();
+      expect(doc.remediation_status).toBeUndefined();
+      expect(doc.portal_url).toBeUndefined();
+    });
+
+    it('captures alertWebUrl as portal_url', async () => {
+      const doc = await syncOneAndGetDoc(alertWithEvidence([], {
+        alertWebUrl: 'https://security.microsoft.com/alerts/alert-prev?tid=abc',
+      }));
+      expect(doc.portal_url).toBe('https://security.microsoft.com/alerts/alert-prev?tid=abc');
     });
   });
 

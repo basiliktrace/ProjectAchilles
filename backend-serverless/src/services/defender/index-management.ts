@@ -54,6 +54,12 @@ export const DEFENDER_INDEX_MAPPING = {
       updated_at: { type: 'date' as const },
       resolved_at: { type: 'date' as const },
       recommended_actions: { type: 'text' as const },
+      // Prevention disposition (additive). prevention_action is the derived
+      // enum (process_killed/blocked/quarantined); remediation_status keeps
+      // the raw Defender value for audit/display.
+      prevention_action: { type: 'keyword' as const },
+      remediation_status: { type: 'keyword' as const },
+      portal_url: { type: 'keyword' as const },
       // text + .keyword multi-field: matches the dynamic mapping that ES
       // produced for the original index on Render. Queries target both bare
       // and .keyword paths via should[] disjunction — see evidence-correlation.ts

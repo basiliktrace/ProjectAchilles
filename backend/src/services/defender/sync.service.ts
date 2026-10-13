@@ -32,7 +32,7 @@ const INITIAL_ALERT_LOOKBACK_DAYS = 90;
  * force a full re-sync on all deployments. The persisted sync_version is
  * compared against this; a mismatch clears lastAlertSync.
  */
-const ALERT_SYNC_VERSION = 3; // v3: + evidence_filepaths (Issue #2 / Option B)
+const ALERT_SYNC_VERSION = 4; // v4: + prevention_action / remediation_status / portal_url (docs/defender-prevention-action-detection.md)
 
 export class DefenderSyncService {
   private graphClient: MicrosoftGraphClient | null = null;
@@ -196,6 +196,23 @@ export class DefenderSyncService {
     const filenames = new Set<string>();
     const filepaths = new Set<string>();
 
+    // Prevention derivation from evidence[].remediationStatus. Prevention-ish
+    // values only ('blocked' blocked-while-executing, 'prevented' prevented
+    // from executing, 'remediated' remediation completed) — everything else
+    // (active, running, none, unremediated, …) is detection-only. Evidence
+    // carrying a filename/path takes priority; if none of it has a
+    // prevention-ish status, fall back to any evidence item that does.
+    // Strongest completed action wins: remediated > blocked > prevented.
+    // See docs/defender-prevention-action-detection.md.
+    const PREVENTIONISH_RANK: Record<string, number> = { remediated: 3, blocked: 2, prevented: 1 };
+    const NORMALIZE: Record<string, string> = {
+      blocked: 'process_killed',
+      prevented: 'blocked',
+      remediated: 'quarantined',
+    };
+    const fileEvidenceStatuses: string[] = [];
+    const otherStatuses: string[] = [];
+
     for (const ev of alert.evidence ?? []) {
       // Device evidence → hostname
       if (ev.deviceDnsName) {
@@ -221,7 +238,19 @@ export class DefenderSyncService {
       if (ev.fileDetails?.filePath) {
         filepaths.add(ev.fileDetails.filePath.toLowerCase());
       }
+
+      const status = ev.remediationStatus;
+      if (typeof status !== 'string' || !(status in PREVENTIONISH_RANK)) continue;
+      const hasFile = !!(
+        ev.imageFile?.fileName || ev.imageFile?.filePath
+        || ev.parentProcess?.imageFile?.fileName || ev.parentProcess?.imageFile?.filePath
+        || ev.fileDetails?.fileName || ev.fileDetails?.filePath
+      );
+      (hasFile ? fileEvidenceStatuses : otherStatuses).push(status);
     }
+
+    const statusPool = fileEvidenceStatuses.length > 0 ? fileEvidenceStatuses : otherStatuses;
+    const winningStatus = statusPool.sort((a, b) => PREVENTIONISH_RANK[b] - PREVENTIONISH_RANK[a])[0];
 
     return {
       doc_type: 'alert',
@@ -242,6 +271,11 @@ export class DefenderSyncService {
       evidence_hostnames: Array.from(hostnames),
       evidence_filenames: Array.from(filenames),
       evidence_filepaths: Array.from(filepaths),
+      ...(winningStatus ? {
+        prevention_action: NORMALIZE[winningStatus],
+        remediation_status: winningStatus,
+      } : {}),
+      ...(alert.alertWebUrl ? { portal_url: alert.alertWebUrl } : {}),
     };
   }
 
