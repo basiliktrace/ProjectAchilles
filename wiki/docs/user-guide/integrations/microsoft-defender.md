@@ -262,6 +262,7 @@ Maps MITRE ATT&CK techniques present in both datasets to identify:
 Compares the internal Defense Score (from test results) with Microsoft Secure Score over time using aligned date histograms, enabling teams to see whether improving their Secure Score configuration also improves real detection effectiveness.
 
 **Stages killed by the EDR**
+See [Exit Codes & Outcomes](../analytics/exit-codes-and-outcomes) for the canonical mapping of exit codes, flags, labels, and outcomes.
 
 A stage the EDR kills at launch or mid-run produces an error-category exit
 code (`999`, `259`, or an unsigned NTSTATUS-style kill code coerced to `999`

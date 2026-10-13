@@ -67,6 +67,7 @@ const sidebars: SidebarsConfig = {
           label: 'Analytics Dashboard',
           items: [
             'user-guide/analytics/defense-score',
+            'user-guide/analytics/exit-codes-and-outcomes',
             'user-guide/analytics/heatmaps-treemaps',
             'user-guide/analytics/execution-table',
             'user-guide/analytics/multi-index',
