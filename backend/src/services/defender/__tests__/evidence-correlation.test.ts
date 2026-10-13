@@ -110,13 +110,16 @@ describe('buildDefenderEvidenceQuery', () => {
     // on `timestamp` inside its should[].
     const windowWrapper = must.find((c: any) =>
       'bool' in c && Array.isArray(c.bool.should) && c.bool.should.some((s: any) =>
-        'range' in s && 'timestamp' in s.range,
+        'range' in s && 'created_at' in s.range,
       ),
     );
     expect(windowWrapper).toBeDefined();
     expect(windowWrapper.bool.minimum_should_match).toBe(1);
 
-    const tsRange = windowWrapper.bool.should.find((s: any) => 'range' in s && 'timestamp' in s.range);
+    const tsRange = windowWrapper.bool.should.find((s: any) => 'bool' in s)?.bool.filter
+      .find((f: any) => 'range' in f && 'timestamp' in f.range);
+    expect(windowWrapper.bool.should.find((s: any) => 'bool' in s)?.bool.must_not)
+      .toEqual([{ terms: { status: ['resolved', 'closed'] } }]);
     expect(tsRange.range.timestamp.gte).toBe('2026-03-27T07:47:54.000Z');
     expect(tsRange.range.timestamp.lte).toBe('2026-03-27T08:22:54.000Z');
 
@@ -367,10 +370,11 @@ describe('buildStageDefenderEvidenceQuery', () => {
     const must = (q.bool as any).must as any[];
     const windowWrapper = must.find((c: any) =>
       'bool' in c && Array.isArray(c.bool.should) && c.bool.should.some((s: any) =>
-        'range' in s && 'timestamp' in s.range,
+        'range' in s && 'created_at' in s.range,
       ),
     )!;
-    const range = windowWrapper.bool.should.find((s: any) => 'range' in s && 'timestamp' in s.range);
+    const range = windowWrapper.bool.should.find((s: any) => 'bool' in s)?.bool.filter
+      .find((f: any) => 'range' in f && 'timestamp' in f.range);
     const from = new Date(range.range.timestamp.gte).getTime();
     const to = new Date(range.range.timestamp.lte).getTime();
     const test = new Date(baseInput.routing_event_time).getTime();
@@ -404,15 +408,26 @@ describe('buildAlertTimeWindowQuery', () => {
   // changes (e.g., clause reordering).
   const alertMatches = (
     clause: any,
-    alert: { timestamp?: string; created_at?: string },
+    alert: { timestamp?: string; created_at?: string; status?: string },
   ): boolean => {
     const should = clause.bool?.should ?? [];
     return should.some((s: any) => {
-      if (!('range' in s)) return false;
-      const [field, range] = Object.entries(s.range)[0] as [string, { gte: string; lte: string }];
-      const val = (alert as any)[field];
-      if (typeof val !== 'string') return false;
-      return inWindow(val) && val >= range.gte && val <= range.lte;
+      if ('range' in s) {
+        const [field, range] = Object.entries(s.range)[0] as [string, { gte: string; lte: string }];
+        const val = (alert as any)[field];
+        if (typeof val !== 'string') return false;
+        return inWindow(val) && val >= range.gte && val <= range.lte;
+      }
+      if ('bool' in s) {
+        // updated-timestamp path: terminal alerts (resolved/closed) are excluded
+        const range = s.bool.filter?.[0]?.range?.timestamp;
+        if (!range) return false;
+        const terminal = s.bool.must_not?.[0]?.terms?.status ?? [];
+        if (alert.status && terminal.includes(alert.status)) return false;
+        const val = alert.timestamp;
+        return typeof val === 'string' && inWindow(val) && val >= range.gte && val <= range.lte;
+      }
+      return false;
     });
   };
 
@@ -445,6 +460,39 @@ describe('buildAlertTimeWindowQuery', () => {
     expect(alertMatches(clause, {
       timestamp:  '2026-05-13T12:15:00.000Z',
       created_at: '2026-05-13T12:15:00.000Z',
+    })).toBe(true);
+  });
+
+  it('does NOT match a terminal alert re-floated by an in-window update (auto-resolve echo)', () => {
+    // The alert fired weeks ago; our auto-resolve (or an analyst) resolved it
+    // inside the test window, bumping lastUpdateDateTime into the window.
+    // created_at is stale and status is terminal — no match.
+    const clause = buildAlertTimeWindowQuery(FROM, TO);
+    expect(alertMatches(clause, {
+      timestamp:  '2026-05-13T12:15:00.000Z',
+      created_at: '2026-04-01T08:00:00.000Z',
+      status:     'closed',
+    })).toBe(false);
+    expect(alertMatches(clause, {
+      timestamp:  '2026-05-13T12:15:00.000Z',
+      created_at: '2026-04-01T08:00:00.000Z',
+      status:     'resolved',
+    })).toBe(false);
+  });
+
+  it('still matches a re-fired aggregated alert via timestamp when status is active (reopened)', () => {
+    // Falcon/Defender aggregates re-fires into the same alert: created_at is
+    // old, updated lands in the window, status flips back to reopened/new.
+    const clause = buildAlertTimeWindowQuery(FROM, TO);
+    expect(alertMatches(clause, {
+      timestamp:  '2026-05-13T12:15:00.000Z',
+      created_at: '2026-04-01T08:00:00.000Z',
+      status:     'reopened',
+    })).toBe(true);
+    expect(alertMatches(clause, {
+      timestamp:  '2026-05-13T12:15:00.000Z',
+      created_at: '2026-04-01T08:00:00.000Z',
+      status:     'new',
     })).toBe(true);
   });
 

@@ -65,6 +65,14 @@ drawers and execution detail panels.
   [Defender ASR exclusion](../integrations/microsoft-defender)); counting it
   would conflate our own configuration with detection
 
+**Time-window semantics:** an alert correlates with a test when its
+`created_at` falls in the −5/+30-minute window, or when its last-update time
+does **and the alert is still active** (`new`/`in_progress`/`reopened`).
+Terminal alerts (`resolved`/`closed`) never re-enter a window via updates —
+this prevents lifecycle events (including our own auto-resolve) from
+re-floating an old alert onto a new run, while aggregated alerts that
+genuinely re-fire (status flips back to active) still correlate.
+
 ## 3. Stage labels in the UI
 
 Each stage row in the executions view resolves to exactly one label, by
