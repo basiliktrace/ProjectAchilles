@@ -38,6 +38,7 @@ interface FixtureControl {
   tactics: string[];
   defender_stage_detected?: boolean;
   defender_detected?: boolean;
+  crowdstrike_detected?: boolean;
   crowdstrike_prevented?: boolean;
   hostname?: string;
   event_time?: string;
@@ -74,6 +75,9 @@ function makeBundleHit(control: FixtureControl) {
   }
   if (control.defender_detected !== undefined) {
     source['f0rtika.defender_detected'] = control.defender_detected;
+  }
+  if (control.crowdstrike_detected !== undefined) {
+    source['f0rtika.crowdstrike_detected'] = control.crowdstrike_detected;
   }
   if (control.crowdstrike_prevented !== undefined) {
     source['f0rtika.crowdstrike_prevented'] = control.crowdstrike_prevented;
@@ -242,12 +246,12 @@ describe('sbReport.service.ts', () => {
       expect(report.executions[0].preventedBy).toEqual(['Microsoft Defender for Endpoint']);
     });
 
-    it('maps exit 101 with crowdstrike_prevented to PREVENTED with preventedBy CrowdStrike Falcon', async () => {
+    it('maps a killed stage (exit 999) with crowdstrike_prevented to PREVENTED with preventedBy CrowdStrike Falcon', async () => {
       // Vendor-confirmed prevention: Falcon's pattern_disposition on the
-      // correlated alert showed a kill/quarantine/block — deterministic
-      // evidence, stronger than a detection flag.
+      // correlated alert showed a kill — deterministic evidence. Killed stages
+      // never reach a conclusive exit code, so the flag must upgrade 999/259/0.
       const hits = [
-        makeBundleHit({ control_id: 'T1486', validator: 'Stage 5', exit_code: 101, techniques: ['T1486'], tactics: ['impact'], crowdstrike_prevented: true }),
+        makeBundleHit({ control_id: 'T1486', validator: 'Stage 5', exit_code: 999, techniques: ['T1486'], tactics: ['impact'], crowdstrike_prevented: true }),
       ];
       mockSearch.mockResolvedValue(esSearchResponse(hits));
 
@@ -258,10 +262,26 @@ describe('sbReport.service.ts', () => {
       expect(report.executions[0].preventedBy).toEqual(['CrowdStrike Falcon']);
     });
 
+    it('does NOT upgrade a conclusive-executed stage (exit 101) to PREVENTED on the flag', async () => {
+      // A stage that ran to completion (101 = attack succeeded) cannot have
+      // been prevented — even if a bundle-level alert match carried a
+      // prevention disposition for a sibling stage's kill.
+      const hits = [
+        makeBundleHit({ control_id: 'T1059.001', validator: 'Stage 1', exit_code: 101, techniques: ['T1059.001'], tactics: ['execution'], crowdstrike_prevented: true, crowdstrike_detected: true }),
+      ];
+      mockSearch.mockResolvedValue(esSearchResponse(hits));
+
+      const report = await createService().generateSbReport({ ...WINDOW, org: SB_ORG_UUID });
+
+      expect(report.executions[0].outcome).toBe('DETECTED');
+      expect(report.executions[0].preventedBy).toEqual([]);
+      expect(report.executions[0].detectedBy).toEqual(['CrowdStrike Falcon']);
+    });
+
     it('lists both vendors when a stage is Defender-detected AND CrowdStrike-prevented', async () => {
       const hits = [
         makeBundleHit({
-          control_id: 'T1003.001', validator: 'Stage 2', exit_code: 101, techniques: ['T1003.001'], tactics: ['credential-access'],
+          control_id: 'T1003.001', validator: 'Stage 2', exit_code: 999, techniques: ['T1003.001'], tactics: ['credential-access'],
           defender_detected: true, crowdstrike_prevented: true,
         }),
       ];
@@ -273,10 +293,9 @@ describe('sbReport.service.ts', () => {
       expect(report.executions[0].preventedBy).toEqual(['Microsoft Defender for Endpoint', 'CrowdStrike Falcon']);
     });
 
-    it('does not upgrade inconclusive exits to PREVENTED on crowdstrike_prevented alone', async () => {
-      // The enrichment eligibility filter means prevented flags only land on
-      // conclusive-code docs in practice; if one ever shows up on an
-      // inconclusive doc, the inconclusive outcome wins.
+    it('upgrades inconclusive exits to PREVENTED on vendor-confirmed prevention', async () => {
+      // A stage killed mid-run may report 259 (timeout/still-active) — the
+      // vendor's prevention disposition on the matched alert is the truth.
       const hits = [
         makeBundleHit({ control_id: 'T1059.001', validator: 'Stage 1', exit_code: 259, techniques: ['T1059.001'], tactics: ['execution'], crowdstrike_prevented: true }),
       ];
@@ -284,8 +303,8 @@ describe('sbReport.service.ts', () => {
 
       const report = await createService().generateSbReport({ ...WINDOW, org: SB_ORG_UUID });
 
-      expect(report.executions[0].outcome).toBe('ERROR');
-      expect(report.executions[0].preventedBy).toEqual([]);
+      expect(report.executions[0].outcome).toBe('PREVENTED');
+      expect(report.executions[0].preventedBy).toEqual(['CrowdStrike Falcon']);
     });
 
     it('maps inconclusive exits (200/259/260) to ERROR with an inconclusive note in evidenceRef', async () => {

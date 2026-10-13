@@ -647,9 +647,11 @@ describe('CrowdStrikeEnrichmentService', () => {
     },
   });
 
-  it('wide-match alert with prevention_action process_killed → test doc gains crowdstrike_prevented + action', async () => {
+  it('wide-match alert with prevention_action process_killed on a non-conclusive doc → crowdstrike_prevented + action', async () => {
     const service = createService();
-    mockSearch.mockResolvedValueOnce(makeScanResponse([eligibleDoc('d1', 'bundle-A::T1')]));
+    const base = eligibleDoc('d1', 'bundle-A::T1');
+    const killedDoc = { ...base, _source: { ...base._source, event: { ERROR: 999 } } };
+    mockSearch.mockResolvedValueOnce(makeScanResponse([killedDoc]));
     mockMsearch.mockResolvedValueOnce(
       makeMsearchResponse([makePreventingMsearchHits(['alert-1'], 'process_killed')]),
     );
@@ -664,6 +666,29 @@ describe('CrowdStrikeEnrichmentService', () => {
     expect(testPatch.crowdstrike_detected).toBe(true);
     expect(testPatch.crowdstrike_prevented).toBe(true);
     expect(testPatch.crowdstrike_prevention_action).toBe('process_killed');
+  });
+
+  it('wide-match preventing alert on a CONCLUSIVE-executed doc (101) → detected only, NO prevented', async () => {
+    // Prod lesson (SB tenant, 2026-10-12): Falcon killed T1486 while sibling
+    // stages had already exited 101 — those siblings must not be upgraded to
+    // prevented by the bundle-level (wide) match.
+    const service = createService();
+    const base = eligibleDoc('d1', 'bundle-A::T1');
+    const executedDoc = { ...base, _source: { ...base._source, event: { ERROR: 101 } } };
+    mockSearch.mockResolvedValueOnce(makeScanResponse([executedDoc]));
+    mockMsearch.mockResolvedValueOnce(
+      makeMsearchResponse([makePreventingMsearchHits(['alert-1'], 'process_killed')]),
+    );
+    mockBulk.mockResolvedValueOnce(makeBulkResponse([{ ok: true }, { ok: true }]));
+
+    const result = await service.runEnrichmentPass();
+
+    expect(result.detected).toBe(1);
+    const ops = mockBulk.mock.calls[0][0].operations;
+    const testPatch = ops[1].doc.f0rtika;
+    expect(testPatch.crowdstrike_detected).toBe(true);
+    expect(testPatch.crowdstrike_prevented).toBeUndefined();
+    expect(testPatch.crowdstrike_prevention_action).toBeUndefined();
   });
 
   it('stage-match alert with prevention_action blocked → test doc gains prevented flags alongside stage flag', async () => {

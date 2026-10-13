@@ -66,9 +66,15 @@ This is deterministic vendor evidence of *prevention* — no inference needed.
      existing alert docs gain the new fields.
 
 2. **Enrichment** — the alert-side msearch sub-queries currently discard `_source`;
-   include `prevention_action`. When a matched alert (wide **or** stage query) has a
-   `prevention_action` of `quarantined` / `process_killed` / `blocked`, set on the test
-   doc, alongside the existing detected flags:
+   include `_source: ['prevention_action']`. Prevention-flag qualification rule
+   (tightened after production data showed bundle-level overclaiming):
+   - **Stage matches always qualify** — the alert names this stage's own binary.
+   - **Wide/bundle matches qualify only when the stage did NOT reach a conclusive
+     outcome** (`event.ERROR` ∉ {101, 105, 126, 127}). A sibling stage that already
+     exited 101 (executed unprotected) was not prevented by the alert that killed a
+     later stage — observed in prod when Falcon killed T1486 while stages 1–4 had
+     completed.
+   Qualifying matches set on the test doc, alongside the existing detected flags:
    - `f0rtika.crowdstrike_prevented: true`
    - `f0rtika.crowdstrike_prevention_action: '<action>'`
    Results-index mapping gains the two additive fields (both backends + python script).
@@ -77,6 +83,10 @@ This is deterministic vendor evidence of *prevention* — no inference needed.
    already counts detected as protected, so no score-formula change. The SB compliance
    report gains the distinction: prevented stages report outcome PREVENTED with
    `preventedBy: ['CrowdStrike Falcon']` (it already has the `preventedBy` list shape).
+   The report applies the same guard as enrichment: a conclusive-executed stage
+   (exit 101) is never upgraded to PREVENTED, while error/inconclusive exits
+   (999/259/0) with a vendor-confirmed kill are — killed stages never reach
+   conclusive codes.
 
 4. **Frontend** —
    - `RunDetailPanel` / executions `shared.tsx`: a `crowdstrike_prevented` stage renders
