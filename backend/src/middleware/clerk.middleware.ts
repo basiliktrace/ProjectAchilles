@@ -137,7 +137,19 @@ export function getUserRole(auth: any): AppRole | undefined {
 }
 
 /**
- * Middleware factory: require one or more permissions.
+ * True when the request's principal holds every permission. Same two paths
+ * as requirePermission: an API key's explicit permission Set first, then the
+ * Clerk role (no role = explorer). Use it for optional sections a route
+ * includes only for callers allowed to see them.
+ */
+export function hasRequestPermission(req: Request, ...permissions: Permission[]): boolean {
+  const explicit = (req.auth as unknown as { apiKeyPermissions?: ReadonlySet<Permission> })?.apiKeyPermissions;
+  if (explicit instanceof Set) return permissions.every((p) => explicit.has(p));
+  return hasPermissions(getUserRole(req.auth), ...permissions);
+}
+
+/**
+ * Middleware factory: require one or more permissions (see hasRequestPermission).
  *
  * Two paths:
  *   1. If `req.auth` carries an explicit `apiKeyPermissions` Set (attached by
@@ -148,25 +160,10 @@ export function getUserRole(auth: any): AppRole | undefined {
  */
 export function requirePermission(...permissions: Permission[]) {
   return (req: Request, res: Response, next: NextFunction): void => {
-    const explicit = (req.auth as unknown as {
-      apiKeyPermissions?: ReadonlySet<Permission>;
-    })?.apiKeyPermissions;
-
-    if (explicit instanceof Set) {
-      if (permissions.every((p) => explicit.has(p))) {
-        next();
-        return;
-      }
-      res.status(403).json({ success: false, error: 'Insufficient permissions' });
-      return;
-    }
-
-    const role = getUserRole(req.auth);
-    if (hasPermissions(role, ...permissions)) {
+    if (hasRequestPermission(req, ...permissions)) {
       next();
       return;
     }
     res.status(403).json({ success: false, error: 'Insufficient permissions' });
   };
 }
-

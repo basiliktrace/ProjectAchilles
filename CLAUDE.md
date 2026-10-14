@@ -128,6 +128,7 @@ SQLite has no `ALTER COLUMN`, so changing CHECK constraints requires recreating 
 | `/api/agent/*` | Agent key | Device endpoints (enroll, heartbeat, tasks) |
 | `/api/tests/*` | Clerk | Build system, certificates |
 | `/api/integrations/alerts/*` | Clerk | Alert thresholds, Slack/email config |
+| `/api/reports/*` | Clerk | Report payloads: SB-PC-2026-001 JSON export, print-ready execution report (`/executions`) |
 
 ### API Key Scopes
 

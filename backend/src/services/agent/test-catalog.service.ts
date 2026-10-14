@@ -10,12 +10,18 @@ import type { TestMetadata, TestSource } from '../../types/test.js';
 const CATEGORY_DIRS = ['cyber-hygiene', 'intel-driven', 'mitre-top10', 'phase-aligned'];
 
 let catalog: Map<string, TestMetadata> = new Map();
+let directories: Map<string, string> = new Map();
 
 /**
  * Scan one source path and add entries to the catalog map.
  * Skips UUIDs already present (first source wins).
  */
-function scanSourcePath(sourcePath: string, provenance: TestSource['provenance'], next: Map<string, TestMetadata>): void {
+function scanSourcePath(
+  sourcePath: string,
+  provenance: TestSource['provenance'],
+  next: Map<string, TestMetadata>,
+  nextDirs: Map<string, string>,
+): void {
   for (const category of CATEGORY_DIRS) {
     const categoryDir = path.join(sourcePath, category);
 
@@ -41,6 +47,7 @@ function scanSourcePath(sourcePath: string, provenance: TestSource['provenance']
         const metadata = MetadataExtractor.extractTestMetadata(testDir, uuid, category);
         metadata.source = provenance;
         next.set(uuid, metadata);
+        nextDirs.set(uuid, testDir);
       } catch (err) {
         console.warn(`[TestCatalog] Failed to extract metadata for ${uuid}:`,
           err instanceof Error ? err.message : err);
@@ -60,12 +67,14 @@ export function initCatalog(sources: TestSource[] | string): void {
     : sources;
 
   const next = new Map<string, TestMetadata>();
+  const nextDirs = new Map<string, string>();
 
   for (const source of normalized) {
-    scanSourcePath(source.path, source.provenance, next);
+    scanSourcePath(source.path, source.provenance, next, nextDirs);
   }
 
   catalog = next;
+  directories = nextDirs;
   console.log(`[TestCatalog] Loaded ${catalog.size} test entries`);
 }
 
@@ -75,6 +84,14 @@ export function initCatalog(sources: TestSource[] | string): void {
  */
 export function getTestMetadata(uuid: string): TestMetadata | null {
   return catalog.get(uuid) ?? null;
+}
+
+/**
+ * Absolute directory of a test in the library (e.g. to read its
+ * DEFENSE_GUIDANCE.md). Returns null if the UUID is not in the catalog.
+ */
+export function getTestDirectory(uuid: string): string | null {
+  return directories.get(uuid) ?? null;
 }
 
 /**
@@ -89,4 +106,5 @@ export function getCatalogSize(): number {
  */
 export function resetCatalog(): void {
   catalog = new Map();
+  directories = new Map();
 }

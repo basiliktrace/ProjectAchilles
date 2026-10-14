@@ -10,6 +10,7 @@ import type { TestMetadata } from '../../types/test.js';
 const CATEGORY_DIRS = ['cyber-hygiene', 'intel-driven', 'mitre-top10', 'phase-aligned'];
 
 let catalog: Map<string, TestMetadata> = new Map();
+let directories: Map<string, string> = new Map();
 
 /**
  * Scan the test library and build an in-memory UUID → TestMetadata map.
@@ -17,6 +18,7 @@ let catalog: Map<string, TestMetadata> = new Map();
  */
 export function initCatalog(testsSourcePath: string): void {
   const next = new Map<string, TestMetadata>();
+  const nextDirs = new Map<string, string>();
 
   for (const category of CATEGORY_DIRS) {
     const categoryDir = path.join(testsSourcePath, category);
@@ -39,6 +41,7 @@ export function initCatalog(testsSourcePath: string): void {
       try {
         const metadata = MetadataExtractor.extractTestMetadata(testDir, uuid, category);
         next.set(uuid, metadata);
+        nextDirs.set(uuid, testDir);
       } catch (err) {
         console.warn(`[TestCatalog] Failed to extract metadata for ${uuid}:`,
           err instanceof Error ? err.message : err);
@@ -47,6 +50,7 @@ export function initCatalog(testsSourcePath: string): void {
   }
 
   catalog = next;
+  directories = nextDirs;
   console.log(`[TestCatalog] Loaded ${catalog.size} test entries`);
 }
 
@@ -56,6 +60,14 @@ export function initCatalog(testsSourcePath: string): void {
  */
 export function getTestMetadata(uuid: string): TestMetadata | null {
   return catalog.get(uuid) ?? null;
+}
+
+/**
+ * Absolute directory of a test in the library (e.g. to read its
+ * DEFENSE_GUIDANCE.md). Returns null if the UUID is not in the catalog.
+ */
+export function getTestDirectory(uuid: string): string | null {
+  return directories.get(uuid) ?? null;
 }
 
 /**
@@ -70,4 +82,5 @@ export function getCatalogSize(): number {
  */
 export function resetCatalog(): void {
   catalog = new Map();
+  directories = new Map();
 }

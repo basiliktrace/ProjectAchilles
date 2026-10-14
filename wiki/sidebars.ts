@@ -70,6 +70,7 @@ const sidebars: SidebarsConfig = {
             'user-guide/analytics/exit-codes-and-outcomes',
             'user-guide/analytics/heatmaps-treemaps',
             'user-guide/analytics/execution-table',
+            'user-guide/analytics/execution-report',
             'user-guide/analytics/multi-index',
             'user-guide/analytics/risk-acceptance',
             'user-guide/analytics/microsoft-defender',

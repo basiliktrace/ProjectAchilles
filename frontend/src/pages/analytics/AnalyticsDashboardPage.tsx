@@ -23,7 +23,7 @@ import CrowdStrikeTab from './components/CrowdStrikeTab';
 import SecureScoreCard from './components/SecureScoreCard';
 import ZtaScoreCard from './components/ZtaScoreCard';
 import TopControlsCard from './components/TopControlsCard';
-import { useAnalyticsFilters, getWindowDaysForDateRange } from '@/hooks/useAnalyticsFilters';
+import { useAnalyticsFilters, getWindowDaysForDateRange, serializeToUrlParams } from '@/hooks/useAnalyticsFilters';
 import { useAnalyticsAuth } from '@/hooks/useAnalyticsAuth';
 import { useDefenderConfig } from '@/hooks/useDefenderConfig';
 import { useCrowdStrikeConfig } from '@/hooks/useCrowdStrikeConfig';
@@ -138,6 +138,13 @@ export default function AnalyticsDashboardPage() {
 
   // Filter state (with URL sync)
   const filterState = useAnalyticsFilters(true);
+
+  // Same filters as the tab, serialized the same way, so the report is
+  // bookmarkable and regenerates the same scope.
+  const reportHref = useMemo(() => {
+    const qs = new URLSearchParams(serializeToUrlParams(filterState.filters)).toString();
+    return `/analytics/report${qs ? `?${qs}` : ''}`;
+  }, [filterState.filters]);
 
   // Watch for settings changes (e.g., index pattern change)
   const { settingsVersion } = useAnalyticsAuth();
@@ -887,6 +894,7 @@ export default function AnalyticsDashboardPage() {
             onSelectedKeyChange={handleExpandedChange}
             onExportSbReport={handleExportSbReport}
             sbReportExporting={sbReportExporting}
+            reportHref={reportHref}
           />
         )}
       </div>

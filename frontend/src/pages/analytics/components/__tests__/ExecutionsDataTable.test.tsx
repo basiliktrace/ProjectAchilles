@@ -1083,3 +1083,40 @@ describe('ExecutionsDataTable — re-fired alert annotation (resolution watermar
     });
   });
 });
+
+describe('ExecutionsDataTable — execution report link', () => {
+  it('opens the print report in a new tab when reportHref is provided', () => {
+    getAlertsForTestMock.mockResolvedValue({ alerts: [], matchedTechniques: [], total: 0 });
+    render(
+      <ExecutionsDataTable
+        data={makeData([makeStage({})], { defenderDetected: false })}
+        loading={false}
+        onPageChange={vi.fn()}
+        onPageSizeChange={vi.fn()}
+        onSort={vi.fn()}
+        sortField="routing.event_time"
+        sortOrder="desc"
+        reportHref="/analytics/report?date=30d"
+      />,
+    );
+    const link = screen.getByRole('link', { name: 'Report (PDF)' });
+    expect(link).toHaveAttribute('href', '/analytics/report?date=30d');
+    expect(link).toHaveAttribute('target', '_blank');
+    expect(link).toHaveAttribute('rel', 'noopener noreferrer');
+  });
+
+  it('hides the link when no href is provided', () => {
+    getAlertsForTestMock.mockResolvedValue({ alerts: [], matchedTechniques: [], total: 0 });
+    renderTable(makeData([makeStage({})], { defenderDetected: false }));
+    expect(screen.queryByRole('link', { name: 'Report (PDF)' })).toBeNull();
+  });
+
+  it('opens the Export menu on keyboard focus as well as on hover', () => {
+    // jsdom cannot evaluate :focus-within visibility, so this pins the classes that provide it.
+    getAlertsForTestMock.mockResolvedValue({ alerts: [], matchedTechniques: [], total: 0 });
+    renderTable(makeData([makeStage({})], { defenderDetected: false }));
+    const panel = screen.getByRole('button', { name: 'Export CSV' }).parentElement as HTMLElement;
+    expect(panel).toHaveClass('invisible', 'opacity-0', 'group-hover:visible', 'group-hover:opacity-100');
+    expect(panel).toHaveClass('group-focus-within:visible', 'group-focus-within:opacity-100');
+  });
+});

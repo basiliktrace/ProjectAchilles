@@ -141,14 +141,22 @@ export function getUserRole(auth: any): AppRole | undefined {
 }
 
 /**
- * Middleware factory: require one or more permissions.
+ * True when the request's principal holds every permission (Clerk role
+ * only: backend-serverless has no API keys). Use it for optional sections a
+ * route includes only for callers allowed to see them.
+ */
+export function hasRequestPermission(req: Request, ...permissions: Permission[]): boolean {
+  return hasPermissions(getUserRole(req.auth), ...permissions);
+}
+
+/**
+ * Middleware factory: require one or more permissions (see hasRequestPermission).
  * Extracts the role from the JWT, expands to the permission set, and checks inclusion.
- * If the user has no role set, all permissions are granted (backward-compatible migration).
+ * If the user has no role set, hasPermissions() defaults to the explorer set (read-only).
  */
 export function requirePermission(...permissions: Permission[]) {
   return (req: Request, res: Response, next: NextFunction): void => {
-    const role = getUserRole(req.auth);
-    if (hasPermissions(role, ...permissions)) {
+    if (hasRequestPermission(req, ...permissions)) {
       next();
       return;
     }

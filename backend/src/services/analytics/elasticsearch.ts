@@ -81,6 +81,45 @@ export const ORG_NAMES: Record<string, string> = {
   '9634119d-fa6b-42b8-9b9b-90ad8f22e482': 'RGA',
 };
 
+/**
+ * Run identity: one key per test run. The fourth segment is the EXACT
+ * routing.event_time in ms — every control of one bundle dispatch shares
+ * result.completed_at (set once per run on the agent), so members cluster,
+ * and two runs of the same bundle on one host never merge. (A 30-minute
+ * bucket here once merged distinct runs; don't reintroduce bucketing.)
+ *   bundle controls  → "bundle::<bundle_id>::<hostname>::<event_time_ms>"
+ *   standalone tests → "standalone::<test_uuid>::<hostname>::<event_time_ms>"
+ * Shared by the executions tab (grouped mode) and the execution report.
+ */
+export const RUN_GROUP_KEY_SCRIPT = {
+  source: `
+    long t = doc['routing.event_time'].value.toInstant().toEpochMilli();
+    if (doc.containsKey('f0rtika.is_bundle_control')
+        && doc['f0rtika.is_bundle_control'].size() > 0
+        && doc['f0rtika.is_bundle_control'].value == true) {
+      return 'bundle::' + doc['f0rtika.bundle_id'].value + '::' + doc['routing.hostname'].value + '::' + t;
+    } else {
+      return 'standalone::' + doc['f0rtika.test_uuid'].value + '::' + doc['routing.hostname'].value + '::' + t;
+    }
+  `,
+  lang: 'painless' as const,
+};
+
+/** Test identity: bundle_id for bundle controls, test_uuid otherwise. */
+export const TEST_KEY_SCRIPT = {
+  source: `
+    if (doc.containsKey('f0rtika.is_bundle_control')
+        && doc['f0rtika.is_bundle_control'].size() > 0
+        && doc['f0rtika.is_bundle_control'].value == true
+        && doc.containsKey('f0rtika.bundle_id')
+        && doc['f0rtika.bundle_id'].size() > 0) {
+      return doc['f0rtika.bundle_id'].value;
+    }
+    return doc['f0rtika.test_uuid'].value;
+  `,
+  lang: 'painless' as const,
+};
+
 export class ElasticsearchService {
   private client: Client;
   private settings: AnalyticsSettings;
@@ -1430,8 +1469,11 @@ export class ElasticsearchService {
     return clauses;
   }
 
-  // Build all extended filters (base + filter-bar clauses)
-  private buildExtendedFilters(params: PaginatedExecutionsParams): any[] {
+  /**
+   * Build all extended filters (base + filter-bar clauses). Public: the
+   * execution report reuses it so its scope is exactly the tab's.
+   */
+  buildExtendedFilters(params: Partial<ExtendedAnalyticsQueryParams>): any[] {
     const filters: any[] = [
       this.buildTestDataFilter(),
       this.buildDateFilter(params.from, params.to)
@@ -1508,36 +1550,6 @@ export class ElasticsearchService {
     const sortField = params.sortField || 'routing.event_time';
     const sortOrder = params.sortOrder || 'desc';
 
-    // Painless script that computes a display group key per document.
-    // The fourth segment is the EXACT `routing.event_time` in milliseconds
-    // since epoch. Every control of one bundle dispatch shares the same
-    // `result.completed_at` (set once per run on the agent), so members
-    // cluster correctly. Two separate runs of the same bundle on the same
-    // host always have distinct completion timestamps (the agent doesn't
-    // run bundles in parallel), so they always produce distinct group
-    // keys — no merge.
-    //
-    // Was previously bucketed as `epoch_ms / 1_800_000` (30-min window),
-    // which silently merged any two runs that landed in the same half-hour.
-    // Field reproduction: two BlueHammer runs at 11:01:08Z and 11:08:30Z
-    // on the same host collapsed into one group of "6 stages". Removing
-    // the bucket math is the fix.
-    //   bundle controls → "bundle::<bundle_id>::<hostname>::<event_time_ms>"
-    //   standalone tests → "standalone::<test_uuid>::<hostname>::<event_time_ms>"
-    const groupKeyScript = {
-      source: `
-        long t = doc['routing.event_time'].value.toInstant().toEpochMilli();
-        if (doc.containsKey('f0rtika.is_bundle_control')
-            && doc['f0rtika.is_bundle_control'].size() > 0
-            && doc['f0rtika.is_bundle_control'].value == true) {
-          return 'bundle::' + doc['f0rtika.bundle_id'].value + '::' + doc['routing.hostname'].value + '::' + t;
-        } else {
-          return 'standalone::' + doc['f0rtika.test_uuid'].value + '::' + doc['routing.hostname'].value + '::' + t;
-        }
-      `,
-      lang: 'painless',
-    };
-
     // Total document count (for badge/info display)
     const countResponse = await this.client.count({
       index: this.settings.indexPattern,
@@ -1556,13 +1568,13 @@ export class ElasticsearchService {
       aggs: {
         total_groups: {
           cardinality: {
-            script: groupKeyScript,
+            script: RUN_GROUP_KEY_SCRIPT,
             precision_threshold: 10000,
           },
         },
         display_groups: {
           terms: {
-            script: groupKeyScript,
+            script: RUN_GROUP_KEY_SCRIPT,
             size: page * pageSize,
             order: { sort_value: sortOrder },
           },
@@ -2341,7 +2353,7 @@ export class ElasticsearchService {
    * Archive executions by group keys.
    *
    * Group key format (matches what the Executions listing emits — see
-   * groupKeyScript earlier in this file):
+   * RUN_GROUP_KEY_SCRIPT earlier in this file):
    *   "bundle::<bundle_id>::<hostname>::<event_time_ms>"     — one specific run
    *   "standalone::<test_uuid>::<hostname>::<event_time_ms>" — one specific run
    *

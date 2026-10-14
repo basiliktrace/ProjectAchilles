@@ -20,6 +20,8 @@ const DashboardPage = lazy(() => import('../pages/dashboard/DashboardPage'));
 const TestsPage = lazy(() => import('../pages/tests/TestsPage'));
 const TestDetailPage = lazy(() => import('../pages/browser/TestDetailPage'));
 const AnalyticsDashboardPage = lazy(() => import('../pages/analytics/AnalyticsDashboardPage'));
+// Lazy, and the only importer of report.css: the report's stylesheet must not reach the main bundle.
+const AnalyticsReportPage = lazy(() => import('../pages/analytics/report/AnalyticsReportPage'));
 const SettingsPage = lazy(() => import('../pages/settings/SettingsPage'));
 const AgentsPage = lazy(() => import('../pages/endpoints/AgentsPage'));
 const AgentDetailPage = lazy(() => import('../pages/endpoints/AgentDetailPage'));
@@ -94,6 +96,18 @@ export default function AppRouter() {
 
       {/* CLI device flow authorization — authenticated but no app layout */}
       <Route path="/cli-auth" element={<RequireAuth><CliAuthPage /></RequireAuth>} />
+
+      {/* Print-ready execution report — authenticated, analytics-gated, no app layout */}
+      <Route
+        path="/analytics/report"
+        element={
+          <RequireAuth>
+            <AnalyticsProtectedRoute>
+              <AnalyticsReportPage />
+            </AnalyticsProtectedRoute>
+          </RequireAuth>
+        }
+      />
 
       {/* All authenticated routes share a single persistent AppLayout.
           Flat f0 nav: /dashboard /tests /analytics /agents /tasks /settings */}

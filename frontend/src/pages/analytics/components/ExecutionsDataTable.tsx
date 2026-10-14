@@ -71,6 +71,8 @@ interface ExecutionsDataTableProps {
   /** SB-format compliance report export (server-generated for the current window). */
   onExportSbReport?: () => Promise<void>;
   sbReportExporting?: boolean;
+  /** Link to the print-ready execution report for the current filters. */
+  reportHref?: string;
 }
 
 export default function ExecutionsDataTable({
@@ -92,6 +94,7 @@ export default function ExecutionsDataTable({
   onSelectedKeyChange,
   onExportSbReport,
   sbReportExporting,
+  reportHref,
 }: ExecutionsDataTableProps) {
   const { configured: defenderConfigured } = useDefenderConfig();
   const { configured: crowdstrikeConfigured } = useCrowdStrikeConfig();
@@ -519,7 +522,7 @@ export default function ExecutionsDataTable({
               Export
               <ChevronDown className="!size-3" />
             </Button>
-            <div className="invisible absolute right-0 z-50 mt-1 w-32 overflow-hidden rounded-md border border-border bg-overlay opacity-0 shadow-lg transition-all group-hover:visible group-hover:opacity-100">
+            <div className="invisible absolute right-0 z-50 mt-1 w-32 overflow-hidden rounded-md border border-border bg-overlay opacity-0 shadow-lg transition-all group-hover:visible group-hover:opacity-100 group-focus-within:visible group-focus-within:opacity-100">
               <button
                 onClick={exportToCsv}
                 className="w-full px-3 py-2 text-left text-sm transition-colors hover:bg-raised hover:text-accent"
@@ -532,6 +535,16 @@ export default function ExecutionsDataTable({
               >
                 Export JSON
               </button>
+              {reportHref && (
+                <a
+                  href={reportHref}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="block w-full px-3 py-2 text-left text-sm transition-colors hover:bg-raised hover:text-accent"
+                >
+                  Report (PDF)
+                </a>
+              )}
               {onExportSbReport && (
                 <button
                   onClick={() => { void onExportSbReport(); }}

@@ -1,7 +1,9 @@
-import { Router } from 'express';
-import { requireClerkAuth, requirePermission, getUserOrgId, validateRequestOrgId } from '../middleware/clerk.middleware.js';
+import { Router, type Request } from 'express';
+import { requireClerkAuth, requirePermission, getUserOrgId, validateRequestOrgId, hasRequestPermission } from '../middleware/clerk.middleware.js';
 import { asyncHandler, AppError } from '../middleware/error.middleware.js';
 import { SettingsService } from '../services/analytics/settings.js';
+import { IntegrationsSettingsService } from '../services/integrations/settings.js';
+import { ExecutionReportService } from '../services/reports/executionReport.service.js';
 import { SbReportService, parseSbReportWindow } from '../services/reports/sbReport.service.js';
 
 const router = Router();
@@ -43,6 +45,71 @@ router.get('/sb-pc-2026-001', requirePermission('analytics:dashboards:read'), as
   });
 
   res.json(report);
+}));
+
+const RESULT_FILTERS = ['all', 'protected', 'unprotected', 'inconclusive'] as const;
+type ResultFilter = (typeof RESULT_FILTERS)[number];
+
+/** One query param: absent or blank → undefined; repeated (array) or nested (object) → 400. */
+function queryParam(query: Request['query'], name: string): string | undefined {
+  const value = query[name];
+  if (value === undefined) return undefined;
+  if (typeof value !== 'string') throw new AppError(`Invalid query parameter: ${name}`, 400);
+  return value.trim() !== '' ? value.trim() : undefined;
+}
+
+// GET /api/reports/executions - Print-ready execution report payload.
+// Query params: the All executions filter-bar params (org, from, to, result,
+// hostnames, tests, techniques, categories, severities, threatActors, tags,
+// errorNames, errorCodes, bundleNames) plus tz (IANA zone, default UTC).
+// org is never defaulted from the JWT (same as the analytics routes): ES
+// routing.oid holds agent-org UUIDs, so a Clerk org id could filter to zero docs.
+// Accepted risks are included only for callers with analytics:risk:read.
+router.get('/executions', requirePermission('analytics:dashboards:read'), asyncHandler(async (req, res) => {
+  const settings = settingsService.getSettings();
+  if (!settings.configured) {
+    throw new AppError('Elasticsearch not configured', 400);
+  }
+
+  const param = (name: string) => queryParam(req.query, name);
+  const result = param('result');
+  if (result && !(RESULT_FILTERS as readonly string[]).includes(result)) {
+    throw new AppError(`Invalid result filter: ${result}`, 400);
+  }
+
+  const org = param('org');
+  if (org) validateRequestOrgId(org, req.auth);
+
+  const integrations = new IntegrationsSettingsService();
+  const service = new ExecutionReportService(settings, {
+    vendors: {
+      defender: integrations.isDefenderConfigured(),
+      crowdstrike: integrations.isCrowdStrikeConfigured(),
+    },
+  });
+
+  const report = await service.generate({
+    org,
+    from: param('from'),
+    to: param('to'),
+    result: result as ResultFilter | undefined,
+    hostnames: param('hostnames'),
+    tests: param('tests'),
+    techniques: param('techniques'),
+    categories: param('categories'),
+    severities: param('severities'),
+    threatActors: param('threatActors'),
+    tags: param('tags'),
+    errorNames: param('errorNames'),
+    errorCodes: param('errorCodes'),
+    bundleNames: param('bundleNames'),
+    tz: param('tz') ?? 'UTC',
+    includeAcceptedRisks: hasRequestPermission(req, 'analytics:risk:read'),
+    // Acceptances are scoped by the caller's Clerk org (as the risk-acceptance routes do), not the ES agent-org filter.
+    acceptanceOrg: getUserOrgId(req.auth),
+  });
+
+  res.json({ success: true, data: report });
 }));
 
 export default router;

@@ -210,6 +210,31 @@ export function mapGroupsToDisplayRows(groups: ExecutionGroup[]): DisplayRow[] {
 
 // ── Result labels ──────────────────────────────────────────────────
 
+export type ExecutionOutcome = 'skipped' | 'protected' | 'prevented' | 'detected' | 'unprotected' | 'inconclusive';
+
+/**
+ * The console's stage outcome rule, as a pure function. The execution
+ * report's backend implements the same rule
+ * (backend/src/services/reports/stageOutcome.ts); both are pinned by the same
+ * golden table.
+ */
+export function classifyExecution(exec: EnrichedTestExecution): ExecutionOutcome {
+  if (isSkippedStage(exec)) return 'skipped';
+  const result = getResultFromErrorCode(exec.error_code);
+  if (result === 'protected') return 'protected';
+  if (result !== 'unprotected') return 'inconclusive';
+  const csDetected = exec.crowdstrike_stage_detected ?? exec.crowdstrike_detected;
+  const defDetected = exec.defender_stage_detected ?? exec.defender_detected;
+  const isPrevented =
+    exec.crowdstrike_prevented ||
+    (csDetected && isConfirmedPrevention(exec.crowdstrike_prevention_action)) ||
+    exec.defender_prevented ||
+    (defDetected && isConfirmedPrevention(exec.defender_prevention_action));
+  if (isPrevented) return 'prevented';
+  if (defDetected || csDetected) return 'detected';
+  return 'unprotected';
+}
+
 /**
  * Result label for a single execution. Precedence: Protected (EDR blocked) >
  * Prevented (vendor-confirmed prevention from either EDR — CrowdStrike
@@ -225,32 +250,22 @@ export function ExecResultLabel({ exec, compact }: { exec: EnrichedTestExecution
   const iconClass = compact ? 'w-3.5 h-3.5' : 'w-4 h-4';
   const textClass = compact ? 'text-xs font-medium' : 'text-sm font-medium';
 
-  if (isSkippedStage(exec)) {
-    return (
-      <span className="inline-flex items-center gap-1.5 text-faint">
-        <SkipForward className={iconClass} />
-        <span className={textClass}>Skipped</span>
-      </span>
-    );
-  }
-  const result = getResultFromErrorCode(exec.error_code);
-  if (result === 'protected') {
-    return (
-      <span className="inline-flex items-center gap-1.5 text-accent">
-        <ShieldCheck className={iconClass} />
-        <span className={textClass}>Protected</span>
-      </span>
-    );
-  }
-  if (result === 'unprotected') {
-    const csDetected = exec.crowdstrike_stage_detected ?? exec.crowdstrike_detected;
-    const defDetected = exec.defender_stage_detected ?? exec.defender_detected;
-    const isPrevented =
-      exec.crowdstrike_prevented ||
-      (csDetected && isConfirmedPrevention(exec.crowdstrike_prevention_action)) ||
-      exec.defender_prevented ||
-      (defDetected && isConfirmedPrevention(exec.defender_prevention_action));
-    if (isPrevented) {
+  switch (classifyExecution(exec)) {
+    case 'skipped':
+      return (
+        <span className="inline-flex items-center gap-1.5 text-faint">
+          <SkipForward className={iconClass} />
+          <span className={textClass}>Skipped</span>
+        </span>
+      );
+    case 'protected':
+      return (
+        <span className="inline-flex items-center gap-1.5 text-accent">
+          <ShieldCheck className={iconClass} />
+          <span className={textClass}>Protected</span>
+        </span>
+      );
+    case 'prevented': {
       const action = formatPreventionAction(
         exec.crowdstrike_prevention_action ?? exec.defender_prevention_action,
       );
@@ -263,28 +278,28 @@ export function ExecResultLabel({ exec, compact }: { exec: EnrichedTestExecution
         </span>
       );
     }
-    const isDetected = defDetected || csDetected;
-    if (isDetected) {
+    case 'detected':
       return (
         <span className="inline-flex items-center gap-1.5 text-warning">
           <ShieldAlert className={iconClass} />
           <span className={textClass}>Detected</span>
         </span>
       );
-    }
-    return (
-      <span className="inline-flex items-center gap-1.5 text-danger">
-        <ShieldX className={iconClass} />
-        <span className={textClass}>Unprotected</span>
-      </span>
-    );
+    case 'unprotected':
+      return (
+        <span className="inline-flex items-center gap-1.5 text-danger">
+          <ShieldX className={iconClass} />
+          <span className={textClass}>Unprotected</span>
+        </span>
+      );
+    default:
+      return (
+        <span className="inline-flex items-center gap-1.5 text-warning">
+          <ShieldQuestion className={iconClass} />
+          <span className={textClass}>Inconclusive</span>
+        </span>
+      );
   }
-  return (
-    <span className="inline-flex items-center gap-1.5 text-warning">
-      <ShieldQuestion className={iconClass} />
-      <span className={textClass}>Inconclusive</span>
-    </span>
-  );
 }
 
 /**
