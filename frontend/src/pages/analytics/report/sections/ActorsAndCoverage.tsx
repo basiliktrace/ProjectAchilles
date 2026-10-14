@@ -45,7 +45,7 @@ export function ActorsAndCoverage({ report, head }: { report: ExecutionReport; h
                     {techniques.slice(0, TECHNIQUES_PER_ACTOR).join(' · ')}
                     {techniques.length > TECHNIQUES_PER_ACTOR ? ` +${techniques.length - TECHNIQUES_PER_ACTOR}` : ''}
                   </dd>
-                  <dt>Protection</dt>
+                  <dt>Stage protection rate</dt>
                   <dd><b className="rp-mono">{fmtPct(protectionRate(a.outcomes))}</b></dd>
                 </dl>
                 <OutcomeBar counts={a.outcomes} legend={false} height={6} />
@@ -82,7 +82,7 @@ export function ActorsAndCoverage({ report, head }: { report: ExecutionReport; h
         <div>
           <h3 className="rp-h3">Other tests in scope <small>{plural(report.otherTests.length, 'test')} without their own page</small></h3>
           <table className="rp-table">
-            <thead><tr><th>Test</th><th className="rp-num">Runs</th><th>Outcomes</th><th className="rp-num">Protection</th></tr></thead>
+            <thead><tr><th>Test</th><th className="rp-num">Runs</th><th>Outcomes</th><th className="rp-num">Stage protection rate</th></tr></thead>
             <tbody>
               {report.otherTests.map((t) => (
                 <tr key={t.testKey}>

@@ -1,5 +1,5 @@
-import type { ExecutionReport } from '@/services/api/reports';
-import { protectionRate } from '../lib/outcomes';
+import type { ExecutionReport, ReportHost } from '@/services/api/reports';
+import { conclusive, protectionRate } from '../lib/outcomes';
 import { fmtCount, fmtLatency, fmtPct, plural, truncate } from '../lib/format';
 import { buildVerdict } from '../lib/verdict';
 import { CampaignTimeline } from '../diagrams/CampaignTimeline';
@@ -10,6 +10,14 @@ import { PartialBanner, defenseScoreText } from './scope';
 
 const HOSTS_SHOWN = 12;
 
+/** Weakest first: lowest stage protection rate, then the larger sample; hosts with no verdict last. */
+function weakestFirst(a: ReportHost, b: ReportHost): number {
+  const ra = protectionRate(a.outcomes);
+  const rb = protectionRate(b.outcomes);
+  if (ra === null || rb === null) return Number(ra === null) - Number(rb === null);
+  return ra - rb || conclusive(b.outcomes) - conclusive(a.outcomes);
+}
+
 export function ExecutiveSummary({ report, head }: { report: ExecutionReport; head: SheetHead }) {
   const { totals, defenseScore, meta } = report;
   // No configured EDR vendor means no EDR content at all, not even a placeholder tile.
@@ -18,9 +26,10 @@ export function ExecutiveSummary({ report, head }: { report: ExecutionReport; he
   const latency = median(firstAlertMinutes(report.runs));
   const scoreText = defenseScoreText(report);
   const rawScore = defenseScore?.rawScore != null && defenseScore.riskAcceptedCount > 0 ? defenseScore.rawScore : null;
-  const hosts = [...report.hosts]
-    .sort((a, b) => (protectionRate(b.outcomes) ?? -1) - (protectionRate(a.outcomes) ?? -1))
-    .slice(0, HOSTS_SHOWN);
+  const hosts = [...report.hosts].sort(weakestFirst).slice(0, HOSTS_SHOWN);
+  // report.hosts is a capped aggregation (the busiest endpoints), so the pool is named when it is smaller than the fleet.
+  const hostsTitle = `Lowest ${hosts.length} of ${fmtCount(totals.endpoints)} endpoints by stage protection rate${
+    report.hosts.length < totals.endpoints ? ` (among the ${fmtCount(report.hosts.length)} busiest)` : ''}`;
 
   return (
     <Sheet label="Executive summary" head={head}>
@@ -62,10 +71,7 @@ export function ExecutiveSummary({ report, head }: { report: ExecutionReport; he
       </div>
       {hosts.length > 0 && (
         <div className="rp-avoid">
-          <h3 className="rp-h3">
-            Stage protection rate by endpoint
-            <small>{hosts.length < report.hosts.length ? `Top ${hosts.length} of ${report.hosts.length}` : ''}</small>
-          </h3>
+          <h3 className="rp-h3">{hostsTitle}</h3>
           <div className="rp-bars">
             {hosts.map((h) => {
               const rate = protectionRate(h.outcomes);

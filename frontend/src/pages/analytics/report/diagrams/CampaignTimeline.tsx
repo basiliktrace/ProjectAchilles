@@ -16,7 +16,7 @@ const W = 680;
 const X0 = 156;
 const X1 = W - 8;
 const TREND_H = 60;
-const GLYPH = 7;
+export const GLYPH = 7;
 const GLYPH_GAP = 2;
 /** Above this many stages a run is drawn as one proportional bar instead of a stack. */
 export const MAX_STACK = 10;
