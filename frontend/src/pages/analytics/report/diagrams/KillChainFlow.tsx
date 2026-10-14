@@ -37,6 +37,7 @@ export function KillChainFlow({ test, edrVendors = ['defender', 'crowdstrike'], 
 
   return (
     <div className="rp-killchain">
+      {rows.length === 0 && heading}
       {rows.map((row, r) => (
         <div key={r} className="rp-avoid">
           {r === 0 && heading}

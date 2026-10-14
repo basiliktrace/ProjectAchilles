@@ -54,6 +54,15 @@ describe('KillChainFlow', () => {
     expect(rightEdge(row2.querySelector('polygon.rp-kc')!)).toBeCloseTo(680 / 6);
   });
 
+  it('prints its heading inside the first row, and still prints it when there are no stages', () => {
+    const { container } = render(<KillChainFlow test={makeTest()} heading={<h3>Kill chain</h3>} />);
+    const firstRow = container.querySelector('.rp-avoid') as HTMLElement;
+    expect(firstRow.firstElementChild).toHaveTextContent('Kill chain');
+    expect(firstRow.querySelector('svg')).not.toBeNull();
+    const empty = render(<KillChainFlow test={makeTest({ stages: [] })} heading={<h3>Empty chain</h3>} />).container;
+    expect(empty).toHaveTextContent('Empty chain');
+  });
+
   it('lists the alert counts for every configured EDR vendor by default', () => {
     const { container } = render(<KillChainFlow test={makeTest()} />);
     expect(container.textContent).toContain('Alerts: Defender 1 · Falcon 1');
