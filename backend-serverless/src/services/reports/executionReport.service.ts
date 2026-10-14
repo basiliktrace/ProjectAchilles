@@ -482,8 +482,8 @@ export class ExecutionReportService {
 
   /**
    * After a partial shard failure, count the docs in scope on the failed indices. None: the
-   * report is complete and the failure is only logged. Some, or unknown (the probe failed or no
-   * index was named): meta.partial plus a short warning. Never fails the report.
+   * report is complete and the failure is only logged. Some, or unknown (the probe failed, lost
+   * shards itself, or no index was named): meta.partial plus a short warning. Never fails the report.
    */
   private async probePartialFailure(
     failures: ShardFailures,
@@ -501,12 +501,14 @@ export class ExecutionReportService {
         this.deps.client.count({ index: indices, query: scopeQuery(filters) } as never, untilDeadline(deadline)),
         deadline,
       );
-      const count = (res as { count?: unknown }).count;
-      if (count === 0) {
+      const { count, _shards: probeShards } = res as { count?: unknown; _shards?: ShardsInfo };
+      const lost = probeShards?.failed ?? 0;
+      // A zero from a count that lost shards itself proves nothing.
+      if (count === 0 && lost === 0) {
         console.warn(`Execution report: ${detail}; the failed indices hold no data in scope`);
         return null;
       }
-      inScope = typeof count === 'number' ? String(count) : 'unknown';
+      inScope = typeof count === 'number' ? `${count}${lost > 0 ? ` (the probe lost ${lost} shards)` : ''}` : 'unknown';
     } catch (err) {
       inScope = `unknown (probe failed: ${errorMessage(err)})`;
     }

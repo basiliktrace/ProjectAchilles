@@ -544,6 +544,15 @@ describe('partial shard failures', () => {
     expect(report.meta.warnings).toEqual([PARTIAL_WARNING]);
   });
 
+  it('does not trust a zero count from a probe that lost shards itself', async () => {
+    const deps = makeDeps();
+    deps.client.search.mockImplementation(routeSearch(withShards(scopeResponse(), partialShards())));
+    deps.client.count.mockResolvedValue({ count: 0, _shards: { total: 1, successful: 0, failed: 1 } });
+    const report = await new ExecutionReportService(settings, deps).generate(params(), NOW);
+    expect(report.meta.partial).toEqual({ failedShards: 1, totalShards: 2 });
+    expect(report.meta.warnings).toEqual([PARTIAL_WARNING]);
+  });
+
   it('keeps the worst query\'s shard counts instead of summing them', async () => {
     const deps = makeDeps();
     deps.client.search.mockImplementation(async (req: { aggs: Record<string, any> }) =>
