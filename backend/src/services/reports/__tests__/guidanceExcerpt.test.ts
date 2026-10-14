@@ -146,6 +146,26 @@ describe('extractGuidanceExcerpt: code fences', () => {
   });
 });
 
+describe('extractGuidanceExcerpt: tables inside a heading section', () => {
+  // Real files (e.g. 244dfb88) put a settings table straight under the technique heading.
+  const SECTION_TABLE = `### T1553.001 - Gatekeeper Bypass
+
+| Setting | Value | Notes |
+|:--------|------:|-------|
+| Mitigation | [M1038](https://x) Execution Prevention | **required** |
+| \`spctl\` | --master-enable | run as root |
+
+Audit weekly.
+`;
+
+  it('flattens table rows to their cells and drops the header and separator rows', () => {
+    const excerpt = extractGuidanceExcerpt(SECTION_TABLE, 'T1553.001');
+    expect(excerpt).toBe('Mitigation · M1038 Execution Prevention · required\nspctl · --master-enable · run as root\nAudit weekly.');
+    expect(excerpt).not.toContain('|');
+    expect(excerpt).not.toContain('Setting');
+  });
+});
+
 describe('extractGuidanceExcerpt: table rows', () => {
   it('rejects a description-only row with no mitigation id', () => {
     const details = '| Technique | Name | Tactic | Test action |\n|---|---|---|---|\n| T1486 | Data Encrypted for Impact | Impact | File encryption |\n';
