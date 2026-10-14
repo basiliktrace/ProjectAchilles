@@ -100,6 +100,8 @@ html:has(.report-print) body {
 .report-print .rp-kpi:first-child { border-left: 0; padding-left: 0; }
 .report-print .rp-kpi b { display: block; font: 500 16pt/1.15 var(--rp-mono); }
 .report-print .rp-kpi span { display: block; font-size: 8pt; color: var(--rp-ink-2); margin-top: 2px; }
+.report-print .rp-kpis-5 { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+.report-print .rp-kpi b.rp-kpi-na { font: 500 9pt/1.9 var(--rp-sans); color: var(--rp-ink-2); }
 
 /* ── Legends, bars, glyphs ── */
 .report-print .rp-legend { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 8.5pt; color: var(--rp-ink-2); margin-top: 6px; }
