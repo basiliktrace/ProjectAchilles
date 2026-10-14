@@ -101,6 +101,8 @@ router.get('/executions', requirePermission('analytics:dashboards:read'), asyncH
     bundleNames: queryString(q.bundleNames),
     tz: queryString(q.tz) ?? 'UTC',
     includeAcceptedRisks: hasRequestPermission(req, 'analytics:risk:read'),
+    // Acceptances are scoped by the caller's Clerk org (as the risk-acceptance routes do), not the ES agent-org filter.
+    acceptanceOrg: getUserOrgId(req.auth),
   });
 
   res.json({ success: true, data: report });

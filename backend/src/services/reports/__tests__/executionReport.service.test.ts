@@ -250,6 +250,23 @@ describe('ExecutionReportService.generate', () => {
     expect(report.findings[0].acceptedRisk).toBe(true);
   });
 
+  it('scopes risk-acceptance reads to acceptanceOrg while ES and the Defense Score keep using org', async () => {
+    const deps = makeDeps();
+    await new ExecutionReportService(settings, deps)
+      .generate(params({ org: 'agent-org', acceptanceOrg: 'org_clerk', includeAcceptedRisks: true }), NOW);
+    expect(deps.getAcceptances).toHaveBeenCalledWith(expect.any(Array), 'org_clerk');
+    const scope = { org: 'agent-org', from: '2026-09-13T23:40:00.000Z', to: '2026-10-13T23:40:00.000Z' };
+    expect(deps.es.buildExtendedFilters).toHaveBeenCalledWith(scope);
+    expect(deps.es.getDefenseScore).toHaveBeenCalledWith({ ...scope, scoringMode: 'any-stage' });
+  });
+
+  it('does not reuse the ES org as the acceptance org', async () => {
+    const deps = makeDeps();
+    await new ExecutionReportService(settings, deps)
+      .generate(params({ org: 'agent-org', includeAcceptedRisks: true }), NOW);
+    expect(deps.getAcceptances).toHaveBeenCalledWith(expect.any(Array), undefined);
+  });
+
   it('keeps accepted risks empty and flags them unavailable when the lookup fails', async () => {
     const deps = makeDeps({ getAcceptances: vi.fn(async () => { throw new Error('risk index closed'); }) });
     const report = await new ExecutionReportService(settings, deps).generate(params({ includeAcceptedRisks: true }), NOW);

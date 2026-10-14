@@ -72,6 +72,15 @@ describe('GET /api/reports/executions', () => {
     expect(mockValidateOrg).not.toHaveBeenCalled();
   });
 
+  it('scopes risk acceptances to the caller JWT org, independent of ?org=', async () => {
+    await request(app()).get('/api/reports/executions');
+    expect(mockGenerate.mock.calls[0][0].acceptanceOrg).toBe('org-jwt');
+    expect(mockGetUserOrgId).toHaveBeenCalledWith({ userId: 'u1' });
+
+    await request(app()).get('/api/reports/executions?org=agent-org-uuid');
+    expect(mockGenerate.mock.calls[1][0]).toMatchObject({ org: 'agent-org-uuid', acceptanceOrg: 'org-jwt' });
+  });
+
   it('validates an explicit org against the caller and passes it through with tz', async () => {
     await request(app()).get('/api/reports/executions?org=org-x&tz=America%2FSanto_Domingo');
     expect(mockValidateOrg).toHaveBeenCalledWith('org-x', { userId: 'u1' });

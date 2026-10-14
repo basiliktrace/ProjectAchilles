@@ -47,6 +47,8 @@ type FilterParams = Partial<Pick<ExtendedAnalyticsQueryParams, (typeof FILTER_KE
 export interface ExecutionReportParams extends FilterParams {
   tz: string;
   includeAcceptedRisks: boolean;
+  /** Org that scopes risk-acceptance reads — the caller's Clerk org (getUserOrgId), never the ES agent-org filter. */
+  acceptanceOrg?: string;
 }
 
 export interface ExecutionReportDeps {
@@ -296,7 +298,7 @@ export class ExecutionReportService {
         ? optional('Run start times', 'startTimes', () => this.deps.getRunStartTimes(taskIds))
         : Promise.resolve(null),
       params.includeAcceptedRisks
-        ? optional('Accepted risks', 'acceptedRisks', () => this.deps.getAcceptances(stageNames, params.org))
+        ? optional('Accepted risks', 'acceptedRisks', () => this.deps.getAcceptances(stageNames, params.acceptanceOrg))
         : Promise.resolve(null),
     ]);
 
