@@ -121,24 +121,3 @@ export default function DateRangePicker({ value, onChange }: DateRangePickerProp
     </div>
   );
 }
-
-// Helper to convert date range value to ES format
-export function getDateRangeFilter(value: DateRangeValue): { from?: string; to?: string } {
-  // Custom range with explicit dates
-  if (value.preset === 'custom' && value.from && value.to) {
-    return { from: value.from, to: value.to };
-  }
-
-  // All time - no filter
-  if (value.preset === 'all') {
-    return {};
-  }
-
-  // Relative time presets
-  const match = value.preset.match(/^(\d+)([dhw])$/);
-  if (!match) {
-    return { from: 'now-30d' };
-  }
-
-  return { from: `now-${value.preset}` };
-}

@@ -47,13 +47,20 @@ export function getWindowDaysForDateRange(dateRange: DateRangeValue): number {
   return 7;
 }
 
-// Helper to convert date range value to ES format (matches DateRangePicker export)
-function getDateRangeFilter(value: DateRangeValue): { from?: string; to?: string } {
+/**
+ * Lower bound sent for the "All time" preset. With no dates at all the
+ * backend falls back to the last 7 days, so "All time" must send one.
+ * Must equal ALL_TIME_FROM in backend/src/services/reports/reportWindow.ts.
+ */
+export const ALL_TIME_FROM = '2000-01-01T00:00:00.000Z';
+
+/** Convert a date range value to the API's from/to (ES date math or ISO). */
+export function getDateRangeFilter(value: DateRangeValue): { from?: string; to?: string } {
   if (value.preset === 'custom' && value.from && value.to) {
     return { from: value.from, to: value.to };
   }
   if (value.preset === 'all') {
-    return {};
+    return { from: ALL_TIME_FROM };
   }
   const match = value.preset.match(/^(\d+)([dhw])$/);
   if (!match) {
@@ -127,7 +134,7 @@ const defaultFilters: AnalyticsFilterState = {
 };
 
 // Parse URL params into filter state
-function parseUrlParams(searchParams: URLSearchParams): Partial<AnalyticsFilterState> {
+export function parseUrlParams(searchParams: URLSearchParams): Partial<AnalyticsFilterState> {
   const result: Partial<AnalyticsFilterState> = {};
 
   const org = searchParams.get('org');
@@ -181,7 +188,7 @@ function parseUrlParams(searchParams: URLSearchParams): Partial<AnalyticsFilterS
 }
 
 // Serialize filter state to URL params
-function serializeToUrlParams(filters: AnalyticsFilterState): Record<string, string> {
+export function serializeToUrlParams(filters: AnalyticsFilterState): Record<string, string> {
   const params: Record<string, string> = {};
 
   if (filters.org) params.org = filters.org;
@@ -206,6 +213,31 @@ function serializeToUrlParams(filters: AnalyticsFilterState): Record<string, str
   if (filters.errorCodes.length > 0) params.errorCodes = filters.errorCodes.join(',');
   if (filters.bundleNames.length > 0) params.bundleNames = filters.bundleNames.join(',');
 
+  return params;
+}
+
+/** Full filter state from URL search params, with tab defaults for anything absent. */
+export function filtersFromSearchParams(searchParams: URLSearchParams): AnalyticsFilterState {
+  return { ...defaultFilters, ...parseUrlParams(searchParams) };
+}
+
+/** API params for a filter state: the pure core of getApiParams(). */
+export function toApiParams(filters: AnalyticsFilterState): ExtendedFilterParams {
+  const params: ExtendedFilterParams = {
+    org: filters.org || undefined,
+    ...getDateRangeFilter(filters.dateRange),
+    result: filters.result === 'all' ? undefined : filters.result,
+  };
+  if (filters.hostnames.length > 0) params.hostnames = filters.hostnames.join(',');
+  if (filters.tests.length > 0) params.tests = filters.tests.join(',');
+  if (filters.techniques.length > 0) params.techniques = filters.techniques.join(',');
+  if (filters.categories.length > 0) params.categories = filters.categories.join(',');
+  if (filters.severities.length > 0) params.severities = filters.severities.join(',');
+  if (filters.threatActors.length > 0) params.threatActors = filters.threatActors.join(',');
+  if (filters.tags.length > 0) params.tags = filters.tags.join(',');
+  if (filters.errorNames.length > 0) params.errorNames = filters.errorNames.join(',');
+  if (filters.errorCodes.length > 0) params.errorCodes = filters.errorCodes.join(',');
+  if (filters.bundleNames.length > 0) params.bundleNames = filters.bundleNames.join(',');
   return params;
 }
 
@@ -341,48 +373,7 @@ export function useAnalyticsFilters(syncWithUrl = true): UseAnalyticsFiltersRetu
   }, []);
 
   // Convert filter state to API params
-  const getApiParams = useCallback((): ExtendedFilterParams => {
-    const dateFilter = getDateRangeFilter(filters.dateRange);
-
-    const params: ExtendedFilterParams = {
-      org: filters.org || undefined,
-      ...dateFilter,
-      result: filters.result === 'all' ? undefined : filters.result,
-    };
-
-    if (filters.hostnames.length > 0) {
-      params.hostnames = filters.hostnames.join(',');
-    }
-    if (filters.tests.length > 0) {
-      params.tests = filters.tests.join(',');
-    }
-    if (filters.techniques.length > 0) {
-      params.techniques = filters.techniques.join(',');
-    }
-    if (filters.categories.length > 0) {
-      params.categories = filters.categories.join(',');
-    }
-    if (filters.severities.length > 0) {
-      params.severities = filters.severities.join(',');
-    }
-    if (filters.threatActors.length > 0) {
-      params.threatActors = filters.threatActors.join(',');
-    }
-    if (filters.tags.length > 0) {
-      params.tags = filters.tags.join(',');
-    }
-    if (filters.errorNames.length > 0) {
-      params.errorNames = filters.errorNames.join(',');
-    }
-    if (filters.errorCodes.length > 0) {
-      params.errorCodes = filters.errorCodes.join(',');
-    }
-    if (filters.bundleNames.length > 0) {
-      params.bundleNames = filters.bundleNames.join(',');
-    }
-
-    return params;
-  }, [filters]);
+  const getApiParams = useCallback((): ExtendedFilterParams => toApiParams(filters), [filters]);
 
   return {
     filters,

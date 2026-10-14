@@ -2,7 +2,16 @@ import React from 'react';
 import { describe, it, expect } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
-import { getWindowDaysForDateRange, useAnalyticsFilters } from '../useAnalyticsFilters';
+import {
+  getWindowDaysForDateRange,
+  useAnalyticsFilters,
+  ALL_TIME_FROM,
+  getDateRangeFilter,
+  parseUrlParams,
+  serializeToUrlParams,
+  filtersFromSearchParams,
+  toApiParams,
+} from '../useAnalyticsFilters';
 import type { DateRangeValue } from '../useAnalyticsFilters';
 
 // ============================================================================
@@ -366,5 +375,39 @@ describe('useAnalyticsFilters', () => {
       const params = result.current.getApiParams();
       expect(params.from).toBe('now-30d');
     });
+  });
+});
+
+describe('report helpers', () => {
+  it('sends an explicit lower bound for "All time" (the backend defaults to 7 days without one)', () => {
+    expect(ALL_TIME_FROM).toBe('2000-01-01T00:00:00.000Z');
+    expect(getDateRangeFilter({ preset: 'all' })).toEqual({ from: ALL_TIME_FROM });
+  });
+
+  it('keeps relative presets and custom ranges unchanged', () => {
+    expect(getDateRangeFilter({ preset: '30d' })).toEqual({ from: 'now-30d' });
+    expect(getDateRangeFilter({ preset: 'custom', from: '2026-10-01T00:00:00.000Z', to: '2026-10-02T00:00:00.000Z' }))
+      .toEqual({ from: '2026-10-01T00:00:00.000Z', to: '2026-10-02T00:00:00.000Z' });
+    expect(getDateRangeFilter({ preset: 'bogus' })).toEqual({ from: 'now-90d' });
+  });
+
+  it('round-trips filter state through URL params', () => {
+    const filters = filtersFromSearchParams(new URLSearchParams('date=all&result=unprotected&hostnames=H1,H2&tags=lockbit'));
+    expect(filters.dateRange).toEqual({ preset: 'all' });
+    expect(filters.hostnames).toEqual(['H1', 'H2']);
+    expect(filtersFromSearchParams(new URLSearchParams(serializeToUrlParams(filters)))).toEqual(filters);
+  });
+
+  it('defaults to the tab defaults for an empty query', () => {
+    expect(filtersFromSearchParams(new URLSearchParams('')).dateRange).toEqual({ preset: '90d' });
+  });
+
+  it('builds the same API params the tab sends', () => {
+    const filters = filtersFromSearchParams(new URLSearchParams('date=all&result=unprotected&hostnames=H1,H2'));
+    expect(toApiParams(filters)).toEqual({ org: undefined, from: ALL_TIME_FROM, result: 'unprotected', hostnames: 'H1,H2' });
+  });
+
+  it('ignores unknown result values', () => {
+    expect(parseUrlParams(new URLSearchParams('result=maybe')).result).toBeUndefined();
   });
 });
