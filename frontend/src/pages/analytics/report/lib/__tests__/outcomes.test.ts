@@ -42,4 +42,18 @@ describe('outcomes', () => {
     expect(tacticLabel('Command and Control')).toBe('Command and Control');
     expect(tacticLabel('Lateral Movement')).toBe('Lateral Movement');
   });
+
+  it('title-cases single-word and hyphenated tactic slugs', () => {
+    expect(tacticLabel('impact')).toBe('Impact');
+    expect(tacticLabel('exfiltration')).toBe('Exfiltration');
+    expect(tacticLabel('execution')).toBe('Execution');
+    expect(tacticLabel('stealth')).toBe('Stealth');
+    expect(tacticLabel('defense-evasion')).toBe('Defense Evasion');
+    expect(tacticLabel('command-and-control')).toBe('Command and Control');
+  });
+
+  it('leaves ids and non-slug values unchanged', () => {
+    expect(tacticLabel('TA0010')).toBe('TA0010');
+    expect(tacticLabel('Defense Evasion')).toBe('Defense Evasion');
+  });
 });

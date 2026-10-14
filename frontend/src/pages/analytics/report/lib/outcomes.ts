@@ -64,9 +64,12 @@ export function shapeOf(outcome: StageOutcome): 'square' | 'circle' | 'hollow' {
 
 const TACTIC_WORDS: Record<string, string> = { and: 'and' };
 
-/** 'command-and-control' → 'Command and Control'. Non-kebab values pass through. */
+/**
+ * 'command-and-control' → 'Command and Control', 'impact' → 'Impact'. Only lowercase
+ * kebab slugs are title-cased; ids (TA0010) and display names ('Defense Evasion') pass through.
+ */
 export function tacticLabel(value: string): string {
-  if (!value.includes('-')) return value;
+  if (!/^[a-z]+(-[a-z]+)*$/.test(value)) return value;
   return value
     .split('-')
     .map((w) => TACTIC_WORDS[w] ?? w.charAt(0).toUpperCase() + w.slice(1))
