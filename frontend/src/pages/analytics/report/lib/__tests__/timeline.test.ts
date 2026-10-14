@@ -89,3 +89,68 @@ describe('coverageNote', () => {
     expect(coverageNote(makeWindow({ firstExecution: '2026-09-15T00:00:00.000Z' }), 'UTC')).toBeNull();
   });
 });
+
+/** Local wall-clock fields of an instant in a zone (test-side oracle, independent of timeline.ts). */
+const wall = (t: number, tz: string) => {
+  const p = Object.fromEntries(
+    new Intl.DateTimeFormat('en-US', {
+      timeZone: tz, year: 'numeric', month: 'numeric', day: 'numeric',
+      hour: 'numeric', minute: 'numeric', second: 'numeric', hourCycle: 'h23',
+    }).formatToParts(new Date(t)).map((x) => [x.type, x.value]),
+  );
+  return { month: Number(p.month), day: Number(p.day), hour: Number(p.hour) % 24, minute: Number(p.minute), second: Number(p.second) };
+};
+
+describe('DST: each tick sits on its own local date', () => {
+  it('New York day axis moves midnight from 05:00Z to 04:00Z across spring-forward', () => {
+    expect(axisTicks('2026-03-07T00:00:00.000Z', '2026-03-10T00:00:00.000Z', 'day', 'America/New_York')).toEqual([
+      { t: Date.parse('2026-03-07T05:00:00.000Z'), label: '7 Mar' },
+      { t: Date.parse('2026-03-08T05:00:00.000Z'), label: '8 Mar' },
+      { t: Date.parse('2026-03-09T04:00:00.000Z'), label: '9 Mar' },
+    ]);
+  });
+
+  it('New York day axis moves midnight from 04:00Z to 05:00Z across fall-back', () => {
+    expect(axisTicks('2026-10-30T00:00:00.000Z', '2026-11-03T00:00:00.000Z', 'day', 'America/New_York')).toEqual([
+      { t: Date.parse('2026-10-30T04:00:00.000Z'), label: '30 Oct' },
+      { t: Date.parse('2026-10-31T04:00:00.000Z'), label: '31 Oct' },
+      { t: Date.parse('2026-11-01T04:00:00.000Z'), label: '1 Nov' },
+      { t: Date.parse('2026-11-02T05:00:00.000Z'), label: '2 Nov' },
+    ]);
+  });
+
+  it('New York hour axis labels 1 Nov exactly once, at its local midnight', () => {
+    const ticks = axisTicks('2026-10-31T12:00:00.000Z', '2026-11-01T12:00:00.000Z', 'hour', 'America/New_York');
+    expect(ticks.filter((t) => t.label === '1 Nov')).toEqual([{ t: Date.parse('2026-11-01T04:00:00.000Z'), label: '1 Nov' }]);
+  });
+
+  it('Santiago day axis across a midnight spring-forward labels 5 to 9 Sep once each', () => {
+    const ticks = axisTicks('2026-09-04T12:00:00.000Z', '2026-09-09T12:00:00.000Z', 'day', 'America/Santiago');
+    expect(ticks.map((t) => t.label)).toEqual(['5 Sep', '6 Sep', '7 Sep', '8 Sep', '9 Sep']);
+    // 00:00 on 6 Sep does not exist; the tick is the first instant of that date (01:00 local).
+    expect(ticks[1]).toEqual({ t: Date.parse('2026-09-06T04:00:00.000Z'), label: '6 Sep' });
+    expect(wall(ticks[1].t, 'America/Santiago')).toMatchObject({ month: 9, day: 6 });
+  });
+
+  it('Santiago hour axis keeps the 6 Sep date label across the same gap', () => {
+    const ticks = axisTicks('2026-09-05T12:00:00.000Z', '2026-09-06T12:00:00.000Z', 'hour', 'America/Santiago');
+    expect(ticks.filter((t) => t.label === '6 Sep')).toEqual([{ t: Date.parse('2026-09-06T04:00:00.000Z'), label: '6 Sep' }]);
+  });
+
+  it('Lord_Howe day axis puts every tick at local 00:00 across its 30-minute change', () => {
+    const zone = 'Australia/Lord_Howe';
+    const ticks = axisTicks('2026-09-30T00:00:00.000Z', '2026-10-08T00:00:00.000Z', 'day', zone);
+    expect(ticks.map((t) => t.label)).toEqual(['1 Oct', '2 Oct', '3 Oct', '4 Oct', '5 Oct', '6 Oct', '7 Oct', '8 Oct']);
+    for (const { t } of ticks) expect(wall(t, zone)).toMatchObject({ hour: 0, minute: 0, second: 0 });
+    expect(ticks[3]).toEqual({ t: Date.parse('2026-10-03T13:30:00.000Z'), label: '4 Oct' });
+    expect(ticks[4]).toEqual({ t: Date.parse('2026-10-04T13:00:00.000Z'), label: '5 Oct' });
+  });
+
+  it('Lord_Howe hour axis labels only whole local hours across its 30-minute change', () => {
+    const zone = 'Australia/Lord_Howe';
+    const ticks = axisTicks('2026-10-03T12:00:00.000Z', '2026-10-04T12:00:00.000Z', 'hour', zone);
+    for (const { t } of ticks) expect(wall(t, zone).minute).toBe(0);
+    expect(ticks.map((t) => t.label)).toEqual(['4 Oct', '03:00', '06:00', '09:00', '12:00', '15:00', '18:00', '21:00']);
+    expect(ticks[1]).toEqual({ t: Date.parse('2026-10-03T16:00:00.000Z'), label: '03:00' });
+  });
+});
