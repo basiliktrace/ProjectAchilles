@@ -19,7 +19,7 @@ vi.mock('../../browser/metadataExtractor.js', () => ({
   MetadataExtractor: { extractTestMetadata: mockExtractTestMetadata },
 }));
 
-const { initCatalog, getTestMetadata, getCatalogSize, resetCatalog } =
+const { initCatalog, getTestMetadata, getCatalogSize, resetCatalog, getTestDirectory } =
   await import('../test-catalog.service.js');
 
 // ── Helpers ──────────────────────────────────────────────────────────
@@ -154,6 +154,19 @@ describe('test-catalog.service', () => {
       mockReaddirSync.mockReturnValue([]);
       initCatalog(TESTS_PATH);
       expect(getCatalogSize()).toBe(0);
+    });
+
+    it('records each test directory for getTestDirectory', () => {
+      mockExistsSync.mockImplementation((p: string) => p === `${TESTS_PATH}/intel-driven`);
+      mockReaddirSync.mockReturnValue([makeDirent(UUID1, true)]);
+      mockExtractTestMetadata.mockReturnValue(makeMetadata(UUID1, 'intel-driven'));
+
+      initCatalog(TESTS_PATH);
+
+      expect(getTestDirectory(UUID1)).toBe(`${TESTS_PATH}/intel-driven/${UUID1}`);
+      expect(getTestDirectory(UUID2)).toBeNull();
+      resetCatalog();
+      expect(getTestDirectory(UUID1)).toBeNull();
     });
   });
 
