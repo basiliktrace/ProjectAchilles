@@ -43,9 +43,17 @@ export interface TimeAxis {
 
 const DATE_MATH = /^now(?:-(\d+)([smhdwMy]))?$/;
 
+/**
+ * Strict ISO bound: YYYY-MM-DD, or YYYY-MM-DDTHH:mm with optional :ss, optional
+ * .fff and an optional Z or ±hh:mm. Checked before Date.parse, whose legacy
+ * fallback accepts inputs like "12" or "Oct 5".
+ */
+const ISO_BOUND = /^(\d{4}-\d{2}-\d{2})(?:T(\d{2}:\d{2}(?::\d{2}(?:\.\d{1,3})?)?)(Z|[+-]\d{2}:\d{2})?)?$/;
+
 /** Resolve "now", "now-<n><unit>" or an ISO string to an absolute Date. */
 export function parseBound(value: string, now: Date): Date {
-  const m = value.trim().match(DATE_MATH);
+  const text = value.trim();
+  const m = text.match(DATE_MATH);
   if (m) {
     const d = new Date(now.getTime());
     if (!m[1]) return d;
@@ -59,9 +67,15 @@ export function parseBound(value: string, now: Date): Date {
       case 'M': d.setUTCMonth(d.getUTCMonth() - n); break;
       case 'y': d.setUTCFullYear(d.getUTCFullYear() - n); break;
     }
+    // Huge counts overflow the Date range to Invalid Date; reject rather than return it.
+    if (Number.isNaN(d.getTime())) throw new AppError(`Invalid date bound: ${value}`, 400);
     return d;
   }
-  const ms = Date.parse(value);
+  const iso = text.match(ISO_BOUND);
+  if (!iso) throw new AppError(`Invalid date bound: ${value}`, 400);
+  // An offset-less value is read as UTC, matching Elasticsearch's buildDateFilter.
+  const [, date, time = '00:00', zone = 'Z'] = iso;
+  const ms = Date.parse(`${date}T${time}${zone}`);
   if (Number.isNaN(ms)) throw new AppError(`Invalid date bound: ${value}`, 400);
   return new Date(ms);
 }

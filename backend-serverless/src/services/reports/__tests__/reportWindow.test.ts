@@ -34,6 +34,31 @@ describe('parseBound', () => {
   it('rejects anything else with a 400', () => {
     expect(statusOf(() => parseBound('yesterday', NOW))).toBe(400);
   });
+
+  it('rejects relative bounds whose date overflows instead of returning Invalid Date', () => {
+    expect(statusOf(() => parseBound('now-99999999999999d', NOW))).toBe(400);
+    expect(statusOf(() => parseBound('now-99999999999999y', NOW))).toBe(400);
+    expect(statusOf(() => parseBound('now-99999999999999M', NOW))).toBe(400);
+  });
+
+  it('rejects non-ISO input instead of guessing with the legacy Date parser', () => {
+    expect(statusOf(() => parseBound('12', NOW))).toBe(400);
+    expect(statusOf(() => parseBound('Oct 5', NOW))).toBe(400);
+    expect(statusOf(() => parseBound('2026-10-01T00:00:00.1234Z', NOW))).toBe(400);
+  });
+
+  it('reads offset-less ISO bounds as UTC, matching Elasticsearch', () => {
+    expect(parseBound('2026-10-01T00:00:00', NOW).toISOString()).toBe('2026-10-01T00:00:00.000Z');
+    expect(parseBound('2026-10-01', NOW).toISOString()).toBe('2026-10-01T00:00:00.000Z');
+  });
+
+  it('honors an explicit offset on ISO bounds', () => {
+    expect(parseBound('2026-10-01T00:00:00+02:00', NOW).toISOString()).toBe('2026-09-30T22:00:00.000Z');
+  });
+
+  it('rejects impossible calendar values with a 400', () => {
+    expect(statusOf(() => parseBound('2026-13-45', NOW))).toBe(400);
+  });
 });
 
 describe('resolveReportWindow', () => {
@@ -73,6 +98,11 @@ describe('resolveReportWindow', () => {
 
   it('labels relative spans without a preset as custom', () => {
     expect(resolveReportWindow({ from: 'now-12h' }, NOW).preset).toBe('custom');
+  });
+
+  it('rejects an overflowing relative bound with a 400, whether from or to', () => {
+    expect(statusOf(() => resolveReportWindow({ from: 'now-99999999999999d' }, NOW))).toBe(400);
+    expect(statusOf(() => resolveReportWindow({ to: 'now-99999999999999d' }, NOW))).toBe(400);
   });
 
   it('rejects from >= to with a 400', () => {
