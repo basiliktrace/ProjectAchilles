@@ -46,10 +46,7 @@ export function ExecutionLog({ report, head }: { report: ExecutionReport; head: 
                 <td className="rp-mono rp-nowrap">{fmtDate(r.completedAt, tz)} {fmtTime(r.completedAt, tz)}</td>
                 <td className="rp-mono rp-id">{r.hostname}</td>
                 <td>{truncate(r.testName, 40)}</td>
-                <td>
-                  <GlyphRow stages={r.stages.filter((s) => s.outcome !== 'skipped')} />
-                  {r.moreStages > 0 && <span className="rp-more"> +{r.moreStages}</span>}
-                </td>
+                <td><GlyphRow stages={r.stages.filter((s) => s.outcome !== 'skipped')} notFetched={r.moreStages} /></td>
                 <td className="rp-num">{defended(c)}/{conclusive(c)}</td>
                 {edr && <td className="rp-num">{firstAlertText(r)}</td>}
               </tr>

@@ -402,7 +402,16 @@ describe('ExecutionLog', () => {
     const report = makeReport();
     report.runs[0] = { ...report.runs[0], moreStages: 7 };
     render(<ExecutionLog report={report} head={head} />);
-    expect(within(hostRow('WS-FIN-014')).getByText('+7')).toBeInTheDocument();
+    expect(within(hostRow('WS-FIN-014')).getByText('(+7 not fetched)')).toBeInTheDocument();
+  });
+
+  it('prints one count for a long run: the hidden glyphs, then the stages not fetched', () => {
+    const stages = Array.from({ length: 60 }, (_, i) => ({ ...makeRun().stages[1], controlId: `C-${i + 1}`, order: i + 1 }));
+    const report = makeReport({ runs: [makeRun({ stages, moreStages: 10 })] });
+    render(<ExecutionLog report={report} head={head} />);
+    const more = hostRow('WS-FIN-014').querySelectorAll('.rp-more');
+    expect(more).toHaveLength(1);
+    expect(more[0]).toHaveTextContent('+44 (+10 not fetched)');
   });
 
   it('lets a 63-character hostname wrap instead of widening the table past the page', () => {

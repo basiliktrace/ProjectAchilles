@@ -23,9 +23,23 @@ export function GlyphIcon({ outcome, highImpact, size = 9 }: GlyphDatum & { size
   );
 }
 
-export function GlyphRow({ stages, size = 8, gap = 3, max = 16 }: { stages: GlyphDatum[]; size?: number; gap?: number; max?: number }) {
+/**
+ * Up to `max` glyphs, then one count: "+44" for glyphs not drawn and, when the run has stages the
+ * backend did not fetch, "(+10 not fetched)" (the run strip's wording).
+ */
+export function GlyphRow({ stages, size = 8, gap = 3, max = 16, notFetched = 0 }: {
+  stages: GlyphDatum[];
+  size?: number;
+  gap?: number;
+  max?: number;
+  notFetched?: number;
+}) {
   const shown = stages.slice(0, max);
   const width = Math.max(size, shown.length * (size + gap) - gap);
+  const more = [
+    stages.length > max ? `+${(stages.length - max).toLocaleString('en-US')}` : '',
+    notFetched > 0 ? `(+${notFetched.toLocaleString('en-US')} not fetched)` : '',
+  ].filter(Boolean).join(' ');
   return (
     <span className="rp-glyph-row">
       <svg width={width} height={size} viewBox={`0 0 ${width} ${size}`} role="img" aria-label={shown.map((s) => OUTCOME_LABEL[s.outcome]).join(', ')}>
@@ -33,7 +47,7 @@ export function GlyphRow({ stages, size = 8, gap = 3, max = 16 }: { stages: Glyp
           <Glyph key={i} outcome={s.outcome} highImpact={s.highImpact} x={i * (size + gap)} y={0} size={size} />
         ))}
       </svg>
-      {stages.length > max && <span className="rp-more">+{stages.length - max}</span>}
+      {more && <span className="rp-more">{more}</span>}
     </span>
   );
 }

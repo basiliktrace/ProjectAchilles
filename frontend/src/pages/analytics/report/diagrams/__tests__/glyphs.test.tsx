@@ -19,6 +19,19 @@ describe('GlyphRow', () => {
     render(<GlyphRow stages={Array.from({ length: 20 }, () => ({ outcome: 'protected' as const }))} max={16} />);
     expect(screen.getByText('+4')).toBeInTheDocument();
   });
+
+  it('folds stages that were not fetched into one count beside the hidden ones', () => {
+    const sixty = Array.from({ length: 60 }, () => ({ outcome: 'protected' as const }));
+    const { container } = render(<GlyphRow stages={sixty} max={16} notFetched={10} />);
+    const more = container.querySelectorAll('.rp-more');
+    expect(more).toHaveLength(1);
+    expect(more[0]).toHaveTextContent('+44 (+10 not fetched)');
+  });
+
+  it('says only what was not fetched when every fetched stage is drawn', () => {
+    const { container } = render(<GlyphRow stages={[{ outcome: 'protected' }]} notFetched={7} />);
+    expect(container.querySelector('.rp-more')).toHaveTextContent(/^\(\+7 not fetched\)$/);
+  });
 });
 
 describe('OutcomeBar', () => {
