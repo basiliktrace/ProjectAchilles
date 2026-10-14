@@ -45,13 +45,9 @@ html:has(.report-print) body {
   --rp-margin-ink: #8a909c;
 }
 
-/* Margin-box styling. ReportDocument injects only `size` and `content`. */
-@page {
-  @top-left { font-family: "JetBrains Mono Variable", monospace; font-size: 7.5pt; color: var(--rp-margin-ink); }
-  @top-right { font-family: "JetBrains Mono Variable", monospace; font-size: 7.5pt; color: var(--rp-margin-ink); }
-  @bottom-left { font-family: "JetBrains Mono Variable", monospace; font-size: 7.5pt; color: var(--rp-margin-ink); }
-  @bottom-right { font-family: "JetBrains Mono Variable", monospace; font-size: 7.5pt; color: var(--rp-margin-ink); }
-}
+/* Page size, margins and margin boxes are NOT here: ReportDocument injects every
+   @page rule while the report is mounted and removes it on unmount. This file stays
+   loaded after navigation, and a global @page would change how other pages print. */
 
 /* ── Toolbar (screen only) ── */
 .report-print .rp-toolbar { position: sticky; top: 0; z-index: 10; display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; justify-content: space-between; padding: 10px 16px; background: var(--rp-paper); border-bottom: 1px solid var(--rp-rule); font-size: 13px; }

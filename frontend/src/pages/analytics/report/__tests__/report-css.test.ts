@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, it, expect } from 'vitest';
@@ -28,5 +28,31 @@ describe('report.css media queries', () => {
     for (const prelude of widthQueries) {
       expect(prelude, `@media ${prelude}`).toMatch(/\bscreen\b/);
     }
+  });
+});
+
+describe('report.css scope', () => {
+  it('declares no @page rule: ReportDocument injects them and removes them on unmount', () => {
+    // report.css stays loaded after the user leaves the report, so a global @page would
+    // change how every other page prints.
+    const rules = reportCss.replace(/\/\*[\s\S]*?\*\//g, '');
+    expect(rules).not.toMatch(/@page\b/);
+  });
+
+  it('is imported only by the lazy report page, never by main.tsx or the global styles', () => {
+    const srcDir = resolve(__dirname, '..', '..', '..', '..');
+    const importers: string[] = [];
+    const walk = (dir: string) => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const full = resolve(dir, entry.name);
+        if (entry.isDirectory()) walk(full);
+        else if (/\.(tsx?|css)$/.test(entry.name) && /report\.css['"]/.test(readFileSync(full, 'utf8'))) {
+          importers.push(full.slice(srcDir.length + 1));
+        }
+      }
+    };
+    walk(srcDir);
+    // The route's module is lazy-loaded, so importing there keeps the stylesheet out of main.tsx and styles/.
+    expect(importers.filter((f) => !f.endsWith('__tests__/report-css.test.ts'))).toEqual(['pages/analytics/report/AnalyticsReportPage.tsx']);
   });
 });
