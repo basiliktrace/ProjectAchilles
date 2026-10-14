@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { makeReport } from '@/pages/analytics/report/__tests__/fixtures';
@@ -27,6 +27,12 @@ function renderAt(url: string) {
 }
 
 describe('/analytics/report route', () => {
+  // The route lazy-loads the report page. Import its chunk once up front so the first render
+  // does not pay the module load (about 2 s under full-suite load) inside findByRole's wait.
+  beforeAll(async () => {
+    await import('@/pages/analytics/report/AnalyticsReportPage');
+  });
+
   beforeEach(() => {
     getReportMock.mockReset();
     getReportMock.mockResolvedValue(makeReport());
@@ -38,11 +44,12 @@ describe('/analytics/report route', () => {
 
   it('renders the report without the app shell', async () => {
     renderAt('/analytics/report?date=30d');
-    expect(await screen.findByRole('heading', { name: 'Executive summary' })).toBeInTheDocument();
+    // A role query walks the whole report DOM on every poll, so allow for a loaded machine.
+    expect(await screen.findByRole('heading', { name: 'Executive summary' }, { timeout: 5000 })).toBeInTheDocument();
     expect(screen.getByRole('toolbar', { name: 'Report actions' })).toBeInTheDocument();
     expect(screen.queryByTestId('app-shell')).toBeNull();
     expect(getReportMock).toHaveBeenCalledWith(expect.objectContaining({ from: 'now-30d' }));
-  });
+  }, 15_000);
 
   it('is gated on analytics being configured', async () => {
     analyticsAuth.configured = false;

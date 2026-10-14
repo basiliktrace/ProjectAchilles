@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, within } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { counts, makeReport } from './fixtures';
@@ -188,7 +188,8 @@ describe('AnalyticsReportPage', () => {
     getReportMock.mockResolvedValue(makeReport());
     const { unmount } = renderAt('/analytics/report');
     await screen.findByRole('heading', { name: 'Executive summary' });
-    expect(document.title).toBe('Execution report RPT-20261013-7F3A');
+    // The title is set in a passive effect, which may flush after the heading is in the DOM.
+    await waitFor(() => expect(document.title).toBe('Execution report RPT-20261013-7F3A'));
     unmount();
     expect(document.title).toBe('ProjectAchilles');
   });
