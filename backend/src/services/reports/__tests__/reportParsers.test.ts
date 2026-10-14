@@ -50,7 +50,12 @@ describe('parseScope', () => {
   });
 
   it('survives an empty response', () => {
-    expect(parseScope({})).toMatchObject({ stageResults: 0, runs: 0, firstExecution: null, techniques: [], hosts: [] });
+    expect(parseScope({})).toMatchObject({ stageResults: 0, runs: 0, firstExecution: null, techniques: [], hosts: [], hostsCapped: false });
+  });
+
+  it('flags a host list capped by the terms size', () => {
+    expect(scope.hostsCapped).toBe(false);
+    expect(parseScope({ aggregations: { hosts: { sum_other_doc_count: 12, buckets: [] } } }).hostsCapped).toBe(true);
   });
 });
 

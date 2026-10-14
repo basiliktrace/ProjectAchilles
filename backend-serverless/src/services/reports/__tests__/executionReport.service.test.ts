@@ -12,12 +12,15 @@ const settings: AnalyticsSettings = { connectionType: 'direct', node: 'http://lo
 
 const agg = (c: Partial<OutcomeCounts>) => ({ buckets: Object.fromEntries(STAGE_OUTCOMES.map((k) => [k, { doc_count: c[k] ?? 0 }])) });
 
-function scopeResponse(over: { outcomes?: Partial<OutcomeCounts>; runs?: number } = {}) {
+function scopeResponse(over: { outcomes?: Partial<OutcomeCounts>; runs?: number; otherHostDocs?: number } = {}) {
   return { aggregations: {
     outcomes: agg(over.outcomes ?? { protected: 1, unprotected: 1 }),
     runs: { value: over.runs ?? 1 }, endpoints: { value: 1 }, tests: { value: 1 }, tactics: { value: 2 },
     first: { value: T_RUN }, last: { value: T_RUN }, high_impact: { doc_count: 1 },
-    hosts: { buckets: [{ key: 'WS-FIN-014', runs: { value: 1 }, outcomes: agg({ protected: 1, unprotected: 1 }) }] },
+    hosts: {
+      sum_other_doc_count: over.otherHostDocs ?? 0,
+      buckets: [{ key: 'WS-FIN-014', runs: { value: 1 }, outcomes: agg({ protected: 1, unprotected: 1 }) }],
+    },
     techniques: { buckets: [
       { key: 'T1567.002', tactics: { buckets: [{ key: 'exfiltration' }] }, tests: { buckets: [{ key: BUNDLE }] }, outcomes: agg({ unprotected: 4 }) },
       { key: 'T1486', tactics: { buckets: [{ key: 'impact' }] }, tests: { buckets: [{ key: BUNDLE }] }, outcomes: agg({ protected: 4 }) },
@@ -252,6 +255,35 @@ describe('ExecutionReportService.generate', () => {
       justification: 'Egress handled by proxy', acceptedBy: 'SOC lead', acceptedAt: '2026-10-01T00:00:00Z',
     }]);
     expect(report.findings[0].acceptedRisk).toBe(true);
+  });
+
+  describe('accepted-risk rows are scoped to the report', () => {
+    const acceptance = (id: string, over: Record<string, unknown>) => ({
+      acceptance_id: id, justification: `j-${id}`, accepted_by: 'u1', accepted_by_name: 'SOC lead',
+      accepted_at: '2026-10-01T00:00:00Z', status: 'active', ...over,
+    });
+    const lookup = {
+      // Same stage name, but another bundle's control: not this report's stage.
+      'Pre-encryption exfiltration::T9999': [acceptance('other-bundle', { test_name: 'Pre-encryption exfiltration', control_id: 'T9999', scope: 'global' })],
+      'Impact::T1486': [
+        acceptance('out-of-scope-host', { test_name: 'Impact', control_id: 'T1486', scope: 'host', hostname: 'SRV-DC01' }),
+        acceptance('in-scope-host', { test_name: 'Impact', control_id: 'T1486', scope: 'host', hostname: 'WS-FIN-014' }),
+      ],
+      'Pre-encryption exfiltration::T1567.002': [acceptance('global', { test_name: 'Pre-encryption exfiltration', control_id: 'T1567.002', scope: 'global' })],
+    };
+
+    it('keeps only acceptances for a stage and host in scope', async () => {
+      const deps = makeDeps({ getAcceptances: vi.fn(async () => lookup) });
+      const report = await new ExecutionReportService(settings, deps).generate(params({ includeAcceptedRisks: true }), NOW);
+      expect(report.acceptedRisks?.map((r) => r.justification)).toEqual(['j-in-scope-host', 'j-global']);
+    });
+
+    it('keeps host-scoped acceptances for any host when the host list was capped', async () => {
+      const deps = makeDeps({ getAcceptances: vi.fn(async () => lookup) });
+      deps.client.search.mockImplementation(routeSearch(scopeResponse({ otherHostDocs: 7 })));
+      const report = await new ExecutionReportService(settings, deps).generate(params({ includeAcceptedRisks: true }), NOW);
+      expect(report.acceptedRisks?.map((r) => r.justification)).toEqual(['j-out-of-scope-host', 'j-in-scope-host', 'j-global']);
+    });
   });
 
   it('scopes risk-acceptance reads to acceptanceOrg while ES and the Defense Score keep using org', async () => {

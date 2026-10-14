@@ -41,6 +41,8 @@ export interface ParsedScope {
   firstExecution: string | null;
   lastExecution: string | null;
   hosts: ReportHost[];
+  /** More hosts are in scope than `hosts` lists (the terms aggregation hit its size). */
+  hostsCapped: boolean;
   techniques: ReportTechnique[];
   actors: ReportActor[];
 }
@@ -92,6 +94,7 @@ export function parseScope(response: Agg): ParsedScope {
     hosts: buckets(a.hosts).map((b) => ({
       hostname: String(b.key), runs: b.runs?.value ?? 0, outcomes: countsFromFiltersAgg(b.outcomes),
     })),
+    hostsCapped: (a.hosts?.sum_other_doc_count ?? 0) > 0,
     techniques,
     actors: buckets(a.actors).map((b) => ({
       name: String(b.key),

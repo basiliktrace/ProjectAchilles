@@ -157,15 +157,33 @@ function toDefenseScore(d: DefenseScoreResponse | null): ReportDefenseScore | nu
   return { score: d.score, rawScore: accepted > 0 ? d.rawScore ?? null : null, riskAcceptedCount: accepted };
 }
 
-function toAcceptedRiskRows(acceptances: Record<string, RiskAcceptance[]> | null): AcceptedRiskRow[] {
+const acceptanceScope = (a: RiskAcceptance): 'host' | 'global' => a.scope ?? (a.hostname ? 'host' : 'global');
+
+/**
+ * The lookup matches on stage name only, so it also returns other bundles' controls that share a
+ * stage name and acceptances for hosts outside the filter. Keep an acceptance only when (a) a stage
+ * in scope has its name and, if it names a control, that control; and (b) it is global or its host
+ * is in scope. When the scope's host list was capped, (b) cannot be decided and is skipped.
+ */
+function toAcceptedRiskRows(
+  acceptances: Record<string, RiskAcceptance[]> | null,
+  tests: ReportTest[],
+  hosts: { names: string[]; capped: boolean },
+): AcceptedRiskRow[] {
+  const stages = tests.flatMap((t) => t.stages);
+  const hostNames = new Set(hosts.names);
+  const inScope = (a: RiskAcceptance): boolean =>
+    stages.some((s) => s.name === a.test_name && (!a.control_id || a.control_id === s.controlId))
+    && (acceptanceScope(a) === 'global' || hosts.capped || (a.hostname !== undefined && hostNames.has(a.hostname)));
   const unique = new Map<string, RiskAcceptance>();
   for (const list of Object.values(acceptances ?? {})) for (const a of list) unique.set(a.acceptance_id, a);
   return [...unique.values()]
+    .filter(inScope)
     .map((a) => ({
       testName: a.test_name,
       controlId: a.control_id ?? null,
       hostname: a.hostname ?? null,
-      scope: a.scope ?? (a.hostname ? 'host' : 'global'),
+      scope: acceptanceScope(a),
       justification: a.justification,
       acceptedBy: a.accepted_by_name || a.accepted_by,
       acceptedAt: a.accepted_at,
@@ -377,7 +395,9 @@ export class ExecutionReportService {
       hosts: scope.hosts,
       findings,
       runs,
-      acceptedRisks: params.includeAcceptedRisks ? toAcceptedRiskRows(acceptances) : null,
+      acceptedRisks: params.includeAcceptedRisks
+        ? toAcceptedRiskRows(acceptances, allTests, { names: scope.hosts.map((h) => h.hostname), capped: scope.hostsCapped })
+        : null,
     };
   }
 
