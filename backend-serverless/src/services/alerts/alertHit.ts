@@ -3,7 +3,7 @@
 // the execution report's bulk correlation, so the console drill-down and the
 // report read the same fields the same way. Both vendor indices share this
 // doc shape (alert_title, evidence_filenames, prevention_action, portal_url,
-// f0rtika.auto_resolved_at).
+// f0rtika.auto_resolved_at, gated on an enabled, error-free receipt).
 
 export interface AlertAttribution {
   attribution: 'stage' | 'bundle';
@@ -27,6 +27,7 @@ export interface ProjectedAlert {
   attributed_control_id?: string;
   prevention_action?: string;
   portal_url?: string;
+  /** Only for an enabled, error-free auto-resolve receipt (not dry-run, not failed attempts). */
   auto_resolved_at?: string;
 }
 
@@ -58,7 +59,16 @@ export function projectAlertHit(source: Record<string, unknown>, bundleUuid: str
   );
   const prevention_action = optional(source.prevention_action);
   const portal_url = optional(source.portal_url);
-  const auto_resolved_at = optional(f0.auto_resolved_at ?? source['f0rtika.auto_resolved_at']);
+  // The auto-resolve receipt writer stamps auto_resolved_at on EVERY receipt,
+  // including dry-run receipts (no PATCH made) and failed attempts (carry
+  // auto_resolve_error). Only an enabled, error-free receipt means the alert
+  // was really resolved in the vendor console. Each field is read from the
+  // nested f0rtika object, falling back to the dotted top-level key.
+  const receiptMode = optional(f0.auto_resolve_mode ?? source['f0rtika.auto_resolve_mode']);
+  const receiptError = optional(f0.auto_resolve_error ?? source['f0rtika.auto_resolve_error']);
+  const auto_resolved_at = receiptMode === 'enabled' && !receiptError
+    ? optional(f0.auto_resolved_at ?? source['f0rtika.auto_resolved_at'])
+    : undefined;
   return {
     alert_id: text(source.alert_id),
     alert_title: text(source.alert_title),

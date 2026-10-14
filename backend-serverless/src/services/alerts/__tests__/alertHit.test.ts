@@ -42,7 +42,7 @@ describe('projectAlertHit', () => {
       ...base,
       prevention_action: 'blocked',
       portal_url: 'https://falcon.example/a1',
-      f0rtika: { auto_resolved_at: '2026-10-12T13:02:10Z' },
+      f0rtika: { auto_resolved_at: '2026-10-12T13:02:10Z', auto_resolve_mode: 'enabled' },
     }, UUID);
     expect(p).toMatchObject({
       alert_id: 'a1',
@@ -62,5 +62,66 @@ describe('projectAlertHit', () => {
     expect(p).not.toHaveProperty('auto_resolved_at');
     expect(p.description).toBe('');
     expect(p.mitre_techniques).toEqual(['T1486']);
+  });
+
+  describe('auto_resolved_at only reports real resolutions', () => {
+    const receipt = (f0rtika: Record<string, unknown>) => projectAlertHit({ ...base, f0rtika }, UUID);
+
+    it('omits it for a dry-run receipt (no PATCH was made)', () => {
+      const p = receipt({ auto_resolved: true, auto_resolved_at: '2026-10-12T13:02:10Z', auto_resolve_mode: 'dry_run' });
+      expect(p).not.toHaveProperty('auto_resolved_at');
+    });
+
+    it('omits it for an enabled receipt that carries an error', () => {
+      const p = receipt({
+        auto_resolved: true,
+        auto_resolved_at: '2026-10-12T13:02:10Z',
+        auto_resolve_mode: 'enabled',
+        auto_resolve_error: 'Graph PATCH failed: 403',
+      });
+      expect(p).not.toHaveProperty('auto_resolved_at');
+    });
+
+    it('omits it when the receipt has no mode', () => {
+      const p = receipt({ auto_resolved: true, auto_resolved_at: '2026-10-12T13:02:10Z' });
+      expect(p).not.toHaveProperty('auto_resolved_at');
+    });
+
+    it('reports it for an enabled receipt without an error', () => {
+      const p = receipt({ auto_resolved: true, auto_resolved_at: '2026-10-12T13:02:10Z', auto_resolve_mode: 'enabled' });
+      expect(p.auto_resolved_at).toBe('2026-10-12T13:02:10Z');
+    });
+
+    it('treats an empty error string as no error', () => {
+      const p = receipt({
+        auto_resolved_at: '2026-10-12T13:02:10Z',
+        auto_resolve_mode: 'enabled',
+        auto_resolve_error: '',
+      });
+      expect(p.auto_resolved_at).toBe('2026-10-12T13:02:10Z');
+    });
+
+    it('reads the dotted-key form of an enabled receipt', () => {
+      const p = projectAlertHit({
+        ...base,
+        'f0rtika.auto_resolved_at': '2026-10-12T13:02:10Z',
+        'f0rtika.auto_resolve_mode': 'enabled',
+      }, UUID);
+      expect(p.auto_resolved_at).toBe('2026-10-12T13:02:10Z');
+    });
+
+    it('omits it for dotted-key dry-run and dotted-key error receipts', () => {
+      expect(projectAlertHit({
+        ...base,
+        'f0rtika.auto_resolved_at': '2026-10-12T13:02:10Z',
+        'f0rtika.auto_resolve_mode': 'dry_run',
+      }, UUID)).not.toHaveProperty('auto_resolved_at');
+      expect(projectAlertHit({
+        ...base,
+        'f0rtika.auto_resolved_at': '2026-10-12T13:02:10Z',
+        'f0rtika.auto_resolve_mode': 'enabled',
+        'f0rtika.auto_resolve_error': 'boom',
+      }, UUID)).not.toHaveProperty('auto_resolved_at');
+    });
   });
 });

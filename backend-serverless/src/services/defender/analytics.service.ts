@@ -79,6 +79,11 @@ export interface DefenderAlertItem {
   /** Deep link to the alert in the vendor console. */
   portal_url?: string;
   auto_resolved?: boolean;
+  /**
+   * Alerts list: the receipt timestamp (read it together with `auto_resolve_mode`).
+   * Related alerts: set only when ProjectAchilles resolved the alert in enabled
+   * mode without error (not dry-run, not failed attempts).
+   */
   auto_resolved_at?: string | null;
   auto_resolve_mode?: 'disabled' | 'dry_run' | 'enabled' | null;
 }

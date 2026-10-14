@@ -142,7 +142,11 @@ export interface RelatedAlertsResponse {
     prevention_action?: string;
     /** Deep link to the alert in the vendor console. */
     portal_url?: string;
-    /** Set when ProjectAchilles auto-resolved this alert. */
+    /**
+     * Set only when ProjectAchilles resolved this alert in the vendor console: the
+     * receipt is in enabled mode and carries no error. Dry-run receipts and failed
+     * attempts leave it unset.
+     */
     auto_resolved_at?: string;
   }>;
   matchedTechniques: string[];
