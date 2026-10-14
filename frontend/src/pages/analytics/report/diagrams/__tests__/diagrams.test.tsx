@@ -54,6 +54,29 @@ describe('KillChainFlow', () => {
     expect(rightEdge(row2.querySelector('polygon.rp-kc')!)).toBeCloseTo(680 / 6);
   });
 
+  it('lists the alert counts for every configured EDR vendor by default', () => {
+    const { container } = render(<KillChainFlow test={makeTest()} />);
+    expect(container.textContent).toContain('Alerts: Defender 1 · Falcon 1');
+  });
+
+  it('shows no alert line at all when no EDR vendor is configured', () => {
+    const { container } = render(<KillChainFlow test={makeTest()} edrVendors={[]} />);
+    expect(container.textContent).not.toContain('Alerts:');
+    expect(container.textContent).not.toContain('Defender');
+    expect(container.textContent).not.toContain('Falcon');
+    // The rest of the stage column is unchanged.
+    expect(container.textContent).toContain('Execution · 2 of 2 defended');
+  });
+
+  it('lists only the configured vendors', () => {
+    const { container } = render(<KillChainFlow test={makeTest()} edrVendors={['crowdstrike']} />);
+    expect(container.textContent).toContain('Alerts: Falcon 1');
+    expect(container.textContent).not.toContain('Defender');
+    const only = render(<KillChainFlow test={makeTest()} edrVendors={['defender']} />).container;
+    expect(only.textContent).toContain('Alerts: Defender 1');
+    expect(only.textContent).not.toContain('Falcon');
+  });
+
   it('keeps stroke="none" on every SVG text', () => {
     const { container } = render(<KillChainFlow test={makeTest()} />);
     const texts = Array.from(container.querySelectorAll('svg text'));
@@ -193,11 +216,98 @@ describe('RunStrip', () => {
     expect(num(label, 'x')).toBeLessThanOrEqual(STRIP_X1);
   });
 
+  it('draws no alert markers, labels or "not checked" text when no EDR vendor is configured', () => {
+    // With no vendor configured the backend marks every run alertsChecked: false.
+    const none = render(<RunStrip run={makeRun({ alerts: [], alertsChecked: false })} edrVendors={[]} />).container;
+    expect(none.textContent).not.toContain('not checked');
+    expect(none.textContent).not.toContain('no EDR alert');
+
+    const clean = render(<RunStrip run={makeRun({ alerts: [] })} edrVendors={[]} />).container;
+    expect(clean.textContent).not.toContain('no EDR alert');
+
+    const withAlerts = render(<RunStrip run={makeRun()} edrVendors={[]} />).container;
+    expect(withAlerts.querySelectorAll('.rp-al-defender, .rp-al-crowdstrike')).toHaveLength(0);
+    expect(withAlerts.textContent).not.toContain('Defender');
+    expect(withAlerts.textContent).not.toContain('Falcon');
+    // The run bar and axis are still drawn.
+    expect(withAlerts.querySelectorAll('.rp-run-bar')).toHaveLength(1);
+    expect(withAlerts.querySelectorAll('.rp-g')).toHaveLength(5);
+  });
+
+  it('still says "alerts not checked" when a vendor is configured', () => {
+    render(<RunStrip run={makeRun({ alerts: [], alertsChecked: false })} edrVendors={['crowdstrike']} />);
+    expect(screen.getByText('alerts not checked')).toBeInTheDocument();
+  });
+
   it('keeps stroke="none" on every SVG text', () => {
     const { container } = render(<RunStrip run={makeRun()} />);
     const texts = Array.from(container.querySelectorAll('svg text'));
     expect(texts.length).toBeGreaterThan(0);
     for (const t of texts) expect(t).toHaveAttribute('stroke', 'none');
+  });
+});
+
+describe('RunStrip on a run with many stages', () => {
+  const thirty = (over: Partial<ReportRun> = {}) => makeRun({
+    stages: Array.from({ length: 30 }, (_, i) => stage(i + 1, i < 20 ? 'protected' : 'unprotected')),
+    ...over,
+  });
+
+  it('draws proportional outcome segments instead of a glyph per stage', () => {
+    const { container } = render(<RunStrip run={thirty()} />);
+    const segments = Array.from(container.querySelectorAll('.rp-g'));
+    // 20 protected + 10 unprotected: two segments, 2:1, filling the run bar.
+    expect(segments).toHaveLength(2);
+    expect(segments[0]).toHaveClass('rp-g-protected');
+    expect(segments[1]).toHaveClass('rp-g-unprotected');
+    expect(num(segments[0], 'width') / num(segments[1], 'width')).toBeCloseTo(2);
+    const bar = container.querySelector('.rp-run-bar')!;
+    expect(num(segments[0], 'width') + num(segments[1], 'width')).toBeCloseTo(num(bar, 'width'));
+    expect(num(segments[0], 'x')).toBeCloseTo(num(bar, 'x'));
+    expect(screen.getByText('30 stages')).toBeInTheDocument();
+  });
+
+  it('keeps the dark-red mark on high-impact unprotected stages', () => {
+    const stages = Array.from({ length: 30 }, (_, i) => stage(i + 1, i < 20 ? 'protected' : 'unprotected'));
+    stages[29] = { ...stages[29], highImpact: true };
+    const { container } = render(<RunStrip run={thirty({ stages })} />);
+    const hi = container.querySelectorAll('.rp-g-hi');
+    expect(hi).toHaveLength(1);
+    expect(hi[0]).toHaveClass('rp-g-unprotected');
+    // 9 plain + 1 high-impact unprotected out of 30 stages.
+    const plain = container.querySelector('.rp-g-unprotected:not(.rp-g-hi)')!;
+    expect(num(plain, 'width') / num(hi[0], 'width')).toBeCloseTo(9);
+  });
+
+  it('says how many stages were not fetched, and still summarises a short list', () => {
+    render(<RunStrip run={thirty({ moreStages: 5 })} />);
+    expect(screen.getByText('30 stages (+5 not fetched)')).toBeInTheDocument();
+    const { container } = render(<RunStrip run={makeRun({ moreStages: 5 })} />);
+    expect(container.querySelectorAll('.rp-g')).toHaveLength(4);
+    expect(screen.getByText('5 stages (+5 not fetched)')).toBeInTheDocument();
+  });
+
+  it('switches from glyphs to segments just above 16 drawn stages, not counting skipped ones', () => {
+    const run = (n: number, skipped = 0) => makeRun({
+      stages: Array.from({ length: n }, (_, i) => stage(i + 1, i < skipped ? 'skipped' : i % 2 ? 'protected' : 'unprotected')),
+    });
+    const sixteen = render(<RunStrip run={run(16)} />).container;
+    expect(sixteen.querySelectorAll('.rp-g')).toHaveLength(16);
+    expect(sixteen.textContent).not.toContain('16 stages');
+
+    const seventeen = render(<RunStrip run={run(17)} />).container;
+    expect(seventeen.querySelectorAll('.rp-g')).toHaveLength(2);
+    expect(seventeen.textContent).toContain('17 stages');
+
+    // 20 stages of which 6 were skipped leave 14 results: still glyphs.
+    const skippedMost = render(<RunStrip run={run(20, 6)} />).container;
+    expect(skippedMost.querySelectorAll('.rp-g')).toHaveLength(14);
+  });
+
+  it('draws no stage summary when the start time is unknown', () => {
+    const { container } = render(<RunStrip run={thirty({ startedAt: null })} />);
+    expect(container.querySelectorAll('.rp-g')).toHaveLength(0);
+    expect(container.textContent).not.toContain('30 stages');
   });
 });
 

@@ -1,7 +1,8 @@
 // One run on a minutes-from-start axis: the run bar with its stages in order
 // (not individually timed), and EDR alerts at their real times (spec §5.4).
-import type { ReportRun } from '@/services/api/reports';
-import { fmtLatency } from '../lib/format';
+import type { ReportAlert, ReportRun, ReportRunStage, StageOutcome } from '@/services/api/reports';
+import { COUNTED_OUTCOMES, emptyCounts } from '../lib/outcomes';
+import { fmtLatency, plural } from '../lib/format';
 import { Glyph } from './StageGlyph';
 
 const W = 680;
@@ -19,7 +20,10 @@ const LABEL_PAD_PX = 6;
 const LABEL_ROW_PX = 12;
 /** Label rows that fit above the bar in the base height; more rows grow the strip. */
 const FREE_LABEL_ROWS = 3;
+/** Above this many drawn stages (or with any not fetched) the run bar summarises instead of drawing a glyph each. */
 const MAX_GLYPHS = 16;
+const SEGMENT_H = 12;
+const CAPTION_H = 12;
 
 /**
  * "S<n>" for the stage an alert's evidence names (the same numbering as the kill-chain chevrons),
@@ -44,13 +48,37 @@ function placeLabel(ax: number, text: string) {
     : { anchor: 'start' as const, x: ax + 4, from: ax, to: ax + 4 + w };
 }
 
-export function RunStrip({ run }: { run: ReportRun }) {
+interface Segment { outcome: StageOutcome; highImpact: boolean; n: number }
+
+/** Outcome mix of the drawn stages. Unprotected splits in two so high-impact stages keep their dark-red mark. */
+function outcomeSegments(stages: ReportRunStage[]): Segment[] {
+  const counts = emptyCounts();
+  let highImpact = 0;
+  for (const s of stages) {
+    counts[s.outcome] += 1;
+    if (s.outcome === 'unprotected' && s.highImpact) highImpact += 1;
+  }
+  return COUNTED_OUTCOMES.flatMap((outcome): Segment[] =>
+    outcome === 'unprotected'
+      ? [{ outcome, highImpact: false, n: counts[outcome] - highImpact }, { outcome, highImpact: true, n: highImpact }]
+      : [{ outcome, highImpact: false, n: counts[outcome] }],
+  ).filter((seg) => seg.n > 0);
+}
+
+/**
+ * `edrVendors` is meta.edrVendors. With none configured the strip carries no EDR content at all:
+ * no markers, no labels, and no "none" / "not checked" message (the backend marks every run
+ * unchecked then, which would otherwise read as a gap).
+ */
+export function RunStrip({ run, edrVendors = ['defender', 'crowdstrike'] }: { run: ReportRun; edrVendors?: ReportAlert['vendor'][] }) {
+  const edr = edrVendors.length > 0;
+  const runAlerts = edr ? run.alerts : [];
   const end = Date.parse(run.completedAt);
   const start = run.startedAt ? Date.parse(run.startedAt) : null;
   // Axis zero is the run start, or (start unknown) five minutes before completion. The axis
   // reaches back past zero for an alert raised before it, so no marker is drawn off the page.
   const zero = start ?? end - LEAD_MIN * 60_000;
-  const alertMin = run.alerts.map((a) => (Date.parse(a.createdAt) - zero) / 60_000);
+  const alertMin = runAlerts.map((a) => (Date.parse(a.createdAt) - zero) / 60_000);
   const lo = Math.floor(Math.min(0, ...alertMin) / TICK_MIN) * TICK_MIN;
   const hi = Math.max(MIN_SPAN_MIN, Math.ceil(Math.max((end - zero) / 60_000, ...alertMin) / TICK_MIN) * TICK_MIN);
   const x = (t: number) => X0 + (((t - zero) / 60_000 - lo) / (hi - lo)) * (X1 - X0);
@@ -64,7 +92,7 @@ export function RunStrip({ run }: { run: ReportRun }) {
 
   // Each alert label goes on the first row where it overlaps no earlier label.
   const taken: Array<Array<[number, number]>> = [];
-  const alerts = [...run.alerts]
+  const alerts = [...runAlerts]
     .sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt))
     .map((a) => {
       const t = Date.parse(a.createdAt);
@@ -83,15 +111,32 @@ export function RunStrip({ run }: { run: ReportRun }) {
   const barY = BAR_Y + Math.max(0, taken.length - FREE_LABEL_ROWS) * LABEL_ROW_PX;
   const cy = barY + BAR_H / 2;
   // No alerts is only "none" when every configured vendor was searched; otherwise it is unknown.
-  const emptyText = run.alerts.length > 0 ? null : run.alertsChecked ? 'no EDR alert within 30 min' : 'alerts not checked';
+  const emptyText = !edr || runAlerts.length > 0 ? null : run.alertsChecked ? 'no EDR alert within 30 min' : 'alerts not checked';
   const empty = emptyText === null ? null : { text: emptyText, ...placeLabel(x(end) + 4, emptyText) };
-  // Skipped stages are not results, so they get no mark on the bar.
-  const marks = run.stages.filter((s) => s.outcome !== 'skipped').slice(0, MAX_GLYPHS);
+  // Skipped stages are not results, so they get no mark on the bar. A long run (or one with
+  // stages not fetched) is summarised as proportional segments rather than silently cut short.
+  const drawn = run.stages.filter((s) => s.outcome !== 'skipped');
+  const summarised = drawn.length > MAX_GLYPHS || run.moreStages > 0;
+  const bar = start === null ? null : { x0: x(start), w: Math.max(2, x(end) - x(start)) };
+  const segments = summarised ? outcomeSegments(drawn) : [];
+  const total = segments.reduce((sum, seg) => sum + seg.n, 0);
+  let used = 0;
+  const placed = bar
+    ? segments.map((seg) => {
+        const w = (seg.n / total) * bar.w;
+        const placedSeg = { seg, x: bar.x0 + used, w };
+        used += w;
+        return placedSeg;
+      })
+    : [];
+  const caption = bar && summarised
+    ? `${plural(drawn.length, 'stage')}${run.moreStages > 0 ? ` (+${run.moreStages.toLocaleString('en-US')} not fetched)` : ''}`
+    : null;
 
   return (
     <svg
       className="rp-svg rp-avoid"
-      viewBox={`0 0 ${W} ${barY + BAR_H + 26}`}
+      viewBox={`0 0 ${W} ${barY + BAR_H + 26 + (caption ? CAPTION_H : 0)}`}
       role="img"
       aria-label={start !== null ? 'Run timeline in minutes from start' : 'Alerts in minutes from run completion'}
     >
@@ -104,13 +149,22 @@ export function RunStrip({ run }: { run: ReportRun }) {
           </g>
         );
       })}
-      {start !== null ? (
+      {bar ? (
         <>
-          <rect className="rp-run-bar" x={x(start)} y={barY} width={Math.max(2, x(end) - x(start))} height={BAR_H} rx={2} />
-          {marks.map((s, i) => {
-            const step = (x(end) - x(start)) / marks.length;
-            return <Glyph key={i} outcome={s.outcome} highImpact={s.highImpact} x={x(start) + step * (i + 0.5) - 4.5} y={barY + (BAR_H - 9) / 2} size={9} />;
-          })}
+          <rect className="rp-run-bar" x={bar.x0} y={barY} width={bar.w} height={BAR_H} rx={2} />
+          {summarised
+            ? placed.map(({ seg, x: sx, w }) => (
+                <rect
+                  key={`${seg.outcome}-${seg.highImpact}`}
+                  className={`rp-g rp-g-${seg.outcome}${seg.highImpact ? ' rp-g-hi' : ''}`}
+                  x={sx} y={barY + (BAR_H - SEGMENT_H) / 2} width={w} height={SEGMENT_H}
+                />
+              ))
+            : drawn.map((s, i) => {
+                const step = bar.w / drawn.length;
+                return <Glyph key={i} outcome={s.outcome} highImpact={s.highImpact} x={bar.x0 + step * (i + 0.5) - 4.5} y={barY + (BAR_H - 9) / 2} size={9} />;
+              })}
+          {caption && <text className="rp-sub" stroke="none" x={bar.x0} y={barY + BAR_H + 29}>{caption}</text>}
         </>
       ) : (
         <>
