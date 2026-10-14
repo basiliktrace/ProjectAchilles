@@ -29,13 +29,14 @@ type Body = Record<string, unknown>;
 
 const outcomes = () => ({ filters: { filters: OUTCOME_FILTERS } });
 const runCount = () => ({ cardinality: { script: RUN_GROUP_KEY_SCRIPT, precision_threshold: 10_000 } });
-const scoped = (filters: unknown[]) => ({ bool: { filter: filters } });
+/** The query every report search uses (and the partial-failure count probe). */
+export const scopeQuery = (filters: unknown[]) => ({ bool: { filter: filters } });
 
 /** Q1: totals, hosts, techniques and actors over the whole scope. */
 export function scopeRequest(filters: unknown[]): Body {
   return {
     size: 0,
-    query: scoped(filters),
+    query: scopeQuery(filters),
     aggs: {
       outcomes: outcomes(),
       runs: runCount(),
@@ -73,7 +74,7 @@ export function scopeRequest(filters: unknown[]): Body {
 export function testsRequest(filters: unknown[]): Body {
   return {
     size: 0,
-    query: scoped(filters),
+    query: scopeQuery(filters),
     aggs: {
       tests: {
         terms: { script: TEST_KEY_SCRIPT, size: TESTS_FETCH, order: { runs: 'desc' } },
@@ -110,7 +111,7 @@ export function testKeyClause(testKey: string): Body {
 export function timelineRequest(filters: unknown[], laneKeys: string[], bucket: TimeBucket, tz: string): Body {
   return {
     size: 0,
-    query: scoped(filters),
+    query: scopeQuery(filters),
     aggs: {
       timeline: {
         date_histogram: { field: 'routing.event_time', calendar_interval: bucket, time_zone: tz, min_doc_count: 1 },
@@ -132,7 +133,7 @@ export function timelineRequest(filters: unknown[], laneKeys: string[], bucket: 
 export function runsRequest(filters: unknown[]): Body {
   return {
     size: 0,
-    query: scoped(filters),
+    query: scopeQuery(filters),
     aggs: {
       runs: {
         terms: { script: RUN_GROUP_KEY_SCRIPT, size: RUNS_CAP, order: { completed: 'desc' } },

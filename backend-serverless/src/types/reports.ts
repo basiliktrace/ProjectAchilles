@@ -50,6 +50,8 @@ export interface ReportMeta {
    * "unavailable" (spec §5.7). Empty when everything succeeded or was not applicable.
    */
   unavailable: ReportEnrichment[];
+  /** Set when part of the data in scope could not be read (partial shard failure); the cover shows a banner. */
+  partial: { failedShards: number; totalShards: number } | null;
 }
 
 export interface ReportTotals {

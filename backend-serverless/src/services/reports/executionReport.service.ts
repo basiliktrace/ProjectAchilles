@@ -1,9 +1,11 @@
 // Execution report orchestration — GET /api/reports/executions (spec §5.2).
 //
 // Required phase: scope, tests and runs aggregations in parallel, then the
-// timeline (it needs the top tests as lanes). A failure here is a 502, and so
-// is a partial shard failure: a report built from some shards would misstate
-// every count.
+// timeline (it needs the top tests as lanes). A failed query is a 502, and so
+// is a query on which every shard failed. A partial shard failure renders: a
+// count probe asks whether the failed indices hold any doc in scope; if they
+// do (or the probe cannot tell), meta.partial and a short warning say the
+// totals may be incomplete. The raw ES reason only goes to the server log.
 // Optional phase: Defense Score, EDR alerts, run start times and accepted
 // risks run in parallel inside one time budget; each failure or timeout
 // becomes a meta.warnings entry and the report still renders.
@@ -23,7 +25,7 @@ import { correlateRuns, CROWDSTRIKE_ADAPTER, DEFENDER_ADAPTER, type CorrelationR
 import { computeTimeAxis, resolveReportWindow, validateTimeZone } from './reportWindow.js';
 import {
   LANES_CAP, OTHER_LANE, RUN_STRIP_MAX_RUNS, TESTS_CAP,
-  runsRequest, scopeRequest, testsRequest, timelineRequest,
+  runsRequest, scopeQuery, scopeRequest, testsRequest, timelineRequest,
 } from './reportQueries.js';
 import { parseRuns, parseScope, parseTests, parseTimeline } from './reportParsers.js';
 import { attachGuidance, markAcceptedRisks, rankFindings } from './reportFindings.js';
@@ -79,7 +81,30 @@ const VENDOR_LABEL: Record<ReportAlert['vendor'], string> = {
   crowdstrike: 'CrowdStrike Falcon',
 };
 
+const PARTIAL_WARNING = 'Some indices could not be read; totals may be incomplete';
+
+/**
+ * Shard failures seen by the required queries. The counts are the worst single
+ * query's, not a sum: the same broken shard fails in every query.
+ */
+interface ShardFailures {
+  failed: number;
+  total: number;
+  indices: Set<string>;
+  reasons: Set<string>;
+}
+
+interface ShardsInfo {
+  total?: number;
+  successful?: number;
+  failed?: number;
+  failures?: { index?: string; reason?: { reason?: string } }[];
+}
+
 const errorMessage = (err: unknown): string => (err instanceof Error ? err.message : String(err));
+
+/** ES transport options that end a request when the report budget does. */
+const untilDeadline = (deadline: number) => ({ requestTimeout: Math.max(1, deadline - Date.now()) });
 
 async function withDeadline<T>(work: Promise<T>, deadline: number): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -234,6 +259,7 @@ export class ExecutionReportService {
     const window = resolveReportWindow({ from: params.from, to: params.to }, now);
     const filterParams: FilterParams = { ...pickFilters(params), from: window.effectiveFrom, to: window.effectiveTo };
     const filters = this.deps.es.buildExtendedFilters(filterParams);
+    const shardFailures: ShardFailures = { failed: 0, total: 0, indices: new Set(), reasons: new Set() };
 
     // ── Required phase ──
     let scopeRes: unknown;
@@ -241,9 +267,9 @@ export class ExecutionReportService {
     let runsRes: unknown;
     try {
       [scopeRes, testsRes, runsRes] = await Promise.all([
-        this.search(scopeRequest(filters)),
-        this.search(testsRequest(filters)),
-        this.search(runsRequest(filters)),
+        this.search(scopeRequest(filters), deadline, shardFailures),
+        this.search(testsRequest(filters), deadline, shardFailures),
+        this.search(runsRequest(filters), deadline, shardFailures),
       ]);
     } catch (err) {
       throw new AppError(`Report query failed: ${errorMessage(err)}`, 502);
@@ -262,19 +288,24 @@ export class ExecutionReportService {
       truncation: { runs: false, tests: false, lanes: false },
       warnings,
       unavailable: [],
+      partial: null,
     };
-    if (scope.stageResults + scope.outcomes.skipped === 0) return emptyReport(meta);
+    if (scope.stageResults + scope.outcomes.skipped === 0) {
+      meta.partial = await this.probePartialFailure(shardFailures, filters, deadline, warnings);
+      return emptyReport(meta);
+    }
 
     const allTests = parseTests(testsRes).map((t) => this.withCatalog(t));
     const laneKeys = allTests.slice(0, LANES_CAP).map((t) => t.testKey);
     let timelineRes: unknown = {};
     if (laneKeys.length > 0) {
       try {
-        timelineRes = await this.search(timelineRequest(filters, laneKeys, axis.bucket, tz));
+        timelineRes = await this.search(timelineRequest(filters, laneKeys, axis.bucket, tz), deadline, shardFailures);
       } catch (err) {
         throw new AppError(`Report query failed: ${errorMessage(err)}`, 502);
       }
     }
+    meta.partial = await this.probePartialFailure(shardFailures, filters, deadline, warnings);
     const runs = parseRuns(runsRes);
 
     // ── Optional phase ──
@@ -350,15 +381,66 @@ export class ExecutionReportService {
     };
   }
 
-  /** A required query (Q1–Q4). A response from a subset of shards is a failure, not a smaller report. */
-  private async search(body: Record<string, unknown>): Promise<unknown> {
-    const response = await this.deps.client.search({ index: this.settings.indexPattern, ...body } as never);
-    const shards = (response as { _shards?: { failed?: number; failures?: { reason?: { reason?: string } }[] } })._shards;
-    if (shards?.failed && shards.failed > 0) {
-      const reason = shards.failures?.[0]?.reason?.reason;
-      throw new Error(reason ? `shard failure: ${reason}` : 'shard failure');
+  /**
+   * A required query (Q1–Q4), bounded by the request budget. Throws when every shard failed.
+   * A partial shard failure is recorded in `failures` and the response is used as is;
+   * probePartialFailure() later decides whether the report must say so.
+   */
+  private async search(body: Record<string, unknown>, deadline: number, failures: ShardFailures): Promise<unknown> {
+    const response = await this.deps.client.search(
+      { index: this.settings.indexPattern, ...body } as never,
+      untilDeadline(deadline),
+    );
+    const shards = (response as { _shards?: ShardsInfo })._shards;
+    const reasons = (shards?.failures ?? []).flatMap((f) => (f.reason?.reason ? [f.reason.reason] : []));
+    if (shards && (shards.total ?? 0) > 0 && shards.successful === 0) {
+      throw new Error(`all ${shards.total} shards failed${reasons[0] ? `: ${reasons[0]}` : ''}`);
+    }
+    const failed = shards?.failed ?? 0;
+    if (failed > 0) {
+      if (failed > failures.failed) {
+        failures.failed = failed;
+        failures.total = shards?.total ?? 0;
+      }
+      for (const f of shards?.failures ?? []) if (f.index) failures.indices.add(f.index);
+      for (const reason of reasons) failures.reasons.add(reason);
     }
     return response;
+  }
+
+  /**
+   * After a partial shard failure, count the docs in scope on the failed indices. None: the
+   * report is complete and the failure is only logged. Some, or unknown (the probe failed or no
+   * index was named): meta.partial plus a short warning. Never fails the report.
+   */
+  private async probePartialFailure(
+    failures: ShardFailures,
+    filters: unknown[],
+    deadline: number,
+    warnings: string[],
+  ): Promise<ReportMeta['partial']> {
+    if (failures.failed === 0) return null;
+    const indices = [...failures.indices];
+    const detail = `${failures.failed} of ${failures.total} shards failed on [${indices.join(', ')}]: ${[...failures.reasons].join('; ') || 'no reason given'}`;
+    let inScope: string;
+    try {
+      if (indices.length === 0) throw new Error('no failed index named');
+      const res = await withDeadline(
+        this.deps.client.count({ index: indices, query: scopeQuery(filters) } as never, untilDeadline(deadline)),
+        deadline,
+      );
+      const count = (res as { count?: unknown }).count;
+      if (count === 0) {
+        console.warn(`Execution report: ${detail}; the failed indices hold no data in scope`);
+        return null;
+      }
+      inScope = typeof count === 'number' ? String(count) : 'unknown';
+    } catch (err) {
+      inScope = `unknown (probe failed: ${errorMessage(err)})`;
+    }
+    console.warn(`Execution report: ${detail}; docs in scope on the failed indices: ${inScope}`);
+    warnings.push(PARTIAL_WARNING);
+    return { failedShards: failures.failed, totalShards: failures.total };
   }
 
   /** Catalog fields win over ES fields; the display name stays ES's (what the console shows). */

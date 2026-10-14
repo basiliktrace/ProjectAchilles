@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, type MockInstance } from 'vitest';
 import { STAGE_OUTCOMES } from '../stageOutcome.js';
 import { ExecutionReportService } from '../executionReport.service.js';
 import type { OutcomeCounts } from '../../../types/reports.js';
@@ -94,6 +94,7 @@ function makeDeps(over: Record<string, unknown> = {}): any {
     client: {
       search: vi.fn(routeSearch()),
       msearch: vi.fn(msearchHits({ 'achilles-defender': 'RcloneExfiltration' })),
+      count: vi.fn(async () => ({ count: 0 })),
     },
     es: {
       buildExtendedFilters: vi.fn(() => [{ match_all: {} }]),
@@ -158,6 +159,7 @@ describe('ExecutionReportService.generate', () => {
     expect(report.acceptedRisks).toBeNull();
     expect(report.meta.warnings).toEqual([]);
     expect(report.meta.unavailable).toEqual([]);
+    expect(report.meta.partial).toBeNull();
   });
 
   it('returns an empty report without the timeline query or any enrichment', async () => {
@@ -372,16 +374,6 @@ describe('ExecutionReportService.generate', () => {
     await expect(new ExecutionReportService(settings, deps).generate(params(), NOW)).rejects.toMatchObject({ statusCode: 502 });
   });
 
-  it('maps a partial shard failure on a required query to a 502', async () => {
-    const deps = makeDeps();
-    deps.client.search.mockImplementation(routeSearch(Object.assign(scopeResponse(), {
-      _shards: { total: 2, successful: 1, failed: 1, failures: [{ reason: { reason: 'boom' } }] },
-    })));
-    const err = await new ExecutionReportService(settings, deps).generate(params(), NOW).catch((e) => e);
-    expect(err).toMatchObject({ statusCode: 502 });
-    expect(err.message).toContain('boom');
-  });
-
   it('maps a timeline query failure to a 502', async () => {
     const deps = makeDeps();
     deps.client.search.mockImplementation(async (req: { aggs: Record<string, any> }) => {
@@ -394,5 +386,85 @@ describe('ExecutionReportService.generate', () => {
   it('rejects an unknown time zone with a 400', async () => {
     await expect(new ExecutionReportService(settings, makeDeps()).generate(params({ tz: 'Nope/Nowhere' }), NOW))
       .rejects.toMatchObject({ statusCode: 400 });
+  });
+});
+
+describe('partial shard failures', () => {
+  const PARTIAL_WARNING = 'Some indices could not be read; totals may be incomplete';
+  const partialShards = () => ({
+    total: 2, successful: 1, failed: 1, failures: [{ index: 'achilles-results-old', reason: { reason: 'boom' } }],
+  });
+  const withShards = (res: object, shards: object) => Object.assign(res, { _shards: shards });
+  let warn: MockInstance;
+
+  beforeEach(() => {
+    warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  });
+  afterEach(() => {
+    warn.mockRestore();
+  });
+
+  it('renders and flags meta.partial when the failed indices hold data in scope', async () => {
+    const deps = makeDeps();
+    deps.client.search.mockImplementation(routeSearch(withShards(scopeResponse(), partialShards())));
+    deps.client.count.mockResolvedValue({ count: 3 });
+    const report = await new ExecutionReportService(settings, deps).generate(params(), NOW);
+    expect(report.totals.runs).toBe(1);
+    expect(report.meta.partial).toEqual({ failedShards: 1, totalShards: 2 });
+    expect(report.meta.warnings).toEqual([PARTIAL_WARNING]);
+    expect(report.meta.warnings.join(' ')).not.toContain('boom');
+    expect(deps.client.count).toHaveBeenCalledTimes(1);
+    expect(deps.client.count.mock.calls[0][0]).toEqual({
+      index: ['achilles-results-old'], query: { bool: { filter: [{ match_all: {} }] } },
+    });
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('boom'));
+  });
+
+  it('only logs when the failed indices hold nothing in scope', async () => {
+    const deps = makeDeps();
+    deps.client.search.mockImplementation(routeSearch(withShards(scopeResponse(), partialShards())));
+    deps.client.count.mockResolvedValue({ count: 0 });
+    const report = await new ExecutionReportService(settings, deps).generate(params(), NOW);
+    expect(report.meta.partial).toBeNull();
+    expect(report.meta.warnings).toEqual([]);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('achilles-results-old'));
+  });
+
+  it('flags meta.partial when the count probe fails', async () => {
+    const deps = makeDeps();
+    deps.client.search.mockImplementation(routeSearch(withShards(scopeResponse(), partialShards())));
+    deps.client.count.mockRejectedValue(new Error('probe refused'));
+    const report = await new ExecutionReportService(settings, deps).generate(params(), NOW);
+    expect(report.meta.partial).toEqual({ failedShards: 1, totalShards: 2 });
+    expect(report.meta.warnings).toEqual([PARTIAL_WARNING]);
+  });
+
+  it('keeps the worst query\'s shard counts instead of summing them', async () => {
+    const deps = makeDeps();
+    deps.client.search.mockImplementation(async (req: { aggs: Record<string, any> }) =>
+      withShards(await routeSearch()(req), partialShards()));
+    deps.client.count.mockResolvedValue({ count: 1 });
+    const report = await new ExecutionReportService(settings, deps).generate(params(), NOW);
+    expect(deps.client.search).toHaveBeenCalledTimes(4);
+    expect(report.meta.partial).toEqual({ failedShards: 1, totalShards: 2 });
+    expect(deps.client.count).toHaveBeenCalledTimes(1);
+  });
+
+  it('maps a failure on every shard to a 502', async () => {
+    const deps = makeDeps();
+    deps.client.search.mockImplementation(routeSearch(withShards(scopeResponse(), { total: 2, successful: 0, failed: 2 })));
+    await expect(new ExecutionReportService(settings, deps).generate(params(), NOW)).rejects.toMatchObject({ statusCode: 502 });
+    expect(deps.client.count).not.toHaveBeenCalled();
+  });
+
+  it('bounds the required queries and the probe by the request budget', async () => {
+    const deps = makeDeps();
+    deps.client.search.mockImplementation(routeSearch(withShards(scopeResponse(), partialShards())));
+    await new ExecutionReportService(settings, deps).generate(params(), NOW);
+    for (const call of [...deps.client.search.mock.calls, ...deps.client.count.mock.calls]) {
+      expect(call[1]).toEqual({ requestTimeout: expect.any(Number) });
+      expect(call[1].requestTimeout).toBeGreaterThanOrEqual(1);
+      expect(call[1].requestTimeout).toBeLessThanOrEqual(5_000);
+    }
   });
 });
