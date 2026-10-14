@@ -14,15 +14,34 @@ const res = await fetch(SOURCE);
 if (!res.ok) throw new Error(`Download failed: ${res.status} ${res.statusText}`);
 const bundle = await res.json();
 
+const byId = new Map(bundle.objects.map((o) => [o.id, o]));
+const revokedBy = new Map(
+  bundle.objects.filter((o) => o.type === 'relationship' && o.relationship_type === 'revoked-by').map((r) => [r.source_ref, r.target_ref]),
+);
+const attackId = (o) => (o.external_references ?? []).find((r) => r.source_name === 'mitre-attack')?.external_id;
+const phasesOf = (o) => (o.kill_chain_phases ?? []).filter((p) => p.kill_chain_name === 'mitre-attack').map((p) => p.phase_name);
+
 const techniques = {};
+const revokedObjects = [];
 for (const o of bundle.objects) {
-  if (o.type !== 'attack-pattern' || o.revoked || o.x_mitre_deprecated) continue;
-  const ref = (o.external_references ?? []).find((r) => r.source_name === 'mitre-attack');
-  if (!ref?.external_id) continue;
-  techniques[ref.external_id] = {
-    name: o.name,
-    tactics: (o.kill_chain_phases ?? []).filter((p) => p.kill_chain_name === 'mitre-attack').map((p) => p.phase_name),
-  };
+  if (o.type !== 'attack-pattern' || o.x_mitre_deprecated) continue;
+  const id = attackId(o);
+  if (!id) continue;
+  if (o.revoked) revokedObjects.push(o);
+  else techniques[id] = { name: o.name, tactics: phasesOf(o) };
+}
+// Library tests still cite ids ATT&CK revoked and renumbered, so keep a revoked
+// technique unless its id was reused by an active one. Its own phases win; the
+// technique its revoked-by relationship points to is the fallback.
+for (const o of revokedObjects) {
+  const id = attackId(o);
+  if (id in techniques) continue;
+  let tactics = phasesOf(o);
+  if (tactics.length === 0) {
+    const replacement = byId.get(revokedBy.get(o.id));
+    tactics = replacement ? phasesOf(replacement) : [];
+  }
+  techniques[id] = { name: o.name, tactics };
 }
 
 const ids = Object.keys(techniques).sort();
@@ -37,7 +56,7 @@ export interface AttackTechniqueInfo {
   tactics: string[];
 }
 
-const ATTACK_TECHNIQUES: Record<string, AttackTechniqueInfo> = {
+export const ATTACK_TECHNIQUES: Record<string, AttackTechniqueInfo> = {
 ${body}
 };
 

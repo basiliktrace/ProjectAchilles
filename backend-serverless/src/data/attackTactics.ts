@@ -24,21 +24,42 @@ export const ATTACK_TACTICS: readonly Tactic[] = [
   { id: 'TA0040', key: 'impact', name: 'Impact' },
 ];
 
+// Newer ATT&CK releases split Defense Evasion (TA0005, now named Stealth) and
+// moved part of it into Defense Impairment (TA0112). The ES test docs, the
+// f0_library metadata and the console all still group these under
+// defense-evasion, so these names resolve to that row rather than adding rows.
+const ALIASES: Record<string, string> = {
+  stealth: 'TA0005',
+  'defense impairment': 'TA0005',
+  TA0112: 'TA0005',
+};
+
+/** Lookup form: trimmed, lowercase, runs of spaces or hyphens as one space. */
+function normalise(value: string): string {
+  return value.trim().toLowerCase().replace(/[\s-]+/g, ' ');
+}
+
 const LOOKUP = new Map<string, Tactic>();
 for (const t of ATTACK_TACTICS) {
-  LOOKUP.set(t.id.toLowerCase(), t);
-  LOOKUP.set(t.key, t);
-  LOOKUP.set(t.name.toLowerCase(), t);
+  LOOKUP.set(normalise(t.id), t);
+  LOOKUP.set(normalise(t.key), t);
+  LOOKUP.set(normalise(t.name), t);
+}
+for (const [alias, id] of Object.entries(ALIASES)) {
+  const tactic = ATTACK_TACTICS.find((t) => t.id === id);
+  if (!tactic) throw new Error(`attackTactics: alias "${alias}" points at unknown tactic ${id}`);
+  LOOKUP.set(normalise(alias), tactic);
 }
 
-/** Display name for a tactic given as kebab key, TA id or display name. */
+/** Display name for a tactic given as kebab key, TA id, display name or alias. */
 export function tacticName(value: string | null | undefined): string | null {
   if (!value) return null;
-  return LOOKUP.get(value.trim().toLowerCase())?.name ?? null;
+  return LOOKUP.get(normalise(value))?.name ?? null;
 }
 
-/** Kill-chain position of a tactic display name; unknown or null sorts last. */
+/** Kill-chain position of a tactic in any tacticName form; unknown or null sorts last. */
 export function tacticRank(name: string | null | undefined): number {
-  const i = ATTACK_TACTICS.findIndex((t) => t.name === name);
+  const resolved = tacticName(name);
+  const i = ATTACK_TACTICS.findIndex((t) => t.name === resolved);
   return i === -1 ? ATTACK_TACTICS.length : i;
 }
