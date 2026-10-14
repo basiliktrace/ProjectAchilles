@@ -6,10 +6,14 @@ import { GlyphRow, OutcomeLegend } from '../diagrams/StageGlyph';
 import { Sheet, type SheetHead } from './Sheet';
 import { AlertsIncompleteNote } from './scope';
 
-/** The run's earliest alert; a dash when its alerts were searched and none matched, "not checked" when they were not searched. */
+/**
+ * The run's earliest alert; a dash when its alerts were searched and none matched, "not checked" when
+ * they were not searched. Alerts that all lack a time still say an alert was raised.
+ */
 function firstAlertText(run: ReportRun): string {
   const first = firstAlert(run);
   if (first) return `${fmtLatency((Date.parse(first.createdAt) - Date.parse(run.completedAt)) / 1000)} ${vendorName(first.vendor)}`;
+  if (run.alerts.length > 0) return `${vendorName(run.alerts[0].vendor)} (time unknown)`;
   return run.alertsChecked ? '—' : 'not checked';
 }
 

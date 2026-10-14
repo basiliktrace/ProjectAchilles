@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { fmtCount, fmtDate, fmtDateTime, fmtDuration, fmtLatency, fmtPct, fmtShortDate, fmtTime, plural, truncate } from '../format';
+import { fmtCount, fmtDate, fmtDateTime, fmtDuration, fmtLatency, fmtPct, fmtShortDate, fmtTime, plural, truncate, tzName } from '../format';
 
 const T = '2026-10-12T12:47:49.000Z';
 
@@ -47,6 +47,18 @@ describe('format', () => {
     expect(fmtPct(0.29)).toBe('29%');
     expect(fmtPct(0.57)).toBe('57%');
     expect(fmtPct(29 / 100)).toBe('29%');
+  });
+
+  it('prints a dash for an empty or unparseable date instead of throwing', () => {
+    // The backend sends '' for an alert with no created_at.
+    for (const bad of ['', 'not a date']) {
+      expect(fmtDate(bad, 'UTC')).toBe('—');
+      expect(fmtShortDate(bad, 'UTC')).toBe('—');
+      expect(fmtTime(bad, 'UTC')).toBe('—');
+      expect(fmtTime(bad, 'UTC', true)).toBe('—');
+      expect(fmtDateTime(bad, 'UTC')).toBe('—');
+      expect(tzName(bad, 'America/Santo_Domingo')).toBe('America/Santo_Domingo');
+    }
   });
 
   it('pluralizes and truncates', () => {

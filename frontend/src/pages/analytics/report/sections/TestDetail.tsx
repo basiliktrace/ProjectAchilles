@@ -1,6 +1,6 @@
 import type { ExecutionReport, ReportRun, ReportTest } from '@/services/api/reports';
 import { OUTCOME_LABEL, conclusive, defended, protectionRate } from '../lib/outcomes';
-import { fmtDateTime, fmtLatency, fmtPct, fmtShortDate, fmtTime, plural } from '../lib/format';
+import { fmtDateTime, fmtLatency, fmtPct, fmtShortDate, fmtTime, plural, timeOf } from '../lib/format';
 import { alertStageText, vendorName } from '../lib/runs';
 import { KillChainFlow } from '../diagrams/KillChainFlow';
 import { OutcomeBar } from '../diagrams/OutcomeBar';
@@ -102,9 +102,10 @@ export function TestDetail({ report, test, head }: { report: ExecutionReport; te
   const chain = test.isBundle && test.category !== 'cyber-hygiene';
   const runs = report.runs.filter((r) => r.testKey === test.testKey);
   const runsNote = <small>All {plural(test.runs, 'run')}</small>;
+  // Newest first; an alert whose time does not parse sorts last and prints a dash for its times.
   const alerts = runs
-    .flatMap((r) => r.alerts.map((a) => ({ a, r })))
-    .sort((p, q) => Date.parse(q.a.createdAt) - Date.parse(p.a.createdAt))
+    .flatMap((r) => r.alerts.map((a) => ({ a, r, t: timeOf(a.createdAt) })))
+    .sort((p, q) => (q.t ?? -Infinity) - (p.t ?? -Infinity) || 0)
     .slice(0, ALERTS_SHOWN);
 
   return (
@@ -155,14 +156,14 @@ export function TestDetail({ report, test, head }: { report: ExecutionReport; te
               </tr>
             </thead>
             <tbody>
-              {alerts.map(({ a, r }, i) => (
+              {alerts.map(({ a, r, t }, i) => (
                 <tr key={`${r.key}-${i}`}>
-                  <td className="rp-mono rp-nowrap">{fmtShortDate(a.createdAt, tz)} {fmtTime(a.createdAt, tz)}</td>
+                  <td className="rp-mono rp-nowrap">{t === null ? '—' : `${fmtShortDate(a.createdAt, tz)} ${fmtTime(a.createdAt, tz)}`}</td>
                   <td className="rp-mono rp-id">{r.hostname}</td>
                   {test.isBundle && <td>{alertStageText([test], r, a.stageControlId)}</td>}
                   <td>{vendorName(a.vendor)}</td>
                   <td><span className="rp-chip">{a.severity}</span> {a.title}</td>
-                  <td className="rp-num">{fmtLatency((Date.parse(a.createdAt) - Date.parse(r.completedAt)) / 1000)}</td>
+                  <td className="rp-num">{t === null ? '—' : fmtLatency((t - Date.parse(r.completedAt)) / 1000)}</td>
                   <td>{a.status}{a.preventionAction ? ` · ${a.preventionAction.replace(/_/g, ' ')}` : ''}{a.autoResolvedAt ? ' · auto-resolved' : ''}</td>
                 </tr>
               ))}

@@ -4,39 +4,55 @@
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
-function parts(iso: string, tz: string, opts: Intl.DateTimeFormatOptions): Record<string, string> {
+/** Printed in place of a date or time that does not parse. */
+const NO_DATE = '—';
+
+/**
+ * Epoch milliseconds of `iso`, or null when it is empty or does not parse. The backend sends ''
+ * for an alert with no created_at, and one bad value must not take the whole report down.
+ */
+export function timeOf(iso: string): number | null {
+  const t = Date.parse(iso);
+  return Number.isFinite(t) ? t : null;
+}
+
+/** The date parts of `iso` in `tz`, or null when `iso` does not parse. */
+function parts(iso: string, tz: string, opts: Intl.DateTimeFormatOptions): Record<string, string> | null {
+  const t = timeOf(iso);
+  if (t === null) return null;
   return Object.fromEntries(
-    new Intl.DateTimeFormat('en-US', { timeZone: tz, ...opts }).formatToParts(new Date(iso)).map((p) => [p.type, p.value]),
+    new Intl.DateTimeFormat('en-US', { timeZone: tz, ...opts }).formatToParts(new Date(t)).map((p) => [p.type, p.value]),
   );
 }
 
 function dayMonthYear(iso: string, tz: string) {
   const p = parts(iso, tz, { day: 'numeric', month: 'numeric', year: 'numeric' });
-  return { day: Number(p.day), month: MONTHS[Number(p.month) - 1], year: p.year };
+  return p && { day: Number(p.day), month: MONTHS[Number(p.month) - 1], year: p.year };
 }
 
 export function fmtDate(iso: string, tz: string): string {
   const d = dayMonthYear(iso, tz);
-  return `${d.day} ${d.month} ${d.year}`;
+  return d ? `${d.day} ${d.month} ${d.year}` : NO_DATE;
 }
 
 export function fmtShortDate(iso: string, tz: string): string {
   const d = dayMonthYear(iso, tz);
-  return `${d.day} ${d.month}`;
+  return d ? `${d.day} ${d.month}` : NO_DATE;
 }
 
 export function fmtTime(iso: string, tz: string, withSeconds = false): string {
   const p = parts(iso, tz, { hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23' });
+  if (!p) return NO_DATE;
   return withSeconds ? `${p.hour}:${p.minute}:${p.second}` : `${p.hour}:${p.minute}`;
 }
 
 export function fmtDateTime(iso: string, tz: string): string {
-  return `${fmtDate(iso, tz)}, ${fmtTime(iso, tz)}`;
+  return timeOf(iso) === null ? NO_DATE : `${fmtDate(iso, tz)}, ${fmtTime(iso, tz)}`;
 }
 
-/** Short zone name for the cover, e.g. "AST" or "UTC". */
+/** Short zone name for the cover, e.g. "AST" or "UTC"; the zone id itself when `iso` does not parse. */
 export function tzName(iso: string, tz: string): string {
-  return parts(iso, tz, { timeZoneName: 'short' }).timeZoneName ?? tz;
+  return parts(iso, tz, { timeZoneName: 'short' })?.timeZoneName ?? tz;
 }
 
 /**

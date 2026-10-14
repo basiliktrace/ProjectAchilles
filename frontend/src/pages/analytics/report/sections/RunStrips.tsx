@@ -1,6 +1,6 @@
 import type { ExecutionReport, ReportRun, ReportTest } from '@/services/api/reports';
 import { conclusive, defended } from '../lib/outcomes';
-import { fmtDate, fmtDuration, fmtLatency, fmtTime } from '../lib/format';
+import { fmtDate, fmtDuration, fmtLatency, fmtTime, timeOf } from '../lib/format';
 import { alertStageText, countStages, vendorName } from '../lib/runs';
 import { RunStrip } from '../diagrams/RunStrip';
 import { OutcomeLegend } from '../diagrams/StageGlyph';
@@ -8,6 +8,14 @@ import { Sheet, type SheetHead } from './Sheet';
 import { AlertsIncompleteNote } from './scope';
 
 type EdrVendors = ExecutionReport['meta']['edrVendors'];
+
+interface RunEvent { t: number | null; text: string }
+
+/** Oldest first; an event without a time goes last. */
+function byTimeUndatedLast(a: RunEvent, b: RunEvent): number {
+  if (a.t === null || b.t === null) return Number(a.t === null) - Number(b.t === null);
+  return a.t - b.t;
+}
 
 /** With EDR configured: a run with no alert is "silent" only if its alerts were searched; otherwise it is unchecked. */
 function AlertFlag({ run }: { run: ReportRun }) {
@@ -22,15 +30,16 @@ function RunBlock({ run, tests, tz, edrVendors }: { run: ReportRun; tests: Repor
   const c = countStages(run.stages);
   const start = run.startedAt ? Date.parse(run.startedAt) : null;
   const end = Date.parse(run.completedAt);
-  const alertEvents = edr
+  const alertEvents: RunEvent[] = edr
     ? run.alerts.map((a) => {
-        const t = Date.parse(a.createdAt);
+        // An alert whose time does not parse is still listed, last and without a time.
+        const t = timeOf(a.createdAt);
+        const timing = t === null ? null : start !== null && t >= start && t <= end ? 'during run' : fmtLatency((t - end) / 1000);
         return {
           t,
           text: [
             vendorName(a.vendor), a.severity, a.title, alertStageText(tests, run, a.stageControlId),
-            start !== null && t >= start && t <= end ? 'during run' : fmtLatency((t - end) / 1000),
-            a.status, a.preventionAction ? a.preventionAction.replace(/_/g, ' ') : null,
+            timing, a.status, a.preventionAction ? a.preventionAction.replace(/_/g, ' ') : null,
           ].filter(Boolean).join(' · '),
         };
       })
@@ -42,7 +51,7 @@ function RunBlock({ run, tests, tz, edrVendors }: { run: ReportRun; tests: Repor
       t: end,
       text: `Completed${start !== null ? ` after ${fmtDuration(end - start)}` : ''} · ${defended(c)} of ${conclusive(c)} stages defended`,
     },
-  ].sort((a, b) => a.t - b.t);
+  ].sort(byTimeUndatedLast);
 
   return (
     <div className="rp-run rp-avoid">
@@ -53,7 +62,7 @@ function RunBlock({ run, tests, tz, edrVendors }: { run: ReportRun; tests: Repor
       <RunStrip run={run} edrVendors={edrVendors} />
       <ol className="rp-events">
         {events.map((e, i) => (
-          <li key={i}><span className="rp-mono rp-muted">{fmtTime(new Date(e.t).toISOString(), tz, true)}</span><span>{e.text}</span></li>
+          <li key={i}><span className="rp-mono rp-muted">{e.t === null ? '—' : fmtTime(new Date(e.t).toISOString(), tz, true)}</span><span>{e.text}</span></li>
         ))}
       </ol>
     </div>

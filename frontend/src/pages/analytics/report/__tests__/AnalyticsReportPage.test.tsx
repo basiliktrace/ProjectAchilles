@@ -254,6 +254,22 @@ describe('ReportDocument', () => {
     expect(container.innerHTML).not.toMatch(/defender|crowdstrike|falcon/i);
   });
 
+  it('renders every section when an alert has no time (the backend sends \'\' for a missing created_at)', () => {
+    const report = makeReport();
+    const [lsass, falcon] = report.runs[0].alerts;
+    report.runs[0] = { ...report.runs[0], alerts: [{ ...lsass, createdAt: '' }, falcon] };
+    const { container } = render(<ReportDocument report={report} paper="A4" marking="TLP:AMBER" />);
+    // The run-strip appendix is included (2 runs), so every alert consumer has rendered.
+    expect(screen.getByText('Appendix B · Run timelines')).toBeInTheDocument();
+    expect(screen.getByLabelText('Method')).toBeInTheDocument();
+    expect(container.innerHTML).not.toMatch(/NaN|Invalid Date/);
+    // The undated alert is still listed in the run's events, last and with a dash for its time.
+    const events = Array.from(container.querySelectorAll('.rp-events li')).map((li) => li.textContent ?? '');
+    expect(events.filter((e) => e.startsWith('—'))).toEqual([
+      '—Defender · high · Suspicious access to LSASS service · S2 Privileged credential access · resolved · blocked',
+    ]);
+  });
+
   it('names the configured vendors on the Method page when they are', () => {
     render(<ReportDocument report={makeReport()} paper="A4" marking="TLP:AMBER" />);
     const method = screen.getByLabelText('Method');

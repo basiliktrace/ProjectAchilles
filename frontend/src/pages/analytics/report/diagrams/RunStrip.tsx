@@ -2,7 +2,7 @@
 // (not individually timed), and EDR alerts at their real times (spec §5.4).
 import type { ReportAlert, ReportRun, ReportRunStage, StageOutcome } from '@/services/api/reports';
 import { COUNTED_OUTCOMES, emptyCounts } from '../lib/outcomes';
-import { fmtLatency, plural } from '../lib/format';
+import { fmtLatency, plural, timeOf } from '../lib/format';
 import { stageForAlert } from '../lib/runs';
 import { Glyph } from './StageGlyph';
 
@@ -68,12 +68,17 @@ function outcomeSegments(stages: ReportRunStage[]): Segment[] {
 export function RunStrip({ run, edrVendors = ['defender', 'crowdstrike'] }: { run: ReportRun; edrVendors?: ReportAlert['vendor'][] }) {
   const edr = edrVendors.length > 0;
   const runAlerts = edr ? run.alerts : [];
+  // An alert whose time does not parse has no place on the axis, but it still means the run was not silent.
+  const timed = runAlerts.flatMap((a) => {
+    const t = timeOf(a.createdAt);
+    return t === null ? [] : [{ a, t }];
+  });
   const end = Date.parse(run.completedAt);
   const start = run.startedAt ? Date.parse(run.startedAt) : null;
   // Axis zero is the run start, or (start unknown) five minutes before completion. The axis
   // reaches back past zero for an alert raised before it, so no marker is drawn off the page.
   const zero = start ?? end - LEAD_MIN * 60_000;
-  const alertMin = runAlerts.map((a) => (Date.parse(a.createdAt) - zero) / 60_000);
+  const alertMin = timed.map(({ t }) => (t - zero) / 60_000);
   const lo = Math.floor(Math.min(0, ...alertMin) / TICK_MIN) * TICK_MIN;
   const hi = Math.max(MIN_SPAN_MIN, Math.ceil(Math.max((end - zero) / 60_000, ...alertMin) / TICK_MIN) * TICK_MIN);
   const x = (t: number) => X0 + (((t - zero) / 60_000 - lo) / (hi - lo)) * (X1 - X0);
@@ -87,10 +92,9 @@ export function RunStrip({ run, edrVendors = ['defender', 'crowdstrike'] }: { ru
 
   // Each alert label goes on the first row where it overlaps no earlier label.
   const taken: Array<Array<[number, number]>> = [];
-  const alerts = [...runAlerts]
-    .sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt))
-    .map((a) => {
-      const t = Date.parse(a.createdAt);
+  const alerts = [...timed]
+    .sort((p, q) => p.t - q.t)
+    .map(({ a, t }) => {
       const ax = x(t);
       const during = start !== null && t >= start && t <= end;
       const vendor = a.vendor === 'defender' ? 'Defender' : 'Falcon';

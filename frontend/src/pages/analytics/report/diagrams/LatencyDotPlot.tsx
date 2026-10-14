@@ -1,7 +1,7 @@
 // Time from run completion to each run's first EDR alert (spec §5.4).
 // Negative values fired before the run completed.
 import type { ReportAlert, ReportRun } from '@/services/api/reports';
-import { fmtLatency, plural } from '../lib/format';
+import { fmtLatency, plural, timeOf } from '../lib/format';
 
 const W = 680;
 const X0 = 156;
@@ -10,10 +10,16 @@ const LO = -10;
 const HI = 30;
 const ROW_H = 40;
 
-/** Minutes from completion to each run's first alert (optionally for one vendor). Runs without one are skipped. */
+/**
+ * Minutes from completion to each run's first alert (optionally for one vendor). Runs without one
+ * are skipped, and so are alerts whose time does not parse.
+ */
 export function firstAlertMinutes(runs: ReportRun[], vendor?: ReportAlert['vendor']): number[] {
   return runs.flatMap((r) => {
-    const times = r.alerts.filter((a) => !vendor || a.vendor === vendor).map((a) => Date.parse(a.createdAt));
+    const times = r.alerts
+      .filter((a) => !vendor || a.vendor === vendor)
+      .map((a) => timeOf(a.createdAt))
+      .filter((t): t is number => t !== null);
     return times.length ? [(Math.min(...times) - Date.parse(r.completedAt)) / 60_000] : [];
   });
 }

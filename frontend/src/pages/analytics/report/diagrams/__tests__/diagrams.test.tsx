@@ -107,6 +107,12 @@ describe('LatencyDotPlot', () => {
     expect(screen.getByText('1 run · median +1m 02s')).toBeInTheDocument();
   });
 
+  it('skips alerts whose time does not parse', () => {
+    const undated = alertAt(0, { createdAt: '' });
+    expect(firstAlertMinutes([makeRun({ alerts: [undated] })])).toEqual([]);
+    expect(firstAlertMinutes([makeRun({ alerts: [undated, alertAt(2)] })])).toEqual([2]);
+  });
+
   it('renders nothing when no run raised an alert', () => {
     const { container } = render(<LatencyDotPlot runs={[makeRun({ alerts: [] })]} />);
     expect(container).toBeEmptyDOMElement();
@@ -237,6 +243,15 @@ describe('RunStrip', () => {
   it('still says "alerts not checked" when a vendor is configured', () => {
     render(<RunStrip run={makeRun({ alerts: [], alertsChecked: false })} edrVendors={['crowdstrike']} />);
     expect(screen.getByText('alerts not checked')).toBeInTheDocument();
+  });
+
+  it('leaves an undated alert off the axis but does not call the run silent', () => {
+    const run = makeRun({ alerts: [alertAt(0, { createdAt: '' })] });
+    const { container } = render(<RunStrip run={run} />);
+    expect(container.querySelectorAll('.rp-al-defender')).toHaveLength(0);
+    expect(container.innerHTML).not.toContain('NaN');
+    expect(container.textContent).not.toContain('no EDR alert');
+    expect(screen.getAllByText(/^[−+]?\d+( min)?$/).length).toBeGreaterThan(0);
   });
 
   it('keeps stroke="none" on every SVG text', () => {

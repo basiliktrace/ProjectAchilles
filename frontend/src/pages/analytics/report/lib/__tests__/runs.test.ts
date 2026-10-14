@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { alertStageText, resolveRunStage, stageForAlert, vendorName } from '../runs';
+import { alertStageText, firstAlert, resolveRunStage, stageForAlert, vendorName } from '../runs';
 import { makeReport, makeRun, makeTest } from '../../__tests__/fixtures';
 import type { ReportRun, ReportRunStage } from '@/services/api/reports';
 
@@ -11,6 +11,14 @@ describe('vendorName', () => {
   it('uses the products\' short names', () => {
     expect(vendorName('defender')).toBe('Defender');
     expect(vendorName('crowdstrike')).toBe('Falcon');
+  });
+});
+
+describe('firstAlert', () => {
+  it('skips an alert whose time does not parse', () => {
+    const [lsass, falcon] = makeRun().alerts;
+    expect(firstAlert(makeRun({ alerts: [{ ...lsass, createdAt: '' }, falcon] }))).toBe(falcon);
+    expect(firstAlert(makeRun({ alerts: [{ ...lsass, createdAt: '' }] }))).toBeNull();
   });
 });
 

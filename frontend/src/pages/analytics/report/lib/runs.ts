@@ -1,7 +1,7 @@
 // Helpers over the report's runs, shared by the test pages, the execution log
 // and the run-strip appendix.
 import type { OutcomeCounts, ReportAlert, ReportRun, ReportRunStage, ReportTest } from '@/services/api/reports';
-import { truncate } from './format';
+import { timeOf, truncate } from './format';
 import { emptyCounts } from './outcomes';
 
 /** Longest stage name printed beside a stage label in an alert row. */
@@ -13,8 +13,14 @@ export function countStages(stages: ReportRunStage[]): OutcomeCounts {
   return c;
 }
 
+/** The run's earliest alert. An alert whose time does not parse is never first. */
 export function firstAlert(run: ReportRun): ReportAlert | null {
-  return run.alerts.reduce<ReportAlert | null>((best, a) => (best === null || a.createdAt < best.createdAt ? a : best), null);
+  let first: { a: ReportAlert; t: number } | null = null;
+  for (const a of run.alerts) {
+    const t = timeOf(a.createdAt);
+    if (t !== null && (first === null || t < first.t)) first = { a, t };
+  }
+  return first?.a ?? null;
 }
 
 export function vendorName(vendor: ReportAlert['vendor']): string {

@@ -340,6 +340,13 @@ describe('ExecutionLog', () => {
     expect(within(hostRow('WS-OPS-022')).queryByText('—')).toBeNull();
   });
 
+  it('does not read as "none" when the run\'s only alert has no time', () => {
+    const report = makeReport();
+    report.runs[0] = { ...report.runs[0], alerts: [{ ...report.runs[0].alerts[0], createdAt: '' }] };
+    render(<ExecutionLog report={report} head={head} />);
+    expect(within(hostRow('WS-FIN-014')).getByText('Defender (time unknown)')).toBeInTheDocument();
+  });
+
   it('shows a dash for a run whose alerts were searched and found nothing', () => {
     render(<ExecutionLog report={makeReport()} head={head} />);
     expect(within(hostRow('WS-OPS-022')).getByText('—')).toBeInTheDocument();
