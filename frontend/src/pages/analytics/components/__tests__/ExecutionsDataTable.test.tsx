@@ -1110,4 +1110,13 @@ describe('ExecutionsDataTable — execution report link', () => {
     renderTable(makeData([makeStage({})], { defenderDetected: false }));
     expect(screen.queryByRole('link', { name: 'Report (PDF)' })).toBeNull();
   });
+
+  it('opens the Export menu on keyboard focus as well as on hover', () => {
+    // jsdom cannot evaluate :focus-within visibility, so this pins the classes that provide it.
+    getAlertsForTestMock.mockResolvedValue({ alerts: [], matchedTechniques: [], total: 0 });
+    renderTable(makeData([makeStage({})], { defenderDetected: false }));
+    const panel = screen.getByRole('button', { name: 'Export CSV' }).parentElement as HTMLElement;
+    expect(panel).toHaveClass('invisible', 'opacity-0', 'group-hover:visible', 'group-hover:opacity-100');
+    expect(panel).toHaveClass('group-focus-within:visible', 'group-focus-within:opacity-100');
+  });
 });

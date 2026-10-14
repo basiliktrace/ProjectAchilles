@@ -522,7 +522,7 @@ export default function ExecutionsDataTable({
               Export
               <ChevronDown className="!size-3" />
             </Button>
-            <div className="invisible absolute right-0 z-50 mt-1 w-32 overflow-hidden rounded-md border border-border bg-overlay opacity-0 shadow-lg transition-all group-hover:visible group-hover:opacity-100">
+            <div className="invisible absolute right-0 z-50 mt-1 w-32 overflow-hidden rounded-md border border-border bg-overlay opacity-0 shadow-lg transition-all group-hover:visible group-hover:opacity-100 group-focus-within:visible group-focus-within:opacity-100">
               <button
                 onClick={exportToCsv}
                 className="w-full px-3 py-2 text-left text-sm transition-colors hover:bg-raised hover:text-accent"
