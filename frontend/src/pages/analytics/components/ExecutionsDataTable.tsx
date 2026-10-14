@@ -71,6 +71,8 @@ interface ExecutionsDataTableProps {
   /** SB-format compliance report export (server-generated for the current window). */
   onExportSbReport?: () => Promise<void>;
   sbReportExporting?: boolean;
+  /** Link to the print-ready execution report for the current filters. */
+  reportHref?: string;
 }
 
 export default function ExecutionsDataTable({
@@ -92,6 +94,7 @@ export default function ExecutionsDataTable({
   onSelectedKeyChange,
   onExportSbReport,
   sbReportExporting,
+  reportHref,
 }: ExecutionsDataTableProps) {
   const { configured: defenderConfigured } = useDefenderConfig();
   const { configured: crowdstrikeConfigured } = useCrowdStrikeConfig();
@@ -532,6 +535,16 @@ export default function ExecutionsDataTable({
               >
                 Export JSON
               </button>
+              {reportHref && (
+                <a
+                  href={reportHref}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="block w-full px-3 py-2 text-left text-sm transition-colors hover:bg-raised hover:text-accent"
+                >
+                  Report (PDF)
+                </a>
+              )}
               {onExportSbReport && (
                 <button
                   onClick={() => { void onExportSbReport(); }}
