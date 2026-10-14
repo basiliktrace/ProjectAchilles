@@ -198,7 +198,7 @@ html:has(.report-print) body {
 .report-print thead { display: table-header-group; }
 .report-print tr { break-inside: avoid; }
 
-@media (max-width: 760px) {
+@media screen and (max-width: 760px) {
   .report-print .rp-sheet { padding: 16px; min-height: 0; }
   .report-print .rp-kpis { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .report-print .rp-grid-2, .report-print .rp-attack-cells { grid-template-columns: minmax(0, 1fr); }
