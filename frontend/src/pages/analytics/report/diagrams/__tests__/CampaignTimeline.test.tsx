@@ -15,9 +15,9 @@ vi.mock('../../lib/timeline', async (importOriginal) => {
 const X0 = 156;
 const X1 = 672;
 
-const stage = (i: number, outcome: ReportRunStage['outcome']): ReportRunStage => ({
+const stage = (i: number, outcome: ReportRunStage['outcome'], highImpact = false): ReportRunStage => ({
   controlId: `CH-${i}`, name: `Control ${i}`, order: i + 1, outcome,
-  exitCode: null, techniques: [], tactics: [], highImpact: false,
+  exitCode: null, techniques: [], tactics: [], highImpact,
 });
 
 const num = (el: Element, attr: string) => Number(el.getAttribute(attr));
@@ -67,6 +67,115 @@ describe('CampaignTimeline', () => {
     const { container: b } = render(<svg><RunColumn run={eleven} x={200} top={0} /></svg>);
     expect(a.querySelectorAll('.rp-g')).toHaveLength(MAX_STACK);
     expect(b.querySelectorAll('.rp-g')).toHaveLength(1);
+  });
+
+  describe('skipped stages are not results (fix round 1, finding 1)', () => {
+    it('does not count skipped stages toward the stack limit, and never draws them', () => {
+      // 11 stages > MAX_STACK, but only 3 are results: a stack of 3, not a bar, and no pale marks.
+      const blocked = makeRun({
+        stages: [
+          ...Array.from({ length: 3 }, (_, i) => stage(i, 'protected')),
+          ...Array.from({ length: 8 }, (_, i) => stage(i + 3, 'skipped')),
+        ],
+      });
+      const { container } = render(<CampaignTimeline report={makeReport({ runs: [blocked] })} />);
+      const chart = container.querySelector('svg.rp-svg')!;
+      expect(chart.querySelectorAll('.rp-g')).toHaveLength(3);
+      expect(chart.querySelector('.rp-g-skipped')).toBeNull();
+      // One column of 3 squares, each as tall as a glyph (a bar segment would be taller).
+      expect(Array.from(chart.querySelectorAll('.rp-g')).every((r) => num(r, 'height') === 7)).toBe(true);
+    });
+
+    it('sizes the lane from the stages drawn, not from skipped ones', () => {
+      const blocked = makeRun({
+        stages: [stage(0, 'protected'), stage(1, 'protected'), stage(2, 'protected'), ...Array.from({ length: 20 }, (_, i) => stage(i + 3, 'skipped'))],
+      });
+      const { container } = render(<CampaignTimeline report={makeReport({ runs: [blocked] })} />);
+      // 3 glyphs need 3 * 9 - 2 + 16 = 41; counting the 20 skipped stages would give 104.
+      expect(num(container.querySelector('svg.rp-svg .rp-lane')!, 'height')).toBeLessThan(50);
+    });
+
+    it('leaves the bar to skipped-free counts and draws nothing for an all-skipped run', () => {
+      const bar = makeRun({
+        stages: [...Array.from({ length: 12 }, (_, i) => stage(i, 'protected')), ...Array.from({ length: 30 }, (_, i) => stage(i + 12, 'skipped'))],
+      });
+      const allSkipped = makeRun({ stages: Array.from({ length: 5 }, (_, i) => stage(i, 'skipped')) });
+      const { container: a } = render(<svg><RunColumn run={bar} x={200} top={0} /></svg>);
+      const { container: b } = render(<svg><RunColumn run={allSkipped} x={200} top={0} /></svg>);
+      expect(a.querySelectorAll('.rp-g')).toHaveLength(1);
+      expect(num(a.querySelector('.rp-g')!, 'height')).toBeCloseTo(MAX_STACK * 9 - 2);
+      expect(b.querySelectorAll('.rp-g')).toHaveLength(0);
+    });
+  });
+
+  describe('high-impact in bars and the legend (fix round 1, finding 3)', () => {
+    it('splits a proportional bar so high-impact unprotected stages keep their mark', () => {
+      const big = makeRun({
+        stages: Array.from({ length: 30 }, (_, i) => stage(i, i < 20 ? 'protected' : 'unprotected', i >= 28)),
+      });
+      const { container } = render(<CampaignTimeline report={makeReport({ runs: [big] })} />);
+      const segs = Array.from(container.querySelectorAll('svg.rp-svg .rp-g'));
+      expect(segs).toHaveLength(3); // protected, unprotected, unprotected high-impact
+      const hi = container.querySelectorAll('svg.rp-svg .rp-g-hi');
+      expect(hi).toHaveLength(1);
+      expect(hi[0]).toHaveClass('rp-g-unprotected');
+      expect(num(hi[0], 'height')).toBeCloseTo((2 / 30) * (MAX_STACK * 9 - 2));
+      // The plain unprotected segment holds the other 8.
+      const plain = segs.find((r) => r.classList.contains('rp-g-unprotected') && !r.classList.contains('rp-g-hi'))!;
+      expect(num(plain, 'height')).toBeCloseTo((8 / 30) * (MAX_STACK * 9 - 2));
+    });
+
+    it('lists the high-impact legend entry in glyph mode only', () => {
+      const entry = 'Unprotected, exfiltration or impact';
+      const { unmount } = render(<CampaignTimeline report={makeReport()} />);
+      expect(screen.getByText(entry)).toBeInTheDocument();
+      unmount();
+      render(<CampaignTimeline report={makeReport({ meta: { truncation: { runs: true, tests: false, lanes: false } } })} />);
+      expect(screen.queryByText(entry)).toBeNull();
+      expect(screen.getByText('Unprotected')).toBeInTheDocument();
+    });
+  });
+
+  describe('bucket column width shows run volume (fix round 1, finding 2)', () => {
+    const volume = (runs: number) => ({ lanes: [{ testKey: BUNDLE, runs, outcomes: counts({ protected: 6 }) }] });
+
+    it('scales each column by its runs relative to the busiest bucket', () => {
+      const report = makeReport({
+        meta: { truncation: { runs: true, tests: false, lanes: false } },
+        timeline: {
+          lanes: [{ testKey: BUNDLE, name: 'LockBit', runs: 5 }],
+          buckets: [
+            { start: '2026-10-01T00:00:00.000Z', ...volume(1) },
+            { start: '2026-10-10T00:00:00.000Z', ...volume(4) },
+          ],
+        },
+      });
+      const { container } = render(<CampaignTimeline report={report} />);
+      const [few, many] = Array.from(container.querySelectorAll('svg.rp-svg .rp-g')).map((r) => num(r, 'width'));
+      expect(many / few).toBeCloseTo(4, 1);
+    });
+
+    it('keeps a 1.5 px floor for a column with very few runs', () => {
+      const report = makeReport({
+        meta: { truncation: { runs: true, tests: false, lanes: false } },
+        timeline: {
+          lanes: [{ testKey: BUNDLE, name: 'LockBit', runs: 501 }],
+          buckets: [
+            { start: '2026-10-01T00:00:00.000Z', ...volume(1) },
+            { start: '2026-10-10T00:00:00.000Z', ...volume(500) },
+          ],
+        },
+      });
+      const { container } = render(<CampaignTimeline report={report} />);
+      const [few, many] = Array.from(container.querySelectorAll('svg.rp-svg .rp-g')).map((r) => num(r, 'width'));
+      expect(few).toBe(1.5);
+      expect(many).toBeGreaterThan(10);
+    });
+
+    it('says in the caption that width shows the number of runs', () => {
+      render(<CampaignTimeline report={makeReport({ meta: { truncation: { runs: true, tests: false, lanes: false } } })} />);
+      expect(screen.getByText(/width shows the number of runs/)).toBeInTheDocument();
+    });
   });
 
   describe('keeps everything inside the plot area [X0, X1]', () => {

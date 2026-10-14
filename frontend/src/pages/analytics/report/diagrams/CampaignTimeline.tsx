@@ -3,7 +3,7 @@
 // choice, ticks and trend come from lib/timeline.ts; this file only draws.
 import { useMemo } from 'react';
 
-import type { ExecutionReport, ReportRun, ReportTimelineBucket } from '@/services/api/reports';
+import type { ExecutionReport, ReportRun, ReportRunStage, ReportTimelineBucket, StageOutcome } from '@/services/api/reports';
 import { COUNTED_OUTCOMES, emptyCounts } from '../lib/outcomes';
 import { plural, truncate } from '../lib/format';
 import {
@@ -22,26 +22,44 @@ const GLYPH_GAP = 2;
 export const MAX_STACK = 10;
 export const STACK_HEIGHT = MAX_STACK * (GLYPH + GLYPH_GAP) - GLYPH_GAP;
 
+/** Skipped stages are not results (spec §5.1): they are never drawn and never counted. */
+const drawn = (run: ReportRun): ReportRunStage[] => run.stages.filter((s) => s.outcome !== 'skipped');
+
+interface BarSegment { o: StageOutcome; hi: boolean; n: number }
+
 export function RunColumn({ run, x, top }: { run: ReportRun; x: number; top: number }) {
-  if (run.stages.length <= MAX_STACK) {
+  const stages = drawn(run);
+  if (stages.length === 0) return null;
+  if (stages.length <= MAX_STACK) {
     return (
       <g>
-        {run.stages.map((s, i) => (
+        {stages.map((s, i) => (
           <Glyph key={i} outcome={s.outcome} highImpact={s.highImpact} x={x - GLYPH / 2} y={top + i * (GLYPH + GLYPH_GAP)} size={GLYPH} />
         ))}
       </g>
     );
   }
+  // Proportional bar. Unprotected splits in two so high-impact stages keep their dark-red mark.
   const counts = emptyCounts();
-  for (const s of run.stages) counts[s.outcome] += 1;
-  const present = COUNTED_OUTCOMES.filter((o) => counts[o] > 0);
-  const total = present.reduce((sum, o) => sum + counts[o], 0) || 1;
+  let hiCount = 0;
+  for (const s of stages) {
+    counts[s.outcome] += 1;
+    if (s.outcome === 'unprotected' && s.highImpact) hiCount += 1;
+  }
+  const segments = COUNTED_OUTCOMES.flatMap((o): BarSegment[] =>
+    o === 'unprotected'
+      ? [{ o, hi: false, n: counts[o] - hiCount }, { o, hi: true, n: hiCount }]
+      : [{ o, hi: false, n: counts[o] }],
+  ).filter((seg) => seg.n > 0);
+  const total = segments.reduce((sum, seg) => sum + seg.n, 0);
   let y = top;
   return (
     <g>
-      {present.map((o) => {
-        const h = (counts[o] / total) * STACK_HEIGHT;
-        const segment = <rect key={o} className={`rp-g rp-g-${o}`} x={x - GLYPH / 2} y={y} width={GLYPH} height={h} />;
+      {segments.map(({ o, hi, n }) => {
+        const h = (n / total) * STACK_HEIGHT;
+        const segment = (
+          <rect key={`${o}-${hi}`} className={`rp-g rp-g-${o}${hi ? ' rp-g-hi' : ''}`} x={x - GLYPH / 2} y={y} width={GLYPH} height={h} />
+        );
         y += h;
         return segment;
       })}
@@ -49,8 +67,8 @@ export function RunColumn({ run, x, top }: { run: ReportRun; x: number; top: num
   );
 }
 
-function BucketColumn({ bucket, testKey, x0, x1, top, height }: {
-  bucket: ReportTimelineBucket; testKey: string; x0: number; x1: number; top: number; height: number;
+function BucketColumn({ bucket, testKey, maxRuns, x0, x1, top, height }: {
+  bucket: ReportTimelineBucket; testKey: string; maxRuns: number; x0: number; x1: number; top: number; height: number;
 }) {
   const lane = bucket.lanes.find((l) => l.testKey === testKey);
   if (!lane) return null;
@@ -59,7 +77,8 @@ function BucketColumn({ bucket, testKey, x0, x1, top, height }: {
   const present = COUNTED_OUTCOMES.filter((o) => lane.outcomes[o] > 0);
   const total = present.reduce((sum, o) => sum + lane.outcomes[o], 0);
   if (total === 0) return null;
-  const width = Math.min(X1 - x0, Math.max(1.5, (x1 - x0) * 0.8));
+  // Width shows volume: the busiest bucket fills 80% of its slot, the rest scale down to a 1.5 px floor.
+  const width = Math.min(X1 - x0, Math.max(1.5, (x1 - x0) * 0.8 * (lane.runs / maxRuns)));
   let y = top;
   return (
     <g>
@@ -110,7 +129,7 @@ export function CampaignTimeline({ report }: { report: ExecutionReport }) {
 
   const laneHeight = (i: number): number => {
     if (!glyphs) return 46;
-    const deepest = Math.max(1, ...(runsByLane.get(lanes[i].testKey) ?? []).map((r) => Math.min(r.stages.length, MAX_STACK)));
+    const deepest = Math.max(1, ...(runsByLane.get(lanes[i].testKey) ?? []).map((r) => Math.min(drawn(r).length, MAX_STACK)));
     return Math.max(40, deepest * (GLYPH + GLYPH_GAP) - GLYPH_GAP + 16);
   };
   const tops: number[] = [];
@@ -120,6 +139,7 @@ export function CampaignTimeline({ report }: { report: ExecutionReport }) {
     cursor += laneHeight(i) + 6;
   });
   const axisY = cursor;
+  const maxRuns = Math.max(1, ...report.timeline.buckets.flatMap((b) => b.lanes.map((l) => l.runs)));
   const trend = trendPoints(report.timeline.buckets);
   const half = bucketMs(win.bucket) / 2;
   const ty = (rate: number) => 10 + (1 - rate) * (TREND_H - 20);
@@ -172,6 +192,7 @@ export function CampaignTimeline({ report }: { report: ExecutionReport }) {
                       key={b.start}
                       bucket={b}
                       testKey={l.testKey}
+                      maxRuns={maxRuns}
                       x0={x(b.start)}
                       x1={x(Date.parse(b.start) + bucketMs(win.bucket))}
                       top={tops[i] + 6}
@@ -183,10 +204,10 @@ export function CampaignTimeline({ report }: { report: ExecutionReport }) {
         })}
       </svg>
       <figcaption className="rp-caption">
-        {glyphs ? 'One column per run, placed at its completion time; stages top to bottom.' : `One column per ${win.bucket}, split by stage outcome.`}
+        {glyphs ? 'One column per run, placed at its completion time; stages top to bottom.' : `One column per ${win.bucket}, split by stage outcome; width shows the number of runs.`}
         {note ? ` ${note}` : ''}
       </figcaption>
-      <OutcomeLegend highImpact />
+      <OutcomeLegend highImpact={glyphs} />
     </figure>
   );
 }
