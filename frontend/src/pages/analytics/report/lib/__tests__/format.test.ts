@@ -33,6 +33,22 @@ describe('format', () => {
     expect(fmtPct(0.5)).toBe('50%');
   });
 
+  it('truncates, so a printed rate never overstates protection or disagrees with its band', () => {
+    // 0.7496 is Partial (below 0.75) and a finding; rounding would print "75%" beside it.
+    expect(fmtPct(0.7496)).toBe('74%');
+    expect(fmtPct(0.3999)).toBe('39%');
+    expect(fmtPct(6 / 9)).toBe('66%');
+    expect(fmtPct(0.75)).toBe('75%');
+    expect(fmtPct(0.4)).toBe('40%');
+  });
+
+  it('is not thrown off by binary floating point at whole percentages', () => {
+    // 0.29 * 100 is 28.999999999999996 in floating point.
+    expect(fmtPct(0.29)).toBe('29%');
+    expect(fmtPct(0.57)).toBe('57%');
+    expect(fmtPct(29 / 100)).toBe('29%');
+  });
+
   it('pluralizes and truncates', () => {
     expect(plural(1, 'run')).toBe('1 run');
     expect(plural(1504, 'run')).toBe('1,504 runs');

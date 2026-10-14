@@ -40,14 +40,18 @@ export function tzName(iso: string, tz: string): string {
 }
 
 /**
- * Whole-percent rate. A partial rate never rounds to 0% or 100%: it is clamped to 1–99, so
- * 299 of 300 reads 99%. Exactly 0 and exactly 1 keep their endpoints.
+ * Whole-percent rate, truncated: 0.7496 reads 74%, never 75%. Truncating never overstates
+ * protection and agrees with bandOf's thresholds and the backend's < 0.75 findings ceiling.
+ * A partial rate is clamped to 1–99, so 299 of 300 reads 99% and 1 of 300 reads 1%; exactly
+ * 0 and exactly 1 keep their endpoints.
  */
 export function fmtPct(rate: number | null): string {
   if (rate === null) return '—';
   if (rate <= 0) return '0%';
   if (rate >= 1) return '100%';
-  return `${Math.min(99, Math.max(1, Math.round(rate * 100)))}%`;
+  // The epsilon absorbs binary floating point (0.29 * 100 is 28.999999999999996) without
+  // lifting any real rate: a count-based rate sits far more than 1e-9 below the next percent.
+  return `${Math.min(99, Math.max(1, Math.floor(rate * 100 + 1e-9)))}%`;
 }
 
 export function fmtCount(n: number, approximate = false): string {

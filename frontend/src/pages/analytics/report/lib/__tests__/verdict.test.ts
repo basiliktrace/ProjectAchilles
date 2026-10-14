@@ -11,7 +11,7 @@ describe('buildVerdict', () => {
       ],
     });
     expect(buildVerdict(report)).toEqual([
-      'Across 2 runs on 2 endpoints, 6 of 9 conclusive stage results were protected, prevented or detected (67%).',
+      'Across 2 runs on 2 endpoints, 6 of 9 conclusive stage results were protected, prevented or detected (66%).',
       'LSASS Memory (T1003.001) was stopped or detected in 10 of 10 attempts.',
       'Exfiltration to Cloud Storage (T1567.002) got through in 6 of 7 attempts without being stopped or detected.',
       '2 exfiltration or impact stage results ran without being stopped or detected.',
@@ -65,7 +65,7 @@ describe('buildVerdict', () => {
   it('says approximately how many runs when the run count is an HLL estimate', () => {
     const report = makeReport({ totals: { ...makeReport().totals, runs: 12345, runsApproximate: true } });
     expect(buildVerdict(report)[0]).toBe(
-      'Across about 12,345 runs on 2 endpoints, 6 of 9 conclusive stage results were protected, prevented or detected (67%).',
+      'Across about 12,345 runs on 2 endpoints, 6 of 9 conclusive stage results were protected, prevented or detected (66%).',
     );
   });
 

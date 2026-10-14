@@ -35,7 +35,7 @@ const label = (t: ReportTechnique) => (t.name ? `${t.name} (${t.id})` : t.id);
 
 /**
  * The Defense Score sentence. A failed enrichment says so rather than going silent. Scores print
- * to one decimal, as on the dashboard, so they are not rounded like rates (fmtPct).
+ * to one decimal, as on the dashboard; they are not truncated to whole percents like rates (fmtPct).
  */
 function defenseScoreSentence(report: ExecutionReport): string | null {
   if (report.meta.unavailable.includes('defenseScore')) return 'The Defense Score is unavailable for this report.';
