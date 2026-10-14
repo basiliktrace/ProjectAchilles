@@ -1,6 +1,6 @@
 import type { ExecutionReport, ReportRun, ReportTest } from '@/services/api/reports';
 import { OUTCOME_LABEL, conclusive, defended, protectionRate } from '../lib/outcomes';
-import { fmtDateTime, fmtLatency, fmtPct, fmtShortDate, fmtTime, plural, timeOf } from '../lib/format';
+import { fmtAlertCount, fmtCount, fmtDateTime, fmtLatency, fmtPct, fmtShortDate, fmtTime, plural, timeOf } from '../lib/format';
 import { alertStageText, vendorName } from '../lib/runs';
 import { KillChainFlow } from '../diagrams/KillChainFlow';
 import { OutcomeBar } from '../diagrams/OutcomeBar';
@@ -14,7 +14,8 @@ const MATRIX_MAX_STAGE_COLUMNS = 12;
 const MATRIX_GLYPHS_MAX = 40;
 const ALERTS_SHOWN = 6;
 
-function ControlTable({ test, edr }: { test: ReportTest; edr: boolean }) {
+/** `alertsIncomplete`: alert correlation did not complete, so counts are lower bounds (see fmtAlertCount). */
+function ControlTable({ test, edr, alertsIncomplete }: { test: ReportTest; edr: boolean; alertsIncomplete: boolean }) {
   return (
     <table className="rp-table">
       <thead>
@@ -30,7 +31,7 @@ function ControlTable({ test, edr }: { test: ReportTest; edr: boolean }) {
             <td className="rp-mono rp-id">{s.controlId ?? s.techniques.join(', ')}</td>
             <td style={{ width: '28%' }}><OutcomeBar counts={s.outcomes} legend={false} height={6} /></td>
             <td className="rp-num">{fmtPct(protectionRate(s.outcomes))}</td>
-            {edr && <td className="rp-num">{s.alerts.defender + s.alerts.crowdstrike}</td>}
+            {edr && <td className="rp-num">{fmtAlertCount(s.alerts.defender + s.alerts.crowdstrike, alertsIncomplete)}</td>}
           </tr>
         ))}
       </tbody>
@@ -101,7 +102,13 @@ export function TestDetail({ report, test, head }: { report: ExecutionReport; te
   const edr = report.meta.edrVendors.length > 0;
   const chain = test.isBundle && test.category !== 'cyber-hygiene';
   const runs = report.runs.filter((r) => r.testKey === test.testKey);
-  const runsNote = <small>All {plural(test.runs, 'run')}</small>;
+  const alertsIncomplete = report.meta.unavailable.includes('alerts');
+  // Stage outcomes are aggregated over every run; the stage alert counts come from the fetched
+  // runs only, so they say so when this test's runs were cut to the report's newest.
+  const alertsSampled = edr && report.meta.truncation.runs && runs.length < test.runs;
+  const runsNote = (
+    <small>All {plural(test.runs, 'run')}{alertsSampled ? ` · alert counts from the newest ${fmtCount(runs.length)}` : ''}</small>
+  );
   // Newest first; an alert whose time does not parse sorts last and prints a dash for its times.
   const alerts = runs
     .flatMap((r) => r.alerts.map((a) => ({ a, r, t: timeOf(a.createdAt) })))
@@ -133,11 +140,16 @@ export function TestDetail({ report, test, head }: { report: ExecutionReport; te
       {test.description && <p className="rp-lede">{test.description}</p>}
       {chain ? (
         // The heading rides in the chain's first unbreakable row so it never ends a page alone.
-        <KillChainFlow test={test} edrVendors={report.meta.edrVendors} heading={<h3 className="rp-h3">Kill chain {runsNote}</h3>} />
+        <KillChainFlow
+          test={test}
+          edrVendors={report.meta.edrVendors}
+          alertsIncomplete={alertsIncomplete}
+          heading={<h3 className="rp-h3">Kill chain {runsNote}</h3>}
+        />
       ) : (
         <div>
           <h3 className="rp-h3">{test.isBundle ? 'Controls' : 'Result'} {runsNote}</h3>
-          <ControlTable test={test} edr={edr} />
+          <ControlTable test={test} edr={edr} alertsIncomplete={alertsIncomplete} />
         </div>
       )}
       <EndpointMatrix test={test} runs={runs} tz={tz} sampled={report.meta.truncation.runs} />

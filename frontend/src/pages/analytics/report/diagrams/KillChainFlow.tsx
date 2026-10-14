@@ -4,7 +4,7 @@ import type { ReactNode } from 'react';
 
 import type { ReportAlert, ReportTest } from '@/services/api/reports';
 import { BAND_LABEL, bandOf, conclusive, defended, protectionRate, tacticLabel } from '../lib/outcomes';
-import { fmtPct } from '../lib/format';
+import { fmtAlertCount, fmtPct } from '../lib/format';
 import { OutcomeBar } from './OutcomeBar';
 
 const W = 680;
@@ -19,11 +19,13 @@ const ALERT_VENDORS: { key: ReportAlert['vendor']; label: string }[] = [
 
 /**
  * `edrVendors` is meta.edrVendors: the alert line names only configured vendors, and is omitted when there are none.
+ * `alertsIncomplete` (alerts in meta.unavailable) prints counts as lower bounds and zeros as a dash.
  * `heading` prints inside the first row's unbreakable block, so it never ends a page without the chain.
  */
-export function KillChainFlow({ test, edrVendors = ['defender', 'crowdstrike'], heading }: {
+export function KillChainFlow({ test, edrVendors = ['defender', 'crowdstrike'], alertsIncomplete = false, heading }: {
   test: ReportTest;
   edrVendors?: ReportAlert['vendor'][];
+  alertsIncomplete?: boolean;
   heading?: ReactNode;
 }) {
   const vendors = ALERT_VENDORS.filter((v) => edrVendors.includes(v.key));
@@ -68,7 +70,7 @@ export function KillChainFlow({ test, edrVendors = ['defender', 'crowdstrike'], 
                   {vendors.length > 0 && (
                     <>
                       <br />
-                      Alerts: {vendors.map((v) => `${v.label} ${s.alerts[v.key]}`).join(' · ')}
+                      Alerts: {vendors.map((v) => `${v.label} ${fmtAlertCount(s.alerts[v.key], alertsIncomplete)}`).join(' · ')}
                     </>
                   )}
                 </div>

@@ -70,6 +70,15 @@ export function fmtPct(rate: number | null): string {
   return `${Math.min(99, Math.max(1, Math.floor(rate * 100 + 1e-9)))}%`;
 }
 
+/**
+ * An alert count. While alert correlation is incomplete (meta.unavailable has 'alerts') a count is
+ * only a lower bound, "≥3", and a zero is unknown, "—", never "0" (which would read as "none").
+ */
+export function fmtAlertCount(n: number, incomplete: boolean): string {
+  if (!incomplete) return String(n);
+  return n > 0 ? `≥${n}` : '—';
+}
+
 export function fmtCount(n: number, approximate = false): string {
   const s = n.toLocaleString('en-US');
   return approximate ? `about ${s}` : s;

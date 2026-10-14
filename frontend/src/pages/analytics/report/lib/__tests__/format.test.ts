@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { fmtCount, fmtDate, fmtDateTime, fmtDuration, fmtLatency, fmtPct, fmtShortDate, fmtTime, plural, truncate, tzName } from '../format';
+import { fmtAlertCount, fmtCount, fmtDate, fmtDateTime, fmtDuration, fmtLatency, fmtPct, fmtShortDate, fmtTime, plural, truncate, tzName } from '../format';
 
 const T = '2026-10-12T12:47:49.000Z';
 
@@ -59,6 +59,13 @@ describe('format', () => {
       expect(fmtDateTime(bad, 'UTC')).toBe('—');
       expect(tzName(bad, 'America/Santo_Domingo')).toBe('America/Santo_Domingo');
     }
+  });
+
+  it('prints an alert count as a lower bound, or a dash, while alert correlation is incomplete', () => {
+    expect(fmtAlertCount(3, false)).toBe('3');
+    expect(fmtAlertCount(0, false)).toBe('0');
+    expect(fmtAlertCount(3, true)).toBe('≥3');
+    expect(fmtAlertCount(0, true)).toBe('—');
   });
 
   it('pluralizes and truncates', () => {

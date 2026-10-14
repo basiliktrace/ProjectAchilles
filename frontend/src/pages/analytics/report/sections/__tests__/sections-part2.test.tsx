@@ -204,6 +204,46 @@ describe('TestDetail', () => {
     expect(screen.getByText('ProcRansomware')).toBeInTheDocument();
   });
 
+  it('prints control-table alert counts as lower bounds and zeros as a dash when correlation is incomplete', () => {
+    const hygiene = makeTest({ category: 'cyber-hygiene' });
+    render(<TestDetail report={makeReport({ meta: { unavailable: ['alerts'] } })} test={hygiene} head={head} />);
+    const table = screen.getByRole('columnheader', { name: 'Alerts' }).closest('table') as HTMLElement;
+    const alertCells = within(table).getAllByRole('row').slice(1).map((r) => within(r).getAllByRole('cell').at(-1)?.textContent);
+    expect(alertCells).toEqual(['≥2', '≥1', '—', '—', '≥1']);
+  });
+
+  it('passes incomplete correlation to the kill chain', () => {
+    const { container } = render(<TestDetail report={makeReport({ meta: { unavailable: ['alerts'] } })} test={makeTest()} head={head} />);
+    expect(container.textContent).toContain('Alerts: Defender ≥1 · Falcon ≥1');
+    expect(container.textContent).not.toMatch(/Defender 0|Falcon 0/);
+  });
+
+  it('keeps plain alert counts when correlation completed', () => {
+    render(<TestDetail report={makeReport()} test={makeTest({ category: 'cyber-hygiene' })} head={head} />);
+    const table = screen.getByRole('columnheader', { name: 'Alerts' }).closest('table') as HTMLElement;
+    const alertCells = within(table).getAllByRole('row').slice(1).map((r) => within(r).getAllByRole('cell').at(-1)?.textContent);
+    expect(alertCells).toEqual(['2', '1', '0', '0', '1']);
+  });
+
+  it('says the stage alert counts come from the newest runs when this test\'s runs were cut', () => {
+    const truncation = { runs: true, tests: false, lanes: false };
+    const test = makeTest({ runs: 1504 });
+    const { rerender } = render(<TestDetail report={makeReport({ meta: { truncation } })} test={test} head={head} />);
+    // Outcomes and rates are aggregated over every run; only the alert counts come from the fetched runs.
+    expect(screen.getByRole('heading', { name: /^Kill chain/ })).toHaveTextContent('All 1,504 runs · alert counts from the newest 2');
+
+    rerender(<TestDetail report={makeReport()} test={test} head={head} />);
+    expect(screen.getByRole('heading', { name: /^Kill chain/ })).toHaveTextContent(/All 1,504 runs$/);
+
+    // No EDR means no alert counts, so nothing in the block comes from the fetched runs.
+    rerender(<TestDetail report={makeReport({ meta: { truncation, edrVendors: [] } })} test={test} head={head} />);
+    expect(screen.getByRole('heading', { name: /^Kill chain/ })).toHaveTextContent(/All 1,504 runs$/);
+
+    // Every run of this test was fetched: no caveat even though the report as a whole was cut.
+    rerender(<TestDetail report={makeReport({ meta: { truncation } })} test={makeTest()} head={head} />);
+    expect(screen.getByRole('heading', { name: /^Kill chain/ })).toHaveTextContent(/All 2 runs$/);
+  });
+
   it('does not flag incomplete correlation on a tenant without EDR', () => {
     render(<TestDetail report={makeReport({ meta: { edrVendors: [], unavailable: ['alerts'] } })} test={makeTest()} head={head} />);
     expect(screen.queryByText(ALERTS_INCOMPLETE)).toBeNull();

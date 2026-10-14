@@ -77,6 +77,15 @@ describe('KillChainFlow', () => {
     expect(only.textContent).not.toContain('Falcon');
   });
 
+  it('does not print zero alerts as "none" while alert correlation is incomplete', () => {
+    const { container } = render(<KillChainFlow test={makeTest()} alertsIncomplete />);
+    const lines = Array.from(container.querySelectorAll('.rp-kc-sub')).map((el) => el.textContent ?? '');
+    // Stage 1 had 1 + 1 alerts, stage 3 none found.
+    expect(lines[0]).toContain('Alerts: Defender ≥1 · Falcon ≥1');
+    expect(lines[2]).toContain('Alerts: Defender — · Falcon —');
+    expect(container.textContent).not.toMatch(/Defender 0|Falcon 0/);
+  });
+
   it('keeps stroke="none" on every SVG text', () => {
     const { container } = render(<KillChainFlow test={makeTest()} />);
     const texts = Array.from(container.querySelectorAll('svg text'));
