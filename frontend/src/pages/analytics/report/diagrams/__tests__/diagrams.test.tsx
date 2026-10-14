@@ -100,8 +100,8 @@ describe('LatencyDotPlot', () => {
 describe('RunStrip', () => {
   it('labels alerts during the run and after it, with their stage', () => {
     render(<RunStrip run={makeRun()} />);
-    expect(screen.getByText('Defender during run · Privileged credential access')).toBeInTheDocument();
-    expect(screen.getByText('Falcon +1m 02s · Encryption & recovery inhibition')).toBeInTheDocument();
+    expect(screen.getByText('Defender during run · S2')).toBeInTheDocument();
+    expect(screen.getByText('Falcon +1m 02s · S5')).toBeInTheDocument();
   });
 
   it('draws the run bar with one glyph per stage when the start time is known', () => {
@@ -148,7 +148,7 @@ describe('RunStrip', () => {
 
   it('still draws the alerts that were found when the run is not fully checked', () => {
     render(<RunStrip run={makeRun({ alertsChecked: false })} />);
-    expect(screen.getByText('Falcon +1m 02s · Encryption & recovery inhibition')).toBeInTheDocument();
+    expect(screen.getByText('Falcon +1m 02s · S5')).toBeInTheDocument();
     expect(screen.queryByText('alerts not checked')).toBeNull();
     expect(screen.queryByText('no EDR alert within 30 min')).toBeNull();
   });
@@ -193,16 +193,6 @@ describe('RunStrip', () => {
     expect(num(label, 'x')).toBeLessThanOrEqual(STRIP_X1);
   });
 
-  it('truncates a very long stage name in the label', () => {
-    const long = 'Ensure the account lockout threshold is configured to five or fewer invalid attempts';
-    const run = makeRun({
-      stages: [{ ...stage(1, 'unprotected'), controlId: 'CH-1', name: long }],
-      alerts: [alertAt(1, { stageControlId: 'ch-1' })],
-    });
-    render(<RunStrip run={run} />);
-    expect(screen.getByText('Defender +1m 00s · Ensure the account lockout threshold is…')).toBeInTheDocument();
-  });
-
   it('keeps stroke="none" on every SVG text', () => {
     const { container } = render(<RunStrip run={makeRun()} />);
     const texts = Array.from(container.querySelectorAll('svg text'));
@@ -212,10 +202,10 @@ describe('RunStrip', () => {
 });
 
 describe('stageLabelFor', () => {
-  it('resolves stage tokens to the stage name, including variant suffixes', () => {
+  it('resolves stage tokens to the stage order, including variant suffixes', () => {
     const run = makeRun();
-    expect(stageLabelFor(run, 't1486')).toBe('Encryption & recovery inhibition');
-    expect(stageLabelFor(run, 't1486-variant')).toBe('Encryption & recovery inhibition');
+    expect(stageLabelFor(run, 't1486')).toBe('S5');
+    expect(stageLabelFor(run, 't1486-variant')).toBe('S5');
     expect(stageLabelFor(run, null)).toBe('bundle');
   });
 
@@ -223,14 +213,14 @@ describe('stageLabelFor', () => {
     const run = makeRun();
     // The backend lowercases ReportAlert.stageControlId; ReportRunStage.controlId keeps its case.
     expect(run.stages[1].controlId).toBe('T1003.001');
-    expect(stageLabelFor(run, 't1003.001')).toBe('Privileged credential access');
-    expect(stageLabelFor(run, 'T1003.001')).toBe('Privileged credential access');
-    expect(stageLabelFor(run, 't1003.001-variant')).toBe('Privileged credential access');
+    expect(stageLabelFor(run, 't1003.001')).toBe('S2');
+    expect(stageLabelFor(run, 'T1003.001')).toBe('S2');
+    expect(stageLabelFor(run, 't1003.001-variant')).toBe('S2');
   });
 
-  it('falls back to the controlId when the stage has no name (big-scope reports omit it)', () => {
+  it('does not need stage names (big-scope reports omit them)', () => {
     const run = makeRun({ stages: makeRun().stages.map(({ name: _name, ...s }) => s) });
-    expect(stageLabelFor(run, 't1003.001')).toBe('T1003.001');
+    expect(stageLabelFor(run, 't1003.001')).toBe('S2');
   });
 
   it('says "bundle" when the token names no stage of the run', () => {

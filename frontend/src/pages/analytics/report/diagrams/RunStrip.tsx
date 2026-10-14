@@ -1,7 +1,7 @@
 // One run on a minutes-from-start axis: the run bar with its stages in order
 // (not individually timed), and EDR alerts at their real times (spec §5.4).
 import type { ReportRun } from '@/services/api/reports';
-import { fmtLatency, truncate } from '../lib/format';
+import { fmtLatency } from '../lib/format';
 import { Glyph } from './StageGlyph';
 
 const W = 680;
@@ -13,17 +13,16 @@ const BAR_H = 20;
 const LEAD_MIN = 5;
 const TICK_MIN = 5;
 const MIN_SPAN_MIN = 25;
-/** Average advance of the 8 px label face; sizes labels so overlapping ones can be stacked. */
+/** Average advance of the 8 px label face; sizes labels so overlapping or end-anchored ones can be stacked. */
 const CHAR_PX = 4.4;
 const LABEL_PAD_PX = 6;
 const LABEL_ROW_PX = 12;
 /** Label rows that fit above the bar in the base height; more rows grow the strip. */
 const FREE_LABEL_ROWS = 3;
-const STAGE_LABEL_MAX = 40;
 const MAX_GLYPHS = 16;
 
 /**
- * The name of the stage an alert's evidence names (its controlId when the run carries no names),
+ * "S<n>" for the stage an alert's evidence names (the same numbering as the kill-chain chevrons),
  * or "bundle". The token is the backend's lowercased control id, optionally with a variant suffix,
  * so it is compared case-insensitively against the stage's controlId.
  */
@@ -34,7 +33,7 @@ export function stageLabelFor(run: ReportRun, token: string | null): string {
     const id = s.controlId?.toLowerCase();
     return !!id && (wanted === id || wanted.startsWith(`${id}-`));
   });
-  return stage ? (stage.name ?? stage.controlId ?? `Stage ${stage.order}`) : 'bundle';
+  return stage ? `S${stage.order}` : 'bundle';
 }
 
 /** Where a label sits beside a marker at `ax`: to its right, or ending at it when it would leave the page. */
@@ -72,8 +71,7 @@ export function RunStrip({ run }: { run: ReportRun }) {
       const ax = x(t);
       const during = start !== null && t >= start && t <= end;
       const vendor = a.vendor === 'defender' ? 'Defender' : 'Falcon';
-      const stage = truncate(stageLabelFor(run, a.stageControlId), STAGE_LABEL_MAX);
-      const text = `${vendor} ${during ? 'during run' : fmtLatency((t - end) / 1000)} · ${stage}`;
+      const text = `${vendor} ${during ? 'during run' : fmtLatency((t - end) / 1000)} · ${stageLabelFor(run, a.stageControlId)}`;
       const label = placeLabel(ax, text);
       let row = 0;
       while (taken[row]?.some(([from, to]) => label.from < to + LABEL_PAD_PX && label.to > from - LABEL_PAD_PX)) row++;
