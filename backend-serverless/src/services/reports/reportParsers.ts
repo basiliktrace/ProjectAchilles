@@ -45,6 +45,22 @@ export interface ParsedScope {
   actors: ReportActor[];
 }
 
+/**
+ * Display tactic for a technique. ES `f0rtika.tactics` is a doc-level array, not paired with
+ * techniques, so its buckets only help when they name one of ATT&CK's own tactics for the technique.
+ */
+function techniqueTactic(id: string, esTactics: string[]): string | null {
+  const info = techniqueInfo(id);
+  const official = new Set(
+    (info?.tactics ?? []).map((t) => tacticName(t)).filter((n): n is string => n !== null),
+  );
+  const esNames = esTactics.map((k) => tacticName(k));
+  return esNames.find((n): n is string => n !== null && official.has(n))
+    ?? tacticName(info?.tactics[0])
+    ?? tacticName(esTactics[0])
+    ?? null;
+}
+
 export function parseScope(response: Agg): ParsedScope {
   const a = response?.aggregations ?? {};
   const outcomes = countsFromFiltersAgg(a.outcomes);
@@ -55,7 +71,7 @@ export function parseScope(response: Agg): ParsedScope {
     return {
       id,
       name: info?.name ?? null,
-      tactic: tacticName(buckets(b.tactics)[0]?.key) ?? tacticName(info?.tactics[0]) ?? null,
+      tactic: techniqueTactic(id, buckets(b.tactics).map((t) => String(t.key))),
       outcomes: countsFromFiltersAgg(b.outcomes),
       testKeys: buckets(b.tests).map((t) => String(t.key)),
     };

@@ -54,6 +54,33 @@ describe('parseScope', () => {
   });
 });
 
+describe('technique tactic resolution', () => {
+  const tacticBuckets = (keys: string[]) => ({ buckets: keys.map((key) => ({ key, doc_count: 1 })) });
+  const technique = (key: string, tactics: string[]) => ({
+    key, tactics: tacticBuckets(tactics), tests: { buckets: [] }, outcomes: agg({ unprotected: 1 }),
+  });
+  const tacticOf = (techniques: unknown[]) => Object.fromEntries(
+    parseScope({ aggregations: { techniques: { buckets: techniques } } }).techniques.map((t) => [t.id, t.tactic]),
+  );
+
+  it('takes the ATT&CK tactic over doc-level ES tactics that tie on count', () => {
+    expect(tacticOf([technique('T1486', ['collection', 'command-and-control', 'discovery', 'impact'])]))
+      .toEqual({ T1486: 'Impact' });
+  });
+
+  it('matches ES tactics by resolved name, so defense-evasion satisfies stealth', () => {
+    expect(tacticOf([technique('T1696.001', ['discovery', 'defense-evasion'])])).toEqual({ 'T1696.001': 'Defense Evasion' });
+  });
+
+  it('falls back to the first ATT&CK tactic when no ES tactic is one of them', () => {
+    expect(tacticOf([technique('T1059.001', ['collection'])])).toEqual({ 'T1059.001': 'Execution' });
+  });
+
+  it('falls back to the ES tactic for a technique unknown to ATT&CK', () => {
+    expect(tacticOf([technique('T9998', ['lateral-movement'])])).toEqual({ T9998: 'Lateral Movement' });
+  });
+});
+
 describe('parseTests', () => {
   const stage = (controlId: string, validator: string, name: string) => ({
     key: controlId, outcomes: agg({ protected: 1 }),
