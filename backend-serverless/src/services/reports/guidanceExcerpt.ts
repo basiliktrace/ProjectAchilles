@@ -2,8 +2,12 @@
 // The library has no single format: 14/50 files key H3/H4 headings by
 // technique id, 27/50 have technique-led table rows, the rest are free-form,
 // and cyber-hygiene tests have no guidance at all. First match wins:
-//   1. an H2–H4 heading containing the technique id → that section's text
-//   2. a table row whose first cell starts with the id → its other cells
+//   1. an H2–H4 heading containing the technique id → that section's prose
+//      (fenced code blocks are dropped, and a `#` inside one is not a heading;
+//      a section with no prose left is skipped)
+//   2. a table row that names the technique in one cell and a mitigation id
+//      (M####) in another → its other cells. A row without a mitigation is a
+//      technique description ("what the test does"), not remediation.
 //   3. otherwise null (the report prints a pointer to the file instead)
 
 import fs from 'fs';
@@ -13,6 +17,8 @@ import { FileService } from '../browser/fileService.js';
 export const EXCERPT_MAX_CHARS = 600;
 
 const HEADING = /^(#{1,6})\s+(.*)$/;
+const FENCE = /^(```|~~~)/;
+const MITIGATION_ID = /\bM\d{4}\b/;
 
 /** Technique id as a whole token: T1059 must not match T1059.001. */
 function techniquePattern(id: string): RegExp {
@@ -39,17 +45,31 @@ function truncate(text: string, max: number): string {
   return `${cut.slice(0, lastBreak > max * 0.6 ? lastBreak : cut.length).trimEnd()}…`;
 }
 
+/** Per line: true for fence marker lines and everything between them. */
+function fencedLines(lines: string[]): boolean[] {
+  let open = false;
+  return lines.map((line) => {
+    const marker = FENCE.test(line.trimStart());
+    const fenced = open || marker;
+    if (marker) open = !open;
+    return fenced;
+  });
+}
+
 export function extractGuidanceExcerpt(markdown: string, techniqueId: string): string | null {
   const pattern = techniquePattern(techniqueId);
   const lines = markdown.split(/\r?\n/);
+  const fenced = fencedLines(lines);
 
   for (let i = 0; i < lines.length; i++) {
+    if (fenced[i]) continue;
     const heading = lines[i].match(HEADING);
     if (!heading || heading[1].length < 2 || heading[1].length > 4) continue;
     if (!pattern.test(markdownToPlain(heading[2]))) continue;
     const level = heading[1].length;
     const body: string[] = [];
     for (let j = i + 1; j < lines.length; j++) {
+      if (fenced[j]) continue;
       const next = lines[j].match(HEADING);
       if (next && next[1].length <= level) break;
       if (lines[j].trim() !== '' && !/^\s*\|?\s*:?-{3,}/.test(lines[j])) body.push(lines[j]);
@@ -60,11 +80,10 @@ export function extractGuidanceExcerpt(markdown: string, techniqueId: string): s
 
   for (const line of lines) {
     if (!line.trim().startsWith('|')) continue;
-    const cells = line.split('|').map((c) => c.trim()).filter((c) => c !== '');
-    if (cells.length < 2) continue;
-    const first = markdownToPlain(cells[0]);
-    if (!first.toUpperCase().startsWith(techniqueId.toUpperCase()) || !pattern.test(first)) continue;
-    return truncate(cells.slice(1).map(markdownToPlain).join(' · '), EXCERPT_MAX_CHARS);
+    const cells = line.split('|').map((c) => c.trim()).filter((c) => c !== '').map(markdownToPlain);
+    const rest = cells.filter((c) => !pattern.test(c));
+    if (rest.length === cells.length || !rest.some((c) => MITIGATION_ID.test(c))) continue;
+    return truncate(rest.join(' · '), EXCERPT_MAX_CHARS);
   }
 
   return null;

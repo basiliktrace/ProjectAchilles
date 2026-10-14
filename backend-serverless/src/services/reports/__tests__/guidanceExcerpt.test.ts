@@ -48,6 +48,39 @@ Set the registry value to disable Windows Script Host.
 ## 2. Detection
 `;
 
+// Real files (e.g. 92b0b4f6) put a fenced PowerShell block straight after the
+// technique heading, and its first line is a `# comment`.
+const FENCED = `### T1547.001 - Registry Run Keys
+
+\`\`\`powershell
+# comment inside the fence
+auditpol /set /subcategory:"Registry" /success:enable
+\`\`\`
+
+Review the audit events weekly.
+
+### T1555.003 - Credentials from Web Browsers
+
+Restrict browser credential stores.
+`;
+
+const FENCE_ONLY = `### T1486 - Data Encrypted for Impact
+
+~~~bash
+# only a script lives here
+echo hardening
+~~~
+
+### T1490 - Inhibit System Recovery
+
+Protect shadow copies.
+`;
+
+const MITIGATION_TABLE = `| Mitigation | Name | Techniques | Guidance |
+|------------|------|------------|----------|
+| M1040 | Behavior Prevention on Endpoint | T1486 | Enable ransomware protection |
+`;
+
 describe('extractGuidanceExcerpt', () => {
   it('returns the section under a technique-keyed heading, as plain text', () => {
     const excerpt = extractGuidanceExcerpt(HEADING_KEYED, 'T1204.002');
@@ -84,6 +117,57 @@ describe('extractGuidanceExcerpt', () => {
     const excerpt = extractGuidanceExcerpt(long, 'T1486')!;
     expect(excerpt.length).toBeLessThanOrEqual(EXCERPT_MAX_CHARS);
     expect(excerpt.endsWith('…')).toBe(true);
+  });
+});
+
+describe('extractGuidanceExcerpt: code fences', () => {
+  it('keeps the prose after a fenced block and drops the fenced content', () => {
+    const excerpt = extractGuidanceExcerpt(FENCED, 'T1547.001');
+    expect(excerpt).toBe('Review the audit events weekly.');
+    expect(excerpt).not.toContain('`');
+    expect(excerpt).not.toContain('comment');
+    expect(excerpt).not.toContain('auditpol');
+  });
+
+  it('does not let a fenced # line end the section or start a candidate heading', () => {
+    const md = `### T1486 - Data Encrypted for Impact\n\nBefore.\n\n\`\`\`\n# T1490 backup\n# next\n\`\`\`\n\nAfter.\n`;
+    expect(extractGuidanceExcerpt(md, 'T1486')).toBe('Before.\nAfter.');
+    expect(extractGuidanceExcerpt(md, 'T1490')).toBeNull();
+  });
+
+  it('falls through to the table fallback when a heading section is only a fenced block', () => {
+    expect(extractGuidanceExcerpt(FENCE_ONLY + MITIGATION_TABLE, 'T1486')).toBe(
+      'M1040 · Behavior Prevention on Endpoint · Enable ransomware protection',
+    );
+  });
+
+  it('returns null when a heading section is only a fenced block and there is no table', () => {
+    expect(extractGuidanceExcerpt(FENCE_ONLY, 'T1486')).toBeNull();
+  });
+});
+
+describe('extractGuidanceExcerpt: table rows', () => {
+  it('rejects a description-only row with no mitigation id', () => {
+    const details = '| Technique | Name | Tactic | Test action |\n|---|---|---|---|\n| T1486 | Data Encrypted for Impact | Impact | File encryption |\n';
+    expect(extractGuidanceExcerpt(details, 'T1486')).toBeNull();
+  });
+
+  it('accepts a mitigation-led row and drops only the technique cell', () => {
+    expect(extractGuidanceExcerpt(MITIGATION_TABLE, 'T1486')).toBe(
+      'M1040 · Behavior Prevention on Endpoint · Enable ransomware protection',
+    );
+  });
+
+  it('skips a description-only row to reach a later row that has a mitigation', () => {
+    const md = '| T1486 | Data Encrypted for Impact | Impact | File encryption |\n' + MITIGATION_TABLE;
+    expect(extractGuidanceExcerpt(md, 'T1486')).toBe(
+      'M1040 · Behavior Prevention on Endpoint · Enable ransomware protection',
+    );
+  });
+
+  it('keeps whole-token matching for mitigation-led rows', () => {
+    expect(extractGuidanceExcerpt(MITIGATION_TABLE, 'T148')).toBeNull();
+    expect(extractGuidanceExcerpt(MITIGATION_TABLE.replace('T1486', 'T1486.001'), 'T1486')).toBeNull();
   });
 });
 
