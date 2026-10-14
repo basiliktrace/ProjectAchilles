@@ -1,9 +1,21 @@
+// Shared fixtures for the execution report tests.
+//
+// Each payload section is an independent unit-test input. The aggregates
+// (totals, hosts, actors, timeline, techniques, findings) are deliberately NOT
+// mutually consistent with the runs; real payload consistency comes from the
+// backend. Later tests' expected numbers are traced against these exact values,
+// so do not rebalance them. Only the runs are kept internally coherent
+// (start <= completion, key matches hostname, distinct task ids).
+
 import type {
   ExecutionReport, OutcomeCounts, ReportMeta, ReportRun, ReportTest, ReportWindow,
 } from '@/services/api/reports';
 
 export const BUNDLE = '298cc137-ea39-4cf0-9b2d-b1c59a3cbacb';
 export const TZ = 'UTC';
+
+/** Default run duration: 6 min 43 s, so the default run starts 12:41:06 and completes 12:47:49. */
+const RUN_DURATION_MS = (6 * 60 + 43) * 1000;
 
 export function counts(c: Partial<OutcomeCounts> = {}): OutcomeCounts {
   return { protected: 0, prevented: 0, detected: 0, unprotected: 0, inconclusive: 0, skipped: 0, ...c };
@@ -40,13 +52,17 @@ export function makeTest(over: Partial<ReportTest> = {}): ReportTest {
 
 export function makeRun(over: Partial<ReportRun> = {}): ReportRun {
   const completedAt = over.completedAt ?? '2026-10-12T12:47:49.000Z';
+  const hostname = over.hostname ?? 'WS-FIN-014';
+  const completedMs = Date.parse(completedAt);
   return {
-    key: `bundle::${BUNDLE}::WS-FIN-014::${Date.parse(completedAt)}`,
+    // The backend derives hostname from the key's third segment, so they never disagree.
+    key: `bundle::${BUNDLE}::${hostname}::${completedMs}`,
     testKey: BUNDLE,
     testName: 'LockBit 3.0 Double Extortion Kill Chain',
-    hostname: 'WS-FIN-014',
+    hostname,
     completedAt,
-    startedAt: '2026-10-12T12:41:06.000Z',
+    // An explicit override (including null) wins via the trailing spread.
+    startedAt: new Date(completedMs - RUN_DURATION_MS).toISOString(),
     taskId: '4c28f408-1676-40ff-a2e6-60ea5bdd6076',
     stages: [
       { controlId: 'T1059.001', name: 'Execution & defense degradation', order: 1, outcome: 'detected', exitCode: 101, techniques: ['T1059.001'], tactics: ['execution'], highImpact: false },
@@ -84,7 +100,7 @@ export function makeReport(
   over: Partial<Omit<ExecutionReport, 'meta'>> & { meta?: Partial<ReportMeta> } = {},
 ): ExecutionReport {
   const { meta, ...rest } = over;
-  const runs = rest.runs ?? [makeRun(), makeRun({ completedAt: '2026-10-11T09:12:00.000Z', hostname: 'WS-OPS-022', alerts: [] })];
+  const runs = rest.runs ?? [makeRun(), makeRun({ completedAt: '2026-10-11T09:12:00.000Z', hostname: 'WS-OPS-022', taskId: '9e1b7c52-3d84-4a6f-b0c9-5f2a8d71e346', alerts: [] })];
   return {
     meta: {
       reportId: 'RPT-20261013-7F3A',
