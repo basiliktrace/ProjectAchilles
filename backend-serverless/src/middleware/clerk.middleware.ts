@@ -150,9 +150,9 @@ export function hasRequestPermission(req: Request, ...permissions: Permission[])
 }
 
 /**
- * Middleware factory: require one or more permissions.
+ * Middleware factory: require one or more permissions (see hasRequestPermission).
  * Extracts the role from the JWT, expands to the permission set, and checks inclusion.
- * If the user has no role set, all permissions are granted (backward-compatible migration).
+ * If the user has no role set, hasPermissions() defaults to the explorer set (read-only).
  */
 export function requirePermission(...permissions: Permission[]) {
   return (req: Request, res: Response, next: NextFunction): void => {

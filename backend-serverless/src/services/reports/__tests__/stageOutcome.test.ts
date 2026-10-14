@@ -51,6 +51,22 @@ const GOLDEN: GoldenCase[] = [
     flags: { defender_stage_detected: true }, actions: { defender_prevention_action: 'kill_failed' }, expected: 'detected',
   },
   {
+    name: 'exit 101 + Defender stage alert + quarantined → prevented', exit: 101,
+    flags: { defender_stage_detected: true }, actions: { defender_prevention_action: 'quarantined' }, expected: 'prevented',
+  },
+  {
+    name: 'exit 101 + Defender stage alert + process_killed → prevented', exit: 101,
+    flags: { defender_stage_detected: true }, actions: { defender_prevention_action: 'process_killed' }, expected: 'prevented',
+  },
+  {
+    name: 'exit 101 + Falcon stage alert + blocked → prevented', exit: 101,
+    flags: { crowdstrike_stage_detected: true }, actions: { crowdstrike_prevention_action: 'blocked' }, expected: 'prevented',
+  },
+  {
+    name: 'exit 101 + Falcon stage alert + kill_failed → detected', exit: 101,
+    flags: { crowdstrike_stage_detected: true }, actions: { crowdstrike_prevention_action: 'kill_failed' }, expected: 'detected',
+  },
+  {
     name: 'exit 101 + bundle-level flag + blocked action → unprotected', exit: 101,
     flags: { defender_detected: true }, actions: { defender_prevention_action: 'blocked' }, expected: 'unprotected',
   },

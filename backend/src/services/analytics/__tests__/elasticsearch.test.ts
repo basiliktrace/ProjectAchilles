@@ -1734,7 +1734,7 @@ describe('elasticsearch.ts', () => {
   // Archive operations
   // ================================================================
   describe('archiveByGroupKeys', () => {
-    // Realistic keys match what the Painless groupKeyScript emits: 4 parts
+    // Realistic keys match what RUN_GROUP_KEY_SCRIPT emits: 4 parts
     // with `routing.event_time` epoch-millis as the final component.
     // 1736935200000 corresponds to 2025-01-15T10:00:00Z (arbitrary, stable
     // across tests). Was previously a 30-min bucket; switched to exact

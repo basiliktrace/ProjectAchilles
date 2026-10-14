@@ -50,7 +50,7 @@ path.resolve(__dirname, '../../data/f0_library/tests_source')
 
 ### `.vercelignore` replaces `.gitignore`
 
-When `.vercelignore` exists, Vercel uses it **instead of** `.gitignore` for upload filtering. Local `.env` files will leak into the build unless explicitly excluded in `.vercelignore`. The current `.vercelignore` excludes `.env`, `.env.*`, `data/`, `node_modules/`, `*.db`, and `.vercel`.
+When `.vercelignore` exists, Vercel uses it **instead of** `.gitignore` for upload filtering. Local `.env` files will leak into the build unless explicitly excluded in `.vercelignore`. The current `.vercelignore` excludes `.env`, `.env.*`, `/data/` (anchored, so `src/data/` still ships), `node_modules/`, `*.db`, and `.vercel`.
 
 ### `vercel-build` script must be idempotent
 
