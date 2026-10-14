@@ -1,7 +1,9 @@
 import { Router } from 'express';
-import { requireClerkAuth, requirePermission, getUserOrgId, validateRequestOrgId } from '../middleware/clerk.middleware.js';
+import { requireClerkAuth, requirePermission, getUserOrgId, validateRequestOrgId, hasRequestPermission } from '../middleware/clerk.middleware.js';
 import { asyncHandler, AppError } from '../middleware/error.middleware.js';
 import { SettingsService } from '../services/analytics/settings.js';
+import { IntegrationsSettingsService } from '../services/integrations/settings.js';
+import { ExecutionReportService } from '../services/reports/executionReport.service.js';
 import { SbReportService, parseSbReportWindow } from '../services/reports/sbReport.service.js';
 
 const router = Router();
@@ -43,6 +45,65 @@ router.get('/sb-pc-2026-001', requirePermission('analytics:dashboards:read'), as
   });
 
   res.json(report);
+}));
+
+const RESULT_FILTERS = ['all', 'protected', 'unprotected', 'inconclusive'] as const;
+type ResultFilter = (typeof RESULT_FILTERS)[number];
+
+function queryString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() !== '' ? value.trim() : undefined;
+}
+
+// GET /api/reports/executions - Print-ready execution report payload.
+// Query params: the All executions filter-bar params (org, from, to, result,
+// hostnames, tests, techniques, categories, severities, threatActors, tags,
+// errorNames, errorCodes, bundleNames) plus tz (IANA zone, default UTC).
+// org is never defaulted from the JWT (same as the analytics routes): ES
+// routing.oid holds agent-org UUIDs, so a Clerk org id could filter to zero docs.
+// Accepted risks are included only for callers with analytics:risk:read.
+router.get('/executions', requirePermission('analytics:dashboards:read'), asyncHandler(async (req, res) => {
+  const settings = await settingsService.getSettings();
+  if (!settings.configured) {
+    throw new AppError('Elasticsearch not configured', 400);
+  }
+
+  const q = req.query;
+  const result = queryString(q.result);
+  if (result && !(RESULT_FILTERS as readonly string[]).includes(result)) {
+    throw new AppError(`Invalid result filter: ${result}`, 400);
+  }
+
+  const org = queryString(q.org);
+  if (org) validateRequestOrgId(org, req.auth);
+
+  const integrations = new IntegrationsSettingsService();
+  const service = new ExecutionReportService(settings, {
+    vendors: {
+      defender: await integrations.isDefenderConfigured(),
+      crowdstrike: await integrations.isCrowdStrikeConfigured(),
+    },
+  });
+
+  const report = await service.generate({
+    org,
+    from: queryString(q.from),
+    to: queryString(q.to),
+    result: result as ResultFilter | undefined,
+    hostnames: queryString(q.hostnames),
+    tests: queryString(q.tests),
+    techniques: queryString(q.techniques),
+    categories: queryString(q.categories),
+    severities: queryString(q.severities),
+    threatActors: queryString(q.threatActors),
+    tags: queryString(q.tags),
+    errorNames: queryString(q.errorNames),
+    errorCodes: queryString(q.errorCodes),
+    bundleNames: queryString(q.bundleNames),
+    tz: queryString(q.tz) ?? 'UTC',
+    includeAcceptedRisks: hasRequestPermission(req, 'analytics:risk:read'),
+  });
+
+  res.json({ success: true, data: report });
 }));
 
 export default router;
