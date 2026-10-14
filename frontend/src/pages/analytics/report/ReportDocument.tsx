@@ -64,7 +64,7 @@ export function ReportDocument({ report, paper, marking }: { report: ExecutionRe
           <Sheet label="No executions" head={head}>
             <h2 className="rp-h2">No executions match these filters</h2>
             <p className="rp-muted">
-              Nothing ran in this window for {orgLabel(report)} with the filters below. Widen the date range or remove filters on the All executions tab, then open the report again.
+              Nothing ran in this window for {orgLabel(report)} with the filters below. Widen the date range or remove filters on the All Executions tab, then open the report again.
             </p>
             <ScopeList report={report} />
           </Sheet>

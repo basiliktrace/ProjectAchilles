@@ -1,4 +1,4 @@
-// /analytics/report — print-ready execution report for the All executions
+// /analytics/report — print-ready execution report for the All Executions
 // filters in the URL (spec §5.4). No app shell; saved to PDF via print.
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
@@ -57,7 +57,10 @@ export default function AnalyticsReportPage() {
       <div className="rp-toolbar" role="toolbar" aria-label="Report actions">
         <div className="rp-toolbar-group">
           <Link className="rp-btn rp-btn-ghost" to={backHref}>Back to analytics</Link>
-          <span className="rp-hint">Save as PDF from the print dialog. Page numbers print in Chromium-based browsers.</span>
+          <span className="rp-hint">
+            Save as PDF from the print dialog. The marking on each page, the running headers and the page numbers print
+            in Chromium-based browsers (Chrome, Edge); other browsers omit them.
+          </span>
         </div>
         <div className="rp-toolbar-group">
           <label htmlFor="rp-paper">Paper</label>

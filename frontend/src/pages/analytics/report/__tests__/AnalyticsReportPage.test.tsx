@@ -118,6 +118,17 @@ describe('AnalyticsReportPage', () => {
     renderAt('/analytics/report');
     expect(await screen.findByRole('heading', { name: 'No executions match these filters' })).toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: 'Executive summary' })).toBeNull();
+    // Named as the console labels the tab.
+    expect(screen.getByText(/remove filters on the All Executions tab/)).toBeInTheDocument();
+  });
+
+  it('says the per-page marking, headers and page numbers print only in Chromium-based browsers', () => {
+    getReportMock.mockReturnValue(new Promise(() => {}));
+    renderAt('/analytics/report');
+    const toolbar = screen.getByRole('toolbar', { name: 'Report actions' });
+    expect(toolbar).toHaveTextContent(
+      'The marking on each page, the running headers and the page numbers print in Chromium-based browsers (Chrome, Edge); other browsers omit them.',
+    );
   });
 
   it('still renders when browser storage throws (Review Focus #3)', async () => {
