@@ -46,8 +46,10 @@ export interface ReportMeta {
   /** Section-level degradations, human readable. */
   warnings: string[];
   /**
-   * Optional enrichments that failed or timed out; the matching section renders
-   * "unavailable" (spec §5.7). Empty when everything succeeded or was not applicable.
+   * Optional enrichments that failed or timed out (spec §5.7). The matching section says
+   * the data is unavailable or incomplete; for `'alerts'` the alerts that were found are
+   * still listed and unchecked runs are marked via `ReportRun.alertsChecked`. Empty when
+   * everything succeeded or was not applicable.
    */
   unavailable: ReportEnrichment[];
   /** Set when part of the data in scope could not be read (partial shard failure); the cover shows a banner. */
