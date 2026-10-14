@@ -39,8 +39,8 @@ export function ExecutionLog({ report, head }: { report: ExecutionReport; head: 
             const c = countStages(r.stages);
             return (
               <tr key={r.key}>
-                <td className="rp-mono">{fmtDate(r.completedAt, tz)} {fmtTime(r.completedAt, tz)}</td>
-                <td className="rp-mono">{r.hostname}</td>
+                <td className="rp-mono rp-nowrap">{fmtDate(r.completedAt, tz)} {fmtTime(r.completedAt, tz)}</td>
+                <td className="rp-mono rp-id">{r.hostname}</td>
                 <td>{truncate(r.testName, 40)}</td>
                 <td>
                   <GlyphRow stages={r.stages.filter((s) => s.outcome !== 'skipped')} />

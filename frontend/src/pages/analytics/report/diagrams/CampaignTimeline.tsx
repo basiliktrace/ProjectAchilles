@@ -145,8 +145,9 @@ export function CampaignTimeline({ report }: { report: ExecutionReport }) {
   const ty = (rate: number) => 10 + (1 - rate) * (TREND_H - 20);
   const note = coverageNote(win, tz);
 
+  // Not break-avoided here: the executive summary wraps this figure and its heading in one .rp-avoid block.
   return (
-    <figure className="rp-figure rp-avoid">
+    <figure className="rp-figure">
       <svg
         className="rp-svg"
         viewBox={`0 0 ${W} ${axisY + 18}`}

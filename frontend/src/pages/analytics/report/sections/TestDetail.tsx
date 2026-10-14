@@ -27,7 +27,7 @@ function ControlTable({ test, edr }: { test: ReportTest; edr: boolean }) {
         {test.stages.map((s) => (
           <tr key={`${s.order}-${s.controlId ?? 'only'}`}>
             <td>{s.name}</td>
-            <td className="rp-mono">{s.controlId ?? s.techniques.join(', ')}</td>
+            <td className="rp-mono rp-id">{s.controlId ?? s.techniques.join(', ')}</td>
             <td style={{ width: '28%' }}><OutcomeBar counts={s.outcomes} legend={false} height={6} /></td>
             <td className="rp-num">{fmtPct(protectionRate(s.outcomes))}</td>
             {edr && <td className="rp-num">{s.alerts.defender + s.alerts.crowdstrike}</td>}
@@ -68,7 +68,7 @@ function EndpointMatrix({ test, runs, tz, sampled }: { test: ReportTest; runs: R
         <tbody>
           {shown.map((r) => (
             <tr key={r.hostname}>
-              <td className="rp-mono">{r.hostname}</td>
+              <td className="rp-mono rp-id">{r.hostname}</td>
               {wide ? (
                 <td><GlyphRow stages={r.stages.filter((x) => x.outcome !== 'skipped')} max={MATRIX_GLYPHS_MAX} /></td>
               ) : (
@@ -101,6 +101,7 @@ export function TestDetail({ report, test, head }: { report: ExecutionReport; te
   const edr = report.meta.edrVendors.length > 0;
   const chain = test.isBundle && test.category !== 'cyber-hygiene';
   const runs = report.runs.filter((r) => r.testKey === test.testKey);
+  const runsNote = <small>All {plural(test.runs, 'run')}</small>;
   const alerts = runs
     .flatMap((r) => r.alerts.map((a) => ({ a, r })))
     .sort((p, q) => Date.parse(q.a.createdAt) - Date.parse(p.a.createdAt))
@@ -129,12 +130,15 @@ export function TestDetail({ report, test, head }: { report: ExecutionReport; te
         <dd><b className="rp-mono">{fmtPct(protectionRate(test.outcomes))}</b> · {defended(test.outcomes)} of {conclusive(test.outcomes)} stage results</dd>
       </dl>
       {test.description && <p className="rp-lede">{test.description}</p>}
-      <div>
-        <h3 className="rp-h3">{chain ? 'Kill chain' : test.isBundle ? 'Controls' : 'Result'} <small>All {plural(test.runs, 'run')}</small></h3>
-        {chain
-          ? <KillChainFlow test={test} edrVendors={report.meta.edrVendors} />
-          : <ControlTable test={test} edr={edr} />}
-      </div>
+      {chain ? (
+        // The heading rides in the chain's first unbreakable row so it never ends a page alone.
+        <KillChainFlow test={test} edrVendors={report.meta.edrVendors} heading={<h3 className="rp-h3">Kill chain {runsNote}</h3>} />
+      ) : (
+        <div>
+          <h3 className="rp-h3">{test.isBundle ? 'Controls' : 'Result'} {runsNote}</h3>
+          <ControlTable test={test} edr={edr} />
+        </div>
+      )}
       <EndpointMatrix test={test} runs={runs} tz={tz} sampled={report.meta.truncation.runs} />
       <AlertsIncompleteNote report={report} />
       {edr && alerts.length > 0 && (
@@ -153,8 +157,8 @@ export function TestDetail({ report, test, head }: { report: ExecutionReport; te
             <tbody>
               {alerts.map(({ a, r }, i) => (
                 <tr key={`${r.key}-${i}`}>
-                  <td className="rp-mono">{fmtShortDate(a.createdAt, tz)} {fmtTime(a.createdAt, tz)}</td>
-                  <td className="rp-mono">{r.hostname}</td>
+                  <td className="rp-mono rp-nowrap">{fmtShortDate(a.createdAt, tz)} {fmtTime(a.createdAt, tz)}</td>
+                  <td className="rp-mono rp-id">{r.hostname}</td>
                   {test.isBundle && <td>{alertStageText([test], r, a.stageControlId)}</td>}
                   <td>{vendorName(a.vendor)}</td>
                   <td><span className="rp-chip">{a.severity}</span> {a.title}</td>

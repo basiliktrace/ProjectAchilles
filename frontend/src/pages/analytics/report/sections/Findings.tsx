@@ -54,7 +54,7 @@ function AcceptedRisks({ report }: { report: ExecutionReport }) {
             {risks.map((r, i) => (
               <tr key={i}>
                 <td>{r.testName}{r.controlId ? <span className="rp-mono"> · {r.controlId}</span> : null}</td>
-                <td>{r.scope === 'host' ? <span className="rp-mono">{r.hostname}</span> : 'All endpoints'}</td>
+                <td className="rp-id">{r.scope === 'host' ? <span className="rp-mono">{r.hostname}</span> : 'All endpoints'}</td>
                 <td>{r.justification}</td>
                 <td>{r.acceptedBy}</td>
                 <td className="rp-num">{fmtDate(r.acceptedAt, tz)}</td>

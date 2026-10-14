@@ -62,7 +62,7 @@ export function ExecutiveSummary({ report, head }: { report: ExecutionReport; he
         <h3 className="rp-h3">Outcome of every stage <small>{plural(totals.stageResults, 'stage result')}</small></h3>
         <OutcomeBar counts={totals.outcomes} />
       </div>
-      <div>
+      <div className="rp-avoid">
         <h3 className="rp-h3">Campaign timeline</h3>
         <CampaignTimeline report={report} />
       </div>

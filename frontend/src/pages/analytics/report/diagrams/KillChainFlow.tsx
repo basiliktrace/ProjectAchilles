@@ -1,5 +1,7 @@
 // Kill-chain flow for multi-stage attack tests: one chevron per stage,
 // banded by stage protection rate, with per-stage results below.
+import type { ReactNode } from 'react';
+
 import type { ReportAlert, ReportTest } from '@/services/api/reports';
 import { BAND_LABEL, bandOf, conclusive, defended, protectionRate, tacticLabel } from '../lib/outcomes';
 import { fmtPct } from '../lib/format';
@@ -15,8 +17,15 @@ const ALERT_VENDORS: { key: ReportAlert['vendor']; label: string }[] = [
   { key: 'crowdstrike', label: 'Falcon' },
 ];
 
-/** `edrVendors` is meta.edrVendors: the alert line names only configured vendors, and is omitted when there are none. */
-export function KillChainFlow({ test, edrVendors = ['defender', 'crowdstrike'] }: { test: ReportTest; edrVendors?: ReportAlert['vendor'][] }) {
+/**
+ * `edrVendors` is meta.edrVendors: the alert line names only configured vendors, and is omitted when there are none.
+ * `heading` prints inside the first row's unbreakable block, so it never ends a page without the chain.
+ */
+export function KillChainFlow({ test, edrVendors = ['defender', 'crowdstrike'], heading }: {
+  test: ReportTest;
+  edrVendors?: ReportAlert['vendor'][];
+  heading?: ReactNode;
+}) {
   const vendors = ALERT_VENDORS.filter((v) => edrVendors.includes(v.key));
   const rows: ReportTest['stages'][] = [];
   for (let i = 0; i < test.stages.length; i += PER_ROW) rows.push(test.stages.slice(i, i + PER_ROW));
@@ -28,6 +37,7 @@ export function KillChainFlow({ test, edrVendors = ['defender', 'crowdstrike'] }
     <div className="rp-killchain">
       {rows.map((row, r) => (
         <div key={r} className="rp-avoid">
+          {r === 0 && heading}
           <svg className="rp-svg" viewBox={`0 0 ${W} ${H}`} role="img" aria-label={`Stages ${row[0].order} to ${row[row.length - 1].order}`}>
             {row.map((s, i) => {
               const x0 = i * cw;

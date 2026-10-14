@@ -56,3 +56,41 @@ describe('report.css scope', () => {
     expect(importers.filter((f) => !f.endsWith('__tests__/report-css.test.ts'))).toEqual(['pages/analytics/report/AnalyticsReportPage.tsx']);
   });
 });
+
+/** Every style rule as its selector list and declarations; rules inside @media blocks are included. */
+function styleRules(css: string): Array<{ selectors: string[]; body: string }> {
+  const stripped = css.replace(/\/\*[\s\S]*?\*\//g, '');
+  return [...stripped.matchAll(/([^{}]+)\{([^{}]*)\}/g)].map((m) => ({
+    selectors: m[1].split(',').map((sel) => sel.trim().replace(/\s+/g, ' ')),
+    body: m[2],
+  }));
+}
+
+/** The declarations of every rule that lists `selector` exactly. */
+const declarationsFor = (selector: string) =>
+  styleRules(reportCss).filter((r) => r.selectors.includes(selector)).map((r) => r.body).join(';');
+
+describe('report.css page breaks', () => {
+  it('keeps a subsection heading with what follows it', () => {
+    // Without this a heading can print alone at the foot of a page, its chart on the next.
+    const h3 = declarationsFor('.report-print .rp-h3');
+    expect(h3).toMatch(/(^|;|\s)break-after:\s*avoid/);
+    expect(h3).toMatch(/page-break-after:\s*avoid/);
+  });
+});
+
+describe('report.css table cells', () => {
+  // One unbreakable cell wider than the page makes Chromium scale the whole PDF down.
+  it('lets identifier cells (hostnames, control ids, technique lists) wrap', () => {
+    const monoRules = styleRules(reportCss).filter((r) => r.selectors.some((sel) => /td\.rp-mono\b/.test(sel)));
+    for (const r of monoRules) expect(r.body, r.selectors.join(', ')).not.toMatch(/white-space:\s*nowrap/);
+    const id = declarationsFor('.report-print .rp-table td.rp-id');
+    expect(id).toMatch(/overflow-wrap:\s*anywhere/);
+    expect(id).not.toMatch(/white-space:\s*nowrap/);
+  });
+
+  it('keeps numbers and dates on one line', () => {
+    expect(declarationsFor('.report-print .rp-table td.rp-num')).toMatch(/white-space:\s*nowrap/);
+    expect(declarationsFor('.report-print .rp-table td.rp-nowrap')).toMatch(/white-space:\s*nowrap/);
+  });
+});

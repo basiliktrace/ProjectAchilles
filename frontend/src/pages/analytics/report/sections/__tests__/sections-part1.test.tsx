@@ -205,6 +205,17 @@ describe('ExecutiveSummary', () => {
   });
 });
 
+describe('ExecutiveSummary page breaks', () => {
+  it('keeps the Campaign timeline heading in the same unbreakable block as its chart', () => {
+    render(<ExecutiveSummary report={makeReport()} head={head} />);
+    const heading = screen.getByRole('heading', { name: 'Campaign timeline' });
+    const chart = screen.getByRole('img', { name: /^Campaign timeline/ });
+    const block = heading.closest('.rp-avoid');
+    expect(block).not.toBeNull();
+    expect(chart.closest('.rp-avoid')).toBe(block);
+  });
+});
+
 describe('ExecutiveSummary endpoint chart', () => {
   it('lists the weakest endpoint first', () => {
     const { container } = render(<ExecutiveSummary report={makeReport()} head={head} />);

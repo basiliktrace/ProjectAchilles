@@ -39,7 +39,34 @@ describe('run helpers', () => {
   });
 });
 
+/** 63 characters, a realistic FQDN with no break opportunity but its dots. */
+const LONG_HOST = 'wks-fin-0042.finance-operations.emea.corp.contoso-international';
+
 describe('TestDetail', () => {
+  it('keeps the kill-chain heading in the same unbreakable block as the first row of chevrons', () => {
+    const { container } = render(<TestDetail report={makeReport()} test={makeTest()} head={head} />);
+    const block = screen.getByRole('heading', { name: /Kill chain/ }).closest('.rp-avoid');
+    expect(block).not.toBeNull();
+    expect(block!.contains(container.querySelector('polygon.rp-kc'))).toBe(true);
+  });
+
+  it('lets hostnames, control ids and technique lists wrap, and keeps dates on one line', () => {
+    expect(LONG_HOST).toHaveLength(63);
+    const standalone = makeTest({
+      isBundle: false, category: 'host-hardening',
+      stages: [{ ...makeTest().stages[0], controlId: null, techniques: ['T1059.001', 'T1059.003', 'T1105', 'T1112', 'T1547.001', 'T1562.001'] }],
+    });
+    const runs = [makeRun({ hostname: LONG_HOST })];
+    render(<TestDetail report={makeReport({ runs })} test={standalone} head={head} />);
+    expect(screen.getByText('T1059.001, T1059.003, T1105, T1112, T1547.001, T1562.001')).toHaveClass('rp-id');
+    for (const cell of screen.getAllByText(LONG_HOST)) {
+      expect(cell.tagName).toBe('TD');
+      expect(cell).toHaveClass('rp-id');
+    }
+    // The alert table's "Raised" cell is a date: it stays on one line.
+    expect(screen.getByText('12 Oct 12:48')).toHaveClass('rp-nowrap');
+  });
+
   it('uses the kill-chain flow for intel-driven bundles', () => {
     const { container } = render(<TestDetail report={makeReport()} test={makeTest()} head={head} />);
     expect(screen.getByRole('heading', { name: /Kill chain/ })).toBeInTheDocument();
@@ -337,6 +364,16 @@ describe('ExecutionLog', () => {
     report.runs[0] = { ...report.runs[0], moreStages: 7 };
     render(<ExecutionLog report={report} head={head} />);
     expect(within(hostRow('WS-FIN-014')).getByText('+7')).toBeInTheDocument();
+  });
+
+  it('lets a 63-character hostname wrap instead of widening the table past the page', () => {
+    render(<ExecutionLog report={makeReport({ runs: [makeRun({ hostname: LONG_HOST })] })} head={head} />);
+    const cell = within(hostRow(LONG_HOST)).getAllByRole('cell')[1];
+    expect(cell).toHaveTextContent(LONG_HOST);
+    expect(cell).toHaveClass('rp-id');
+    expect(cell).not.toHaveClass('rp-nowrap');
+    // The completion date beside it keeps to one line.
+    expect(within(hostRow(LONG_HOST)).getAllByRole('cell')[0]).toHaveClass('rp-nowrap');
   });
 
   it('drops the alert column when no vendor is configured', () => {
