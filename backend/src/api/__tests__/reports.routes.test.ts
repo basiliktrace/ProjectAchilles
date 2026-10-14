@@ -5,9 +5,18 @@ import request from 'supertest';
 const mockGetUserOrgId = vi.fn();
 const mockValidateOrg = vi.fn();
 const mockHasPermission = vi.fn();
+/** Every permission a route registered with requirePermission, in registration order. */
+const registeredPermissions: string[] = [];
+/** Permissions the requirePermission mock denies (403), as the real middleware would. */
+const deniedPermissions = new Set<string>();
 vi.mock('../../middleware/clerk.middleware.js', () => ({
   requireClerkAuth: () => (req: any, _res: any, next: any) => { req.auth = { userId: 'u1' }; next(); },
-  requirePermission: () => (_req: any, _res: any, next: any) => next(),
+  requirePermission: (permission: string) => {
+    registeredPermissions.push(permission);
+    return (_req: any, res: any, next: any) => (deniedPermissions.has(permission)
+      ? res.status(403).json({ success: false, error: 'Insufficient permissions' })
+      : next());
+  },
   getUserOrgId: (...a: unknown[]) => mockGetUserOrgId(...a),
   validateRequestOrgId: (...a: unknown[]) => mockValidateOrg(...a),
   hasRequestPermission: (...a: unknown[]) => mockHasPermission(...a),
@@ -46,6 +55,7 @@ describe('GET /api/reports/executions', () => {
     vi.clearAllMocks();
     mockValidateOrg.mockReset(); // clearAllMocks keeps implementations: don't leak the 403 test's throw
     constructed.length = 0;
+    deniedPermissions.clear();
     mockGetSettings.mockReturnValue({ configured: true, indexPattern: 'achilles-results-*' });
     // The JWT carries an org, but the report must not default to it: ES routing.oid
     // holds agent-org UUIDs, so only an explicit ?org= narrows the report (as in the console).
@@ -98,6 +108,29 @@ describe('GET /api/reports/executions', () => {
     const res = await request(app()).get('/api/reports/executions');
     expect(res.status).toBe(400);
     expect(res.body.success).toBe(false);
+  });
+
+  it('is guarded by analytics:dashboards:read', async () => {
+    expect(registeredPermissions).toContain('analytics:dashboards:read');
+    deniedPermissions.add('analytics:dashboards:read');
+    const res = await request(app()).get('/api/reports/executions');
+    expect(res.status).toBe(403);
+    expect(res.body.success).toBe(false);
+    expect(mockGenerate).not.toHaveBeenCalled();
+  });
+
+  it.each(['hostnames', 'org', 'from', 'result', 'tz'])('400s when %s arrives more than once', async (name) => {
+    const res = await request(app()).get(`/api/reports/executions?${name}=a&${name}=b`);
+    expect(res.status).toBe(400);
+    expect(res.body).toEqual({ success: false, error: `Invalid query parameter: ${name}` });
+    expect(mockGenerate).not.toHaveBeenCalled();
+  });
+
+  it('400s on an object-valued filter param', async () => {
+    const res = await request(app()).get('/api/reports/executions?tags[a]=1');
+    expect(res.status).toBe(400);
+    expect(res.body).toEqual({ success: false, error: 'Invalid query parameter: tags' });
+    expect(mockGenerate).not.toHaveBeenCalled();
   });
 
   it('400s on an unknown result filter', async () => {

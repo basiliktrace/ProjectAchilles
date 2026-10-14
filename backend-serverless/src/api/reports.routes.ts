@@ -1,4 +1,4 @@
-import { Router } from 'express';
+import { Router, type Request } from 'express';
 import { requireClerkAuth, requirePermission, getUserOrgId, validateRequestOrgId, hasRequestPermission } from '../middleware/clerk.middleware.js';
 import { asyncHandler, AppError } from '../middleware/error.middleware.js';
 import { SettingsService } from '../services/analytics/settings.js';
@@ -50,8 +50,12 @@ router.get('/sb-pc-2026-001', requirePermission('analytics:dashboards:read'), as
 const RESULT_FILTERS = ['all', 'protected', 'unprotected', 'inconclusive'] as const;
 type ResultFilter = (typeof RESULT_FILTERS)[number];
 
-function queryString(value: unknown): string | undefined {
-  return typeof value === 'string' && value.trim() !== '' ? value.trim() : undefined;
+/** One query param: absent or blank → undefined; repeated (array) or nested (object) → 400. */
+function queryParam(query: Request['query'], name: string): string | undefined {
+  const value = query[name];
+  if (value === undefined) return undefined;
+  if (typeof value !== 'string') throw new AppError(`Invalid query parameter: ${name}`, 400);
+  return value.trim() !== '' ? value.trim() : undefined;
 }
 
 // GET /api/reports/executions - Print-ready execution report payload.
@@ -67,13 +71,13 @@ router.get('/executions', requirePermission('analytics:dashboards:read'), asyncH
     throw new AppError('Elasticsearch not configured', 400);
   }
 
-  const q = req.query;
-  const result = queryString(q.result);
+  const param = (name: string) => queryParam(req.query, name);
+  const result = param('result');
   if (result && !(RESULT_FILTERS as readonly string[]).includes(result)) {
     throw new AppError(`Invalid result filter: ${result}`, 400);
   }
 
-  const org = queryString(q.org);
+  const org = param('org');
   if (org) validateRequestOrgId(org, req.auth);
 
   const integrations = new IntegrationsSettingsService();
@@ -86,20 +90,20 @@ router.get('/executions', requirePermission('analytics:dashboards:read'), asyncH
 
   const report = await service.generate({
     org,
-    from: queryString(q.from),
-    to: queryString(q.to),
+    from: param('from'),
+    to: param('to'),
     result: result as ResultFilter | undefined,
-    hostnames: queryString(q.hostnames),
-    tests: queryString(q.tests),
-    techniques: queryString(q.techniques),
-    categories: queryString(q.categories),
-    severities: queryString(q.severities),
-    threatActors: queryString(q.threatActors),
-    tags: queryString(q.tags),
-    errorNames: queryString(q.errorNames),
-    errorCodes: queryString(q.errorCodes),
-    bundleNames: queryString(q.bundleNames),
-    tz: queryString(q.tz) ?? 'UTC',
+    hostnames: param('hostnames'),
+    tests: param('tests'),
+    techniques: param('techniques'),
+    categories: param('categories'),
+    severities: param('severities'),
+    threatActors: param('threatActors'),
+    tags: param('tags'),
+    errorNames: param('errorNames'),
+    errorCodes: param('errorCodes'),
+    bundleNames: param('bundleNames'),
+    tz: param('tz') ?? 'UTC',
     includeAcceptedRisks: hasRequestPermission(req, 'analytics:risk:read'),
     // Acceptances are scoped by the caller's Clerk org (as the risk-acceptance routes do), not the ES agent-org filter.
     acceptanceOrg: getUserOrgId(req.auth),
