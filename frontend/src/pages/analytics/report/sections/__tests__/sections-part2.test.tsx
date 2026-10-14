@@ -226,9 +226,9 @@ describe('Findings', () => {
     expect(screen.queryByText('T1059.001')).toBeNull();
   });
 
-  it('counts silent runs among the runs whose alerts were actually searched', () => {
+  it('counts silent runs against the runs whose alerts were actually searched', () => {
     render(<Findings report={makeReport()} head={head} />);
-    expect(screen.getByRole('heading', { name: /Time to first EDR alert/ })).toHaveTextContent('1 of 2 runs raised no alert');
+    expect(screen.getByRole('heading', { name: /Time to first EDR alert/ })).toHaveTextContent('1 of 2 checked runs raised no alert');
   });
 
   it('says no alert was correlated only when every run was checked', () => {
@@ -243,7 +243,25 @@ describe('Findings', () => {
     expect(screen.queryByText(NO_ALERTS)).toBeNull();
     expect(screen.getByText('No EDR alert was found.')).toBeInTheDocument();
     expect(screen.getByText('Alerts were not checked for 1 of 2 runs.')).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: /Time to first EDR alert/ })).toHaveTextContent('1 of 2 runs raised no alert');
+    // The unchecked run is neither silent nor counted in the denominator.
+    expect(screen.getByRole('heading', { name: /Time to first EDR alert/ })).toHaveTextContent('1 of 1 checked run raised no alert');
+  });
+
+  it('prints no silent-run tally when no run was checked', () => {
+    const report = makeReport({ runs: silentRuns({ alertsChecked: false }), meta: { unavailable: ['alerts'] } });
+    const { container } = render(<Findings report={report} head={head} />);
+    expect(container.textContent).not.toContain('raised no alert');
+    expect(screen.getByRole('heading', { name: 'Time to first EDR alert' })).toBeInTheDocument();
+    expect(screen.getByText('Alerts were not checked for 2 of 2 runs.')).toBeInTheDocument();
+    expect(screen.queryByText(NO_ALERTS)).toBeNull();
+    expect(screen.queryByText('No EDR alert was found.')).toBeNull();
+  });
+
+  it('does not count an unchecked run that carries alerts as checked', () => {
+    const report = makeReport();
+    report.runs[0] = { ...report.runs[0], alertsChecked: false };
+    render(<Findings report={report} head={head} />);
+    expect(screen.getByRole('heading', { name: /Time to first EDR alert/ })).toHaveTextContent('1 of 1 checked run raised no alert');
   });
 
   it('flags incomplete correlation and still plots the alerts that were found', () => {
@@ -415,6 +433,32 @@ describe('Method', () => {
     render(<Method head={head} />);
     expect(screen.getByText('Defense Score')).toBeInTheDocument();
     expect(screen.getByText('Stage protection rate')).toBeInTheDocument();
+  });
+
+  it('names both EDR products as alert sources by default', () => {
+    render(<Method head={head} />);
+    const sources = screen.getByText('Sources.').closest('p') as HTMLElement;
+    expect(sources).toHaveTextContent('Microsoft Defender for Endpoint and CrowdStrike Falcon');
+  });
+
+  it('names only the configured EDR vendor as an alert source', () => {
+    const { container } = render(<Method head={head} edrVendors={['defender']} />);
+    expect(container.textContent).toContain('Microsoft Defender for Endpoint');
+    expect(container.textContent).not.toMatch(/CrowdStrike|Falcon/);
+    const other = render(<Method head={head} edrVendors={['crowdstrike']} />);
+    expect(other.container.textContent).toContain('CrowdStrike Falcon');
+    expect(other.container.textContent).not.toContain('Defender for Endpoint');
+  });
+
+  it('has no EDR source or alert-window sentence when no vendor is configured', () => {
+    const { container } = render(<Method head={head} edrVendors={[]} />);
+    const sources = screen.getByText('Sources.').closest('p') as HTMLElement;
+    expect(sources).toHaveTextContent('Stage results come from the ProjectAchilles agent.');
+    expect(container.textContent).not.toMatch(/CrowdStrike|Falcon|Defender for Endpoint/);
+    expect(container.textContent).not.toContain('EDR alerts come from');
+    expect(container.textContent).not.toContain('Alerts raised more than 5 minutes');
+    // The metric definitions stay.
+    expect(screen.getByText('Defense Score')).toBeInTheDocument();
   });
 
   it('defines every outcome in the report\'s vocabulary', () => {

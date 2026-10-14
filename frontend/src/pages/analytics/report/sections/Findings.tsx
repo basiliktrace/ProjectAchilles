@@ -10,9 +10,10 @@ const HELD_RATE = 0.9;
 
 function AlertLatency({ report }: { report: ExecutionReport }) {
   const { runs } = report;
-  // A run whose alerts were not searched is unknown, not silent.
+  // A run whose alerts were not searched is unknown, not silent, so the tally counts against checked runs only.
   const silent = runs.filter((r) => r.alerts.length === 0 && r.alertsChecked).length;
   const unchecked = runs.filter((r) => !r.alertsChecked).length;
+  const checked = runs.length - unchecked;
   const anyAlerts = runs.some((r) => r.alerts.length > 0);
   const none = anyAlerts ? null : unchecked === 0 ? 'No EDR alert was correlated to these runs.' : unchecked < runs.length ? 'No EDR alert was found.' : null;
 
@@ -20,7 +21,9 @@ function AlertLatency({ report }: { report: ExecutionReport }) {
     <div className="rp-avoid">
       <h3 className="rp-h3">
         Time to first EDR alert
-        <small>{silent} of {plural(runs.length, 'run')} raised no alert{report.meta.truncation.runs ? ' (newest runs only)' : ''}</small>
+        {checked > 0 && (
+          <small>{silent} of {plural(checked, 'checked run')} raised no alert{report.meta.truncation.runs ? ' (newest runs only)' : ''}</small>
+        )}
       </h3>
       <AlertsIncompleteNote report={report} />
       {anyAlerts && <LatencyDotPlot runs={runs} />}
