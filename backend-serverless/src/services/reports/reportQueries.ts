@@ -88,7 +88,7 @@ export function testsRequest(filters: unknown[]): Body {
             terms: { field: 'f0rtika.control_id', size: STAGES_PER_TEST },
             aggs: {
               outcomes: outcomes(),
-              meta: { top_hits: { size: 1, _source: SOURCE_FIELDS } },
+              meta: { top_hits: { size: 1, sort: [{ 'routing.event_time': { order: 'desc' } }], _source: SOURCE_FIELDS } },
             },
           },
         },

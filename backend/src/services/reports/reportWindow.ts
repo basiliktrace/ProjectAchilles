@@ -141,10 +141,10 @@ export function computeTimeAxis(win: ResolvedWindow, firstExecution: string | nu
   return { axisFrom: floorToBucket(start, bucket), axisTo, bucket };
 }
 
+/** The zone's canonical spelling (e.g. 'america/santo_domingo' → 'America/Santo_Domingo'); 400 when unknown. */
 export function validateTimeZone(tz: string): string {
   try {
-    new Intl.DateTimeFormat('en-US', { timeZone: tz });
-    return tz;
+    return new Intl.DateTimeFormat('en-US', { timeZone: tz }).resolvedOptions().timeZone;
   } catch {
     throw new AppError(`Unknown time zone: ${tz}`, 400);
   }

@@ -164,4 +164,8 @@ describe('validateTimeZone', () => {
     expect(validateTimeZone('America/Santo_Domingo')).toBe('America/Santo_Domingo');
     expect(statusOf(() => validateTimeZone('Mars/Olympus_Mons'))).toBe(400);
   });
+
+  it('returns the canonical spelling of the zone', () => {
+    expect(validateTimeZone('america/santo_domingo')).toBe('America/Santo_Domingo');
+  });
 });

@@ -8,7 +8,9 @@
 // totals may be incomplete. The raw ES reason only goes to the server log.
 // Optional phase: Defense Score, EDR alerts, run start times and accepted
 // risks run in parallel inside one time budget; each failure or timeout
-// becomes a meta.warnings entry and the report still renders.
+// becomes a short meta.warnings entry (the raw error, which can name internal
+// hosts, only goes to the server log) and the report still renders.
+// An instance builds one report: the ES client it creates is closed after it.
 // Byte-identical in backend/ and backend-serverless/: fork differences sit
 // behind taskTiming.ts, the catalog and the route.
 
@@ -103,13 +105,26 @@ interface ShardsInfo {
 
 const errorMessage = (err: unknown): string => (err instanceof Error ? err.message : String(err));
 
+/** withDeadline's rejection, so a warning can say "time budget reached" without echoing raw errors. */
+class DeadlineError extends Error {
+  constructor() {
+    super('time budget reached');
+  }
+}
+
+/** Report-facing text for an enrichment failure; the raw error goes to the server log. */
+function unavailableWarning(label: string, err: unknown): string {
+  console.warn(`Execution report: ${label} unavailable: ${errorMessage(err)}`);
+  return err instanceof DeadlineError ? `${label} unavailable: time budget reached` : `${label} unavailable`;
+}
+
 /** ES transport options that end a request when the report budget does. */
 const untilDeadline = (deadline: number) => ({ requestTimeout: Math.max(1, deadline - Date.now()) });
 
 async function withDeadline<T>(work: Promise<T>, deadline: number): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => reject(new Error('time budget reached')), Math.max(0, deadline - Date.now()));
+    timer = setTimeout(() => reject(new DeadlineError()), Math.max(0, deadline - Date.now()));
   });
   try {
     return await Promise.race([work, timeout]);
@@ -150,11 +165,15 @@ function makeReportId(now: Date): string {
   return `RPT-${now.toISOString().slice(0, 10).replace(/-/g, '')}-${randomBytes(2).toString('hex').toUpperCase()}`;
 }
 
+/** No conclusive result left (none in scope, or every one risk-accepted) → score null; the raw score and accepted count still show. */
 function toDefenseScore(d: DefenseScoreResponse | null): ReportDefenseScore | null {
   if (!d) return null;
-  if (!d.totalExecutions) return { score: null, rawScore: null, riskAcceptedCount: 0 };
   const accepted = d.riskAcceptedCount ?? 0;
-  return { score: d.score, rawScore: accepted > 0 ? d.rawScore ?? null : null, riskAcceptedCount: accepted };
+  return {
+    score: d.totalExecutions ? d.score : null,
+    rawScore: accepted > 0 ? d.rawScore ?? null : null,
+    riskAcceptedCount: accepted,
+  };
 }
 
 const acceptanceScope = (a: RiskAcceptance): 'host' | 'global' => a.scope ?? (a.hostname ? 'host' : 'global');
@@ -221,7 +240,9 @@ function countStageAlerts(tests: ReportTest[], runs: ReportRun[]): void {
     if (!test) continue;
     for (const alert of run.alerts) {
       const token = alert.stageControlId;
-      const stage = test.stages.length === 1
+      // A standalone test has one stage, which takes every alert. A bundle filtered down to one
+      // stage does not: the alert must still name that stage's control.
+      const stage = !test.isBundle && test.stages.length === 1
         ? test.stages[0]
         : token === null
           ? undefined
@@ -284,6 +305,24 @@ export class ExecutionReportService {
   }
 
   async generate(params: ExecutionReportParams, now: Date = new Date()): Promise<ExecutionReport> {
+    try {
+      return await this.build(params, now);
+    } finally {
+      this.closeOwnClient();
+    }
+  }
+
+  /**
+   * Close the ES client this service created (never an injected one). Not awaited: close() waits for
+   * in-flight requests, and a request abandoned at the deadline must not hold the response.
+   */
+  private closeOwnClient(): void {
+    const client = this.ownClient;
+    this.ownClient = null;
+    client?.close().catch((err: unknown) => console.warn(`Execution report: ES client close failed: ${errorMessage(err)}`));
+  }
+
+  private async build(params: ExecutionReportParams, now: Date): Promise<ExecutionReport> {
     const deadline = Date.now() + this.deps.budgetMs;
     const warnings: string[] = [];
     const tz = validateTimeZone(params.tz || 'UTC');
@@ -346,7 +385,7 @@ export class ExecutionReportService {
       try {
         return await withDeadline(work(), deadline);
       } catch (err) {
-        warnings.push(`${label} unavailable: ${errorMessage(err)}`);
+        warnings.push(unavailableWarning(label, err));
         unavailable.add(section);
         return null;
       }
@@ -535,7 +574,7 @@ export class ExecutionReportService {
       const label = VENDOR_LABEL[adapters[i].vendor];
       if (outcome.status === 'rejected') {
         checked = new Set();
-        warnings.push(`${label} alerts unavailable: ${errorMessage(outcome.reason)}`);
+        warnings.push(unavailableWarning(`${label} alerts`, outcome.reason));
         return;
       }
       const res = outcome.value;

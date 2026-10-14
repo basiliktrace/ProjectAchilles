@@ -1,4 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach, type MockInstance } from 'vitest';
+
+vi.mock('../../analytics/client.js', () => ({ createEsClient: vi.fn() }));
+
+import { createEsClient } from '../../analytics/client.js';
 import { STAGE_OUTCOMES } from '../stageOutcome.js';
 import { ExecutionReportService } from '../executionReport.service.js';
 import type { OutcomeCounts } from '../../../types/reports.js';
@@ -123,6 +127,15 @@ function makeDeps(over: Record<string, unknown> = {}): any {
 const params = (over: Record<string, unknown> = {}) =>
   ({ from: 'now-30d', tz: 'America/Santo_Domingo', includeAcceptedRisks: false, ...over }) as any;
 
+// Raw enrichment errors go to the server log; keep the test output clean and let tests assert on it.
+let warn: MockInstance;
+beforeEach(() => {
+  warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+});
+afterEach(() => {
+  warn.mockRestore();
+});
+
 describe('ExecutionReportService.generate', () => {
   it('resolves the window once and passes absolute bounds to every query', async () => {
     const deps = makeDeps();
@@ -169,6 +182,25 @@ describe('ExecutionReportService.generate', () => {
     expect(report.meta.partial).toBeNull();
   });
 
+  it('keeps the raw score and accepted count when risk acceptance excludes every conclusive result', async () => {
+    const deps = makeDeps();
+    deps.es.getDefenseScore.mockResolvedValue({
+      score: 0, rawScore: 42.5, riskAcceptedCount: 12, totalExecutions: 0,
+      protectedCount: 0, detectedCount: 0, unprotectedCount: 0, realScore: 0, realTotalExecutions: 12,
+    });
+    const report = await new ExecutionReportService(settings, deps).generate(params(), NOW);
+    expect(report.defenseScore).toEqual({ score: null, rawScore: 42.5, riskAcceptedCount: 12 });
+  });
+
+  it('has no score at all when nothing in scope is conclusive', async () => {
+    const deps = makeDeps();
+    deps.es.getDefenseScore.mockResolvedValue({
+      score: 0, rawScore: 0, riskAcceptedCount: 0, totalExecutions: 0, protectedCount: 0, detectedCount: 0, unprotectedCount: 0,
+    });
+    const report = await new ExecutionReportService(settings, deps).generate(params(), NOW);
+    expect(report.defenseScore).toEqual({ score: null, rawScore: null, riskAcceptedCount: 0 });
+  });
+
   it('returns an empty report without the timeline query or any enrichment', async () => {
     const deps = makeDeps();
     deps.client.search.mockImplementation(async (req: { aggs: Record<string, unknown> }) =>
@@ -190,10 +222,20 @@ describe('ExecutionReportService.generate', () => {
     expect(report.runs[0].alerts).toEqual([]);
     expect(report.meta.warnings).toHaveLength(2);
     expect(report.meta.warnings).toEqual(expect.arrayContaining([
-      'Defense Score unavailable: cluster busy',
-      'Microsoft Defender alerts unavailable: index_not_found',
+      'Defense Score unavailable',
+      'Microsoft Defender alerts unavailable',
     ]));
     expect(report.meta.unavailable).toEqual(['defenseScore', 'alerts']);
+  });
+
+  it('keeps raw enrichment errors out of the report and logs them instead', async () => {
+    const deps = makeDeps();
+    deps.es.getDefenseScore.mockRejectedValue(new Error('connect ECONNREFUSED 10.0.4.17:9200'));
+    deps.client.msearch.mockRejectedValue(new Error('getaddrinfo ENOTFOUND es-internal.corp'));
+    const report = await new ExecutionReportService(settings, deps).generate(params(), NOW);
+    expect(report.meta.warnings).toEqual(['Defense Score unavailable', 'Microsoft Defender alerts unavailable']);
+    expect(warn).toHaveBeenCalledWith(expect.stringMatching(/Defense Score unavailable.*10\.0\.4\.17/));
+    expect(warn).toHaveBeenCalledWith(expect.stringMatching(/Microsoft Defender alerts unavailable.*es-internal\.corp/));
   });
 
   it('flags only the Defense Score when it alone fails', async () => {
@@ -210,7 +252,7 @@ describe('ExecutionReportService.generate', () => {
     deps.getRunStartTimes.mockRejectedValue(new Error('db locked'));
     const report = await new ExecutionReportService(settings, deps).generate(params(), NOW);
     expect(report.runs[0].startedAt).toBeNull();
-    expect(report.meta.warnings).toEqual(['Run start times unavailable: db locked']);
+    expect(report.meta.warnings).toEqual(['Run start times unavailable']);
     expect(report.meta.unavailable).toEqual(['startTimes']);
   });
 
@@ -231,6 +273,21 @@ describe('ExecutionReportService.generate', () => {
     expect(report.runs[0].alerts).toEqual([]);
     expect(report.meta.warnings).toEqual([expect.stringMatching(/alerts unavailable: time budget reached$/)]);
     expect(report.meta.unavailable).toEqual(['alerts']);
+  });
+
+  it('credits a single-stage bundle only with alerts its evidence names', async () => {
+    const deps = makeDeps();
+    const oneStage = testsResponse();
+    oneStage.aggregations.tests.buckets[0].stages.buckets = oneStage.aggregations.tests.buckets[0].stages.buckets
+      .filter((b: { key: string }) => b.key === 'T1486');
+    deps.client.search.mockImplementation(async (req: { aggs: Record<string, any> }) =>
+      (req.aggs.tests?.terms ? oneStage : routeSearch()(req)));
+    const report = await new ExecutionReportService(settings, deps).generate(params(), NOW);
+    expect(report.tests[0].isBundle).toBe(true);
+    expect(report.tests[0].stages.map((s) => s.controlId)).toEqual(['T1486']);
+    // The alert's evidence binary names T1567.002, a stage outside this report's filter.
+    expect(report.runs[0].alerts[0].stageControlId).toBe('t1567.002');
+    expect(report.tests[0].stages[0].alerts).toEqual({ defender: 0, crowdstrike: 0 });
   });
 
   it('echoes filters and flags outcome filtering', async () => {
@@ -310,7 +367,7 @@ describe('ExecutionReportService.generate', () => {
     const report = await new ExecutionReportService(settings, deps).generate(params({ includeAcceptedRisks: true }), NOW);
     expect(report.acceptedRisks).toEqual([]);
     expect(report.meta.unavailable).toEqual(['acceptedRisks']);
-    expect(report.meta.warnings).toEqual(['Accepted risks unavailable: risk index closed']);
+    expect(report.meta.warnings).toEqual(['Accepted risks unavailable']);
     expect(report.findings[0].acceptedRisk).toBe(false);
   });
 
@@ -370,7 +427,7 @@ describe('ExecutionReportService.generate', () => {
     expect(report.runs[0].alerts[0]).toMatchObject({ vendor: 'crowdstrike', title: 'FalconDetection' });
     // CrowdStrike's alerts stay, but no run was checked by every configured vendor.
     expect(report.runs[0].alertsChecked).toBe(false);
-    expect(report.meta.warnings).toEqual(['Microsoft Defender alerts unavailable: defender index closed']);
+    expect(report.meta.warnings).toEqual(['Microsoft Defender alerts unavailable']);
     expect(report.meta.unavailable).toEqual(['alerts']);
   });
 
@@ -380,8 +437,8 @@ describe('ExecutionReportService.generate', () => {
     const report = await new ExecutionReportService(settings, deps).generate(params(), NOW);
     expect(report.runs[0].alerts).toEqual([]);
     expect(report.meta.warnings).toEqual([
-      'Microsoft Defender alerts unavailable: cluster busy',
-      'CrowdStrike Falcon alerts unavailable: cluster busy',
+      'Microsoft Defender alerts unavailable',
+      'CrowdStrike Falcon alerts unavailable',
     ]);
     expect(report.meta.unavailable).toEqual(['alerts']);
   });
@@ -451,14 +508,6 @@ describe('partial shard failures', () => {
     total: 2, successful: 1, failed: 1, failures: [{ index: 'achilles-results-old', reason: { reason: 'boom' } }],
   });
   const withShards = (res: object, shards: object) => Object.assign(res, { _shards: shards });
-  let warn: MockInstance;
-
-  beforeEach(() => {
-    warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-  });
-  afterEach(() => {
-    warn.mockRestore();
-  });
 
   it('renders and flags meta.partial when the failed indices hold data in scope', async () => {
     const deps = makeDeps();
@@ -562,5 +611,45 @@ describe('payload size at the caps', () => {
     // Correlation ran on the full stages: the technique+host fallback still names the stage techniques.
     const fallback = deps.client.msearch.mock.calls.map(([req]: [{ searches: any[] }]) => JSON.stringify(req.searches[1].query));
     expect(fallback.some((q: string) => q.includes('"mitre_techniques":["T1562.001"]'))).toBe(true);
+  });
+});
+
+describe('ES client lifecycle', () => {
+  const fakeClient = () => ({
+    search: vi.fn(routeSearch()),
+    msearch: vi.fn(msearchHits({})),
+    count: vi.fn(async () => ({ count: 0 })),
+    close: vi.fn(async () => {}),
+  });
+
+  beforeEach(() => {
+    vi.mocked(createEsClient).mockReset();
+  });
+
+  it('closes the client it created once the report is built', async () => {
+    const client = fakeClient();
+    vi.mocked(createEsClient).mockReturnValue(client as never);
+    const { client: _injected, ...deps } = makeDeps();
+    await new ExecutionReportService(settings, deps).generate(params(), NOW);
+    expect(createEsClient).toHaveBeenCalledTimes(1);
+    expect(client.search).toHaveBeenCalled();
+    expect(client.close).toHaveBeenCalledTimes(1);
+  });
+
+  it('closes it when the report fails too', async () => {
+    const client = fakeClient();
+    client.search.mockRejectedValue(new Error('search_phase_execution_exception'));
+    vi.mocked(createEsClient).mockReturnValue(client as never);
+    const { client: _injected, ...deps } = makeDeps();
+    await expect(new ExecutionReportService(settings, deps).generate(params(), NOW)).rejects.toMatchObject({ statusCode: 502 });
+    expect(client.close).toHaveBeenCalledTimes(1);
+  });
+
+  it('leaves an injected client open', async () => {
+    const deps = makeDeps();
+    deps.client.close = vi.fn(async () => {});
+    await new ExecutionReportService(settings, deps).generate(params(), NOW);
+    expect(createEsClient).not.toHaveBeenCalled();
+    expect(deps.client.close).not.toHaveBeenCalled();
   });
 });

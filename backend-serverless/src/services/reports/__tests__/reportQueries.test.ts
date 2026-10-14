@@ -40,6 +40,13 @@ describe('testsRequest', () => {
     expect(tests.aggs.stages.aggs.outcomes.filters.filters).toBe(OUTCOME_FILTERS);
     expect(tests.aggs.meta.top_hits.size).toBe(1);
   });
+
+  it('reads test and stage metadata from the newest doc', () => {
+    const tests = (testsRequest(FILTERS) as Any).aggs.tests;
+    const newestFirst = [{ 'routing.event_time': { order: 'desc' } }];
+    expect(tests.aggs.meta.top_hits.sort).toEqual(newestFirst);
+    expect(tests.aggs.stages.aggs.meta.top_hits.sort).toEqual(newestFirst);
+  });
 });
 
 describe('timelineRequest', () => {
