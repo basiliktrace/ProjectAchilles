@@ -15,7 +15,7 @@ describe('buildVerdict', () => {
       'LSASS Memory (T1003.001) was stopped or detected in 10 of 10 attempts.',
       'Exfiltration to Cloud Storage (T1567.002) got through in 6 of 7 attempts without being stopped or detected.',
       '2 exfiltration or impact stage results ran without being stopped or detected.',
-      'The Defense Score for these filters is 62%.',
+      'The Defense Score for these filters is 61.5%.',
     ]);
   });
 
@@ -34,15 +34,46 @@ describe('buildVerdict', () => {
 
   it('mentions the raw score when accepted risks are excluded', () => {
     const report = makeReport({ defenseScore: { score: 61.5, rawScore: 58.2, riskAcceptedCount: 3 } });
-    expect(buildVerdict(report)).toContain('The Defense Score for these filters is 62%, or 58% before 3 accepted risks are excluded.');
+    expect(buildVerdict(report)).toContain('The Defense Score for these filters is 61.5%, or 58.2% before excluding 3 risk-accepted executions.');
   });
 
-  it('omits the Defense Score sentence when the score is unavailable', () => {
+  it('uses the singular for one risk-accepted execution', () => {
+    const report = makeReport({ defenseScore: { score: 61.5, rawScore: 58.2, riskAcceptedCount: 1 } });
+    expect(buildVerdict(report)).toContain('The Defense Score for these filters is 61.5%, or 58.2% before excluding 1 risk-accepted execution.');
+  });
+
+  it('says the Defense Score is unavailable when it failed to load', () => {
     // The backend nulls defenseScore when the enrichment fails, and lists it in meta.unavailable.
     const report = makeReport({ defenseScore: null, meta: { unavailable: ['defenseScore'] } });
     const sentences = buildVerdict(report);
-    expect(sentences.some((s) => s.includes('Defense Score'))).toBe(false);
-    expect(sentences.length).toBeGreaterThan(0);
+    expect(sentences[sentences.length - 1]).toBe('The Defense Score is unavailable for this report.');
+  });
+
+  it('says the Defense Score is unavailable even when no stage result reached a verdict', () => {
+    const report = makeReport({
+      totals: { ...makeReport().totals, outcomes: counts({ inconclusive: 4 }), highImpactUnprotected: 0 },
+      defenseScore: null,
+      techniques: [],
+      meta: { unavailable: ['defenseScore'] },
+    });
+    expect(buildVerdict(report)).toEqual([
+      'No stage result reached a verdict in this period.',
+      'The Defense Score is unavailable for this report.',
+    ]);
+  });
+
+  it('says approximately how many runs when the run count is an HLL estimate', () => {
+    const report = makeReport({ totals: { ...makeReport().totals, runs: 12345, runsApproximate: true } });
+    expect(buildVerdict(report)[0]).toBe(
+      'Across about 12,345 runs on 2 endpoints, 6 of 9 conclusive stage results were protected, prevented or detected (67%).',
+    );
+  });
+
+  it('never prints 100% while some stage results got through', () => {
+    const report = makeReport({ totals: { ...makeReport().totals, outcomes: counts({ protected: 299, unprotected: 1 }) } });
+    expect(buildVerdict(report)[0]).toBe(
+      'Across 2 runs on 2 endpoints, 299 of 300 conclusive stage results were protected, prevented or detected (99%).',
+    );
   });
 
   it('prefixes an outcome-filtered report with a warning', () => {

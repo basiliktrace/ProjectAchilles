@@ -39,8 +39,15 @@ export function tzName(iso: string, tz: string): string {
   return parts(iso, tz, { timeZoneName: 'short' }).timeZoneName ?? tz;
 }
 
+/**
+ * Whole-percent rate. A partial rate never rounds to 0% or 100%: it is clamped to 1–99, so
+ * 299 of 300 reads 99%. Exactly 0 and exactly 1 keep their endpoints.
+ */
 export function fmtPct(rate: number | null): string {
-  return rate === null ? '—' : `${Math.round(rate * 100)}%`;
+  if (rate === null) return '—';
+  if (rate <= 0) return '0%';
+  if (rate >= 1) return '100%';
+  return `${Math.min(99, Math.max(1, Math.round(rate * 100)))}%`;
 }
 
 export function fmtCount(n: number, approximate = false): string {

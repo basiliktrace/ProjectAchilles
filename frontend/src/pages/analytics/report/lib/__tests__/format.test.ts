@@ -24,6 +24,15 @@ describe('format', () => {
     expect(fmtDuration(403_000)).toBe('6m 43s');
   });
 
+  it('never rounds a partial rate to 0% or 100%', () => {
+    expect(fmtPct(0.995)).toBe('99%');
+    expect(fmtPct(0.9951)).toBe('99%');
+    expect(fmtPct(0.0049)).toBe('1%');
+    expect(fmtPct(0)).toBe('0%');
+    expect(fmtPct(1)).toBe('100%');
+    expect(fmtPct(0.5)).toBe('50%');
+  });
+
   it('pluralizes and truncates', () => {
     expect(plural(1, 'run')).toBe('1 run');
     expect(plural(1504, 'run')).toBe('1,504 runs');

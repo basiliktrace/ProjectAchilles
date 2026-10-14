@@ -2,7 +2,7 @@
 // sentence appears only when its condition holds; no LLM involved.
 import type { ExecutionReport, ReportTechnique } from '@/services/api/reports';
 import { conclusive, defended, protectionRate } from './outcomes';
-import { fmtPct, plural } from './format';
+import { fmtCount, fmtPct, plural } from './format';
 import { halvesTrend } from './timeline';
 
 const STRENGTH_MIN_RESULTS = 5;
@@ -33,21 +33,39 @@ export function describeOutcomeFilters(report: ExecutionReport): string | null {
 
 const label = (t: ReportTechnique) => (t.name ? `${t.name} (${t.id})` : t.id);
 
+/**
+ * The Defense Score sentence. A failed enrichment says so rather than going silent. Scores print
+ * to one decimal, as on the dashboard, so they are not rounded like rates (fmtPct).
+ */
+function defenseScoreSentence(report: ExecutionReport): string | null {
+  if (report.meta.unavailable.includes('defenseScore')) return 'The Defense Score is unavailable for this report.';
+  const ds = report.defenseScore;
+  if (!ds || ds.score === null) return null;
+  const raw = ds.rawScore !== null && ds.riskAcceptedCount > 0
+    ? `, or ${ds.rawScore.toFixed(1)}% before excluding ${plural(ds.riskAcceptedCount, 'risk-accepted execution')}`
+    : '';
+  return `The Defense Score for these filters is ${ds.score.toFixed(1)}%${raw}.`;
+}
+
 export function buildVerdict(report: ExecutionReport): string[] {
   const sentences: string[] = [];
   const outcomeFilter = describeOutcomeFilters(report);
   if (outcomeFilter) {
     sentences.push(`This report includes only executions where ${outcomeFilter}. Its rates describe that subset, not overall defensive posture.`);
   }
+  const score = defenseScoreSentence(report);
 
   const totals = report.totals.outcomes;
   const n = conclusive(totals);
   if (n === 0) {
     sentences.push('No stage result reached a verdict in this period.');
+    if (score) sentences.push(score);
     return sentences;
   }
+  const runs = report.totals.runs;
+  const runsText = `${fmtCount(runs, report.totals.runsApproximate)} ${runs === 1 ? 'run' : 'runs'}`;
   sentences.push(
-    `Across ${plural(report.totals.runs, 'run')} on ${plural(report.totals.endpoints, 'endpoint')}, ${defended(totals)} of ${n} conclusive stage results were protected, prevented or detected (${fmtPct(protectionRate(totals))}).`,
+    `Across ${runsText} on ${plural(report.totals.endpoints, 'endpoint')}, ${defended(totals)} of ${n} conclusive stage results were protected, prevented or detected (${fmtPct(protectionRate(totals))}).`,
   );
 
   const rated = report.techniques
@@ -78,10 +96,6 @@ export function buildVerdict(report: ExecutionReport): string[] {
       : `The stage protection rate moved from ${a} in the first half of the period to ${b} in the second.`);
   }
 
-  const ds = report.defenseScore;
-  if (ds && ds.score !== null) {
-    const raw = ds.rawScore !== null ? `, or ${Math.round(ds.rawScore)}% before ${plural(ds.riskAcceptedCount, 'accepted risk')} are excluded` : '';
-    sentences.push(`The Defense Score for these filters is ${Math.round(ds.score)}%${raw}.`);
-  }
+  if (score) sentences.push(score);
   return sentences;
 }
