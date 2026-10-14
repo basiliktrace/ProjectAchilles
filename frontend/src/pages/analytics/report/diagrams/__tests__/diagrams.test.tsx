@@ -326,7 +326,50 @@ describe('RunStrip on a run with many stages', () => {
   });
 });
 
+/** A 70-control bundle whose run carries only its first 60 stages, with an alert on control 69. */
+function seventyControlRun() {
+  const stages = Array.from({ length: 70 }, (_, i) => ({
+    ...makeTest().stages[0], controlId: `CH-DEF-${String(i + 1).padStart(3, '0')}`, name: `Control ${i + 1}`, order: i + 1,
+  }));
+  const test = makeTest({ category: 'cyber-hygiene', stages });
+  const run = makeRun({
+    stages: stages.slice(0, 60).map((s) => ({ ...stage(s.order, 'protected'), controlId: s.controlId })),
+    moreStages: 10,
+    alerts: [alertAt(2, { stageControlId: 'ch-def-069' })],
+  });
+  return { test, run };
+}
+
+const standaloneCase = () => ({
+  test: makeTest({ isBundle: false, category: 'host-hardening', stages: [{ ...makeTest().stages[0], controlId: null }] }),
+  run: makeRun({ stages: [{ ...stage(1, 'unprotected'), controlId: null }], alerts: [alertAt(2, { stageControlId: 't1059.001' })] }),
+});
+
 describe('stageLabelFor', () => {
+  it('labels a stage the run did not fetch from the test\'s stages', () => {
+    const { test, run } = seventyControlRun();
+    expect(stageLabelFor(run, 'ch-def-069')).toBe('bundle');
+    expect(stageLabelFor(run, 'ch-def-069', test)).toBe('S69');
+  });
+
+  it('gives a standalone test\'s alert no stage label', () => {
+    const { test, run } = standaloneCase();
+    expect(stageLabelFor(run, 't1059.001', test)).toBe('');
+    expect(stageLabelFor(run, null, test)).toBe('');
+  });
+
+  it('draws the resolved label on the strip, and no "bundle" for a standalone test', () => {
+    const { test, run } = seventyControlRun();
+    const strip = render(<RunStrip run={run} test={test} />).container;
+    expect(strip.textContent).toContain('Defender +2m 00s · S69');
+    expect(strip.textContent).not.toContain('bundle');
+
+    const single = standaloneCase();
+    const plain = render(<RunStrip run={single.run} test={single.test} />).container;
+    expect(plain.textContent).toContain('Defender +2m 00s');
+    expect(plain.textContent).not.toMatch(/bundle|·\s*$/);
+  });
+
   it('resolves stage tokens to the stage order, including variant suffixes', () => {
     const run = makeRun();
     expect(stageLabelFor(run, 't1486')).toBe('S5');

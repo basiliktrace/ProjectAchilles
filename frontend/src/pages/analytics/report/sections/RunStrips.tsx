@@ -1,7 +1,7 @@
 import type { ExecutionReport, ReportRun, ReportTest } from '@/services/api/reports';
 import { conclusive, defended } from '../lib/outcomes';
 import { fmtDate, fmtDuration, fmtLatency, fmtTime, timeOf } from '../lib/format';
-import { alertStageText, countStages, vendorName } from '../lib/runs';
+import { alertStageText, countStages, testOf, vendorName } from '../lib/runs';
 import { RunStrip } from '../diagrams/RunStrip';
 import { OutcomeLegend } from '../diagrams/StageGlyph';
 import { Sheet, type SheetHead } from './Sheet';
@@ -59,7 +59,7 @@ function RunBlock({ run, tests, tz, edrVendors }: { run: ReportRun; tests: Repor
         <span>{run.testName} <span className="rp-muted">on</span> <span className="rp-mono">{run.hostname}</span></span>
         <small>{fmtDate(run.completedAt, tz)}{edr && <AlertFlag run={run} />}</small>
       </h3>
-      <RunStrip run={run} edrVendors={edrVendors} />
+      <RunStrip run={run} edrVendors={edrVendors} test={testOf(tests, run)} />
       <ol className="rp-events">
         {events.map((e, i) => (
           <li key={i}><span className="rp-mono rp-muted">{e.t === null ? '—' : fmtTime(new Date(e.t).toISOString(), tz, true)}</span><span>{e.text}</span></li>

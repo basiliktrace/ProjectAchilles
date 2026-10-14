@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { alertStageText, firstAlert, resolveRunStage, stageForAlert, vendorName } from '../runs';
 import { makeReport, makeRun, makeTest } from '../../__tests__/fixtures';
-import type { ReportRun, ReportRunStage } from '@/services/api/reports';
+import type { ReportRun, ReportRunStage, ReportTest } from '@/services/api/reports';
 
 /** What a big-scope payload ships for a stage: no name, techniques or tactics. */
 const slim = ({ name: _n, techniques: _t, tactics: _ta, ...rest }: ReportRunStage): ReportRunStage => rest;
@@ -39,6 +39,34 @@ describe('stageForAlert', () => {
     expect(stageForAlert(run, null)).toBeNull();
     expect(stageForAlert(run, 't9999')).toBeNull();
     expect(stageForAlert(makeRun({ stages: [{ ...run.stages[0], controlId: null }] }), 't1059.001')).toBeNull();
+  });
+});
+
+/**
+ * A 70-control bundle whose run carries only the first 60 stages (the backend's MEMBERS_CAP), as the
+ * print check's 70-stage run did. Control ids keep their case; alert tokens arrive lowercased.
+ */
+function seventyControls(): { test: ReportTest; run: ReportRun } {
+  const stages = Array.from({ length: 70 }, (_, i) => ({
+    ...makeTest().stages[0], controlId: `CH-DEF-${String(i + 1).padStart(3, '0')}`, name: `Control ${i + 1}`, order: i + 1,
+  }));
+  const test = makeTest({ category: 'cyber-hygiene', stages });
+  const run = makeRun({
+    stages: stages.slice(0, 60).map((s): ReportRunStage => ({
+      controlId: s.controlId, name: s.name, order: s.order, outcome: 'protected', exitCode: 126, techniques: [], tactics: [], highImpact: false,
+    })),
+    moreStages: 10,
+  });
+  return { test, run };
+}
+
+describe('stageForAlert beyond the fetched stages', () => {
+  it('falls back to the test\'s stages for a control the run did not fetch', () => {
+    const { test, run } = seventyControls();
+    expect(stageForAlert(run, 'ch-def-069')).toBeNull();
+    expect(stageForAlert(run, 'ch-def-069', test.stages)).toMatchObject({ order: 69, name: 'Control 69' });
+    // A fetched stage still comes from the run.
+    expect(stageForAlert(run, 'ch-def-002', test.stages)).toBe(run.stages[1]);
   });
 });
 
@@ -99,6 +127,18 @@ describe('alertStageText', () => {
   it('says "bundle" for an alert that names no stage', () => {
     expect(alertStageText(tests, makeRun(), null)).toBe('bundle');
     expect(alertStageText(tests, makeRun(), 't9999')).toBe('bundle');
+  });
+
+  it('labels an alert on a stage beyond the fetched 60 by the test\'s stage', () => {
+    const { test, run } = seventyControls();
+    expect(alertStageText([test], run, 'ch-def-069')).toBe('S69 Control 69');
+  });
+
+  it('says nothing about stages for a standalone test, never "bundle"', () => {
+    const standalone = makeTest({ isBundle: false, category: 'host-hardening', stages: [{ ...makeTest().stages[0], controlId: null }] });
+    const run = makeRun({ stages: [{ ...makeRun().stages[0], controlId: null }] });
+    expect(alertStageText([standalone], run, null)).toBe('');
+    expect(alertStageText([standalone], run, 't1059.001')).toBe('');
   });
 
   it('shortens a long stage name', () => {

@@ -1,6 +1,6 @@
 // One run on a minutes-from-start axis: the run bar with its stages in order
 // (not individually timed), and EDR alerts at their real times (spec §5.4).
-import type { ReportAlert, ReportRun, ReportRunStage, StageOutcome } from '@/services/api/reports';
+import type { ReportAlert, ReportRun, ReportRunStage, ReportTest, StageOutcome } from '@/services/api/reports';
 import { COUNTED_OUTCOMES, emptyCounts } from '../lib/outcomes';
 import { fmtLatency, plural, timeOf } from '../lib/format';
 import { stageForAlert } from '../lib/runs';
@@ -28,10 +28,12 @@ const CAPTION_H = 12;
 
 /**
  * "S<n>" for the stage an alert's evidence names (the same numbering as the kill-chain chevrons),
- * or "bundle". The match is stageForAlert's: case-insensitive, optional variant suffix.
+ * or "bundle". The match is stageForAlert's: case-insensitive, optional variant suffix, and the
+ * run's `test` supplies the stages beyond the run's fetched 60. A standalone test's alert gets ''.
  */
-export function stageLabelFor(run: ReportRun, token: string | null): string {
-  const stage = stageForAlert(run, token);
+export function stageLabelFor(run: ReportRun, token: string | null, test?: ReportTest): string {
+  if (test && !test.isBundle) return '';
+  const stage = stageForAlert(run, token, test?.stages);
   return stage ? `S${stage.order}` : 'bundle';
 }
 
@@ -63,9 +65,14 @@ function outcomeSegments(stages: ReportRunStage[]): Segment[] {
 /**
  * `edrVendors` is meta.edrVendors. With none configured the strip carries no EDR content at all:
  * no markers, no labels, and no "none" / "not checked" message (the backend marks every run
- * unchecked then, which would otherwise read as a gap).
+ * unchecked then, which would otherwise read as a gap). `test` is the run's test from report.tests,
+ * which labels alerts on stages the run did not fetch and marks a standalone test.
  */
-export function RunStrip({ run, edrVendors = ['defender', 'crowdstrike'] }: { run: ReportRun; edrVendors?: ReportAlert['vendor'][] }) {
+export function RunStrip({ run, edrVendors = ['defender', 'crowdstrike'], test }: {
+  run: ReportRun;
+  edrVendors?: ReportAlert['vendor'][];
+  test?: ReportTest;
+}) {
   const edr = edrVendors.length > 0;
   const runAlerts = edr ? run.alerts : [];
   // An alert whose time does not parse has no place on the axis, but it still means the run was not silent.
@@ -98,7 +105,9 @@ export function RunStrip({ run, edrVendors = ['defender', 'crowdstrike'] }: { ru
       const ax = x(t);
       const during = start !== null && t >= start && t <= end;
       const vendor = a.vendor === 'defender' ? 'Defender' : 'Falcon';
-      const text = `${vendor} ${during ? 'during run' : fmtLatency((t - end) / 1000)} · ${stageLabelFor(run, a.stageControlId)}`;
+      const text = [`${vendor} ${during ? 'during run' : fmtLatency((t - end) / 1000)}`, stageLabelFor(run, a.stageControlId, test)]
+        .filter(Boolean)
+        .join(' · ');
       const label = placeLabel(ax, text);
       let row = 0;
       while (taken[row]?.some(([from, to]) => label.from < to + LABEL_PAD_PX && label.to > from - LABEL_PAD_PX)) row++;

@@ -153,6 +153,22 @@ describe('TestDetail', () => {
     expect(container.textContent).not.toContain('undefined');
   });
 
+  it('names the stage of an alert on a control the run did not fetch', () => {
+    const controls = Array.from({ length: 70 }, (_, i) => ({
+      ...makeTest().stages[0], controlId: `CH-DEF-${String(i + 1).padStart(3, '0')}`, name: `Control ${i + 1}`, order: i + 1,
+    }));
+    const test = makeTest({ category: 'cyber-hygiene', stages: controls });
+    const [alert] = makeRun().alerts;
+    const run = makeRun({
+      stages: controls.slice(0, 60).map((s) => ({ ...makeRun().stages[1], controlId: s.controlId, name: s.name, order: s.order })),
+      moreStages: 10,
+      alerts: [{ ...alert, stageControlId: 'ch-def-069' }],
+    });
+    render(<TestDetail report={makeReport({ tests: [test], runs: [run] })} test={test} head={head} />);
+    expect(screen.getByText('S69 Control 69')).toBeInTheDocument();
+    expect(screen.queryByText('bundle')).toBeNull();
+  });
+
   it('labels the alert table as sampled when the runs list was cut', () => {
     const truncated = makeReport({ meta: { truncation: { runs: true, tests: false, lanes: false } } });
     render(<TestDetail report={truncated} test={makeTest()} head={head} />);
@@ -463,6 +479,28 @@ describe('RunStrips', () => {
     const { container } = render(<RunStrips report={makeReport({ runs: [makeRun()], meta: { edrVendors: [] } })} head={head} />);
     const events = Array.from(container.querySelectorAll('.rp-events li')).map((li) => li.textContent);
     expect(events).toHaveLength(2);
+  });
+
+  it('names the stage of an alert beyond the fetched stages, and no "bundle" for a standalone test', () => {
+    const controls = Array.from({ length: 70 }, (_, i) => ({
+      ...makeTest().stages[0], controlId: `CH-DEF-${String(i + 1).padStart(3, '0')}`, name: `Control ${i + 1}`, order: i + 1,
+    }));
+    const bundle = makeTest({ category: 'cyber-hygiene', stages: controls });
+    const [alert] = makeRun().alerts;
+    const bundleRun = makeRun({
+      stages: controls.slice(0, 60).map((s) => ({ ...makeRun().stages[1], controlId: s.controlId, name: s.name, order: s.order })),
+      moreStages: 10,
+      alerts: [{ ...alert, stageControlId: 'ch-def-069' }],
+    });
+    const single = makeTest({ testKey: 'single', isBundle: false, category: 'host-hardening', stages: [{ ...makeTest().stages[0], controlId: null }] });
+    const singleRun = makeRun({
+      testKey: 'single', hostname: 'WS-OPS-022', taskId: '9e1b7c52-3d84-4a6f-b0c9-5f2a8d71e346',
+      stages: [{ ...makeRun().stages[0], controlId: null }], alerts: [{ ...alert, stageControlId: null }],
+    });
+    const { container } = render(<RunStrips report={makeReport({ tests: [bundle, single], runs: [bundleRun, singleRun] })} head={head} />);
+    const events = Array.from(container.querySelectorAll('.rp-events li')).map((li) => li.textContent ?? '');
+    expect(events.some((e) => e.includes('S69 Control 69'))).toBe(true);
+    expect(container.textContent).not.toContain('bundle');
   });
 
   it('renders runs whose stages carry no names', () => {
