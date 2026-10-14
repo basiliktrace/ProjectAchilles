@@ -29,6 +29,9 @@ export interface ReportWindow {
   lastExecution: string | null;
 }
 
+/** Optional report sections that depend on a fallible lookup outside the required queries. */
+export type ReportEnrichment = 'defenseScore' | 'alerts' | 'startTimes' | 'acceptedRisks';
+
 export interface ReportMeta {
   reportId: string;
   generatedAt: string;
@@ -42,6 +45,11 @@ export interface ReportMeta {
   truncation: { runs: boolean; tests: boolean; lanes: boolean };
   /** Section-level degradations, human readable. */
   warnings: string[];
+  /**
+   * Optional enrichments that failed or timed out; the matching section renders
+   * "unavailable" (spec §5.7). Empty when everything succeeded or was not applicable.
+   */
+  unavailable: ReportEnrichment[];
 }
 
 export interface ReportTotals {

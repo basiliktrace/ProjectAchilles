@@ -31,7 +31,8 @@ import { emptyCounts } from './stageOutcome.js';
 import type { AnalyticsSettings, DefenseScoreResponse, ExtendedAnalyticsQueryParams } from '../../types/analytics.js';
 import type { TestMetadata } from '../../types/test.js';
 import type {
-  AcceptedRiskRow, ExecutionReport, ReportAlert, ReportDefenseScore, ReportMeta, ReportRun, ReportTest, ReportTimelineLane,
+  AcceptedRiskRow, ExecutionReport, ReportAlert, ReportDefenseScore, ReportEnrichment, ReportMeta, ReportRun, ReportTest,
+  ReportTimelineLane,
 } from '../../types/reports.js';
 
 export const REPORT_BUDGET_MS = 45_000;
@@ -58,6 +59,17 @@ export interface ExecutionReportDeps {
   getAcceptances: (testNames: string[], org?: string) => Promise<Record<string, RiskAcceptance[]>>;
   budgetMs: number;
   vendorBudgetMs: number;
+}
+
+/** Fixed order for meta.unavailable, whatever order the steps finished in. */
+const ENRICHMENT_ORDER: readonly ReportEnrichment[] = ['defenseScore', 'alerts', 'startTimes', 'acceptedRisks'];
+
+/** What `correlate()` hands back: warnings are returned, not pushed, so a step abandoned at the deadline cannot add any late. */
+interface Correlation {
+  alerts: Map<string, ReportAlert[]>;
+  warnings: string[];
+  /** Every configured vendor rejected or timed out. */
+  allFailed: boolean;
 }
 
 const VENDOR_LABEL: Record<ReportAlert['vendor'], string> = {
@@ -247,6 +259,7 @@ export class ExecutionReportService {
       window: { ...window, ...axis, firstExecution: scope.firstExecution, lastExecution: scope.lastExecution },
       truncation: { runs: false, tests: false, lanes: false },
       warnings,
+      unavailable: [],
     };
     if (scope.stageResults + scope.outcomes.skipped === 0) return emptyReport(meta);
 
@@ -263,30 +276,39 @@ export class ExecutionReportService {
     const runs = parseRuns(runsRes);
 
     // ── Optional phase ──
-    const optional = async <T>(label: string, work: () => Promise<T>): Promise<T | null> => {
+    const unavailable = new Set<ReportEnrichment>();
+    const optional = async <T>(label: string, section: ReportEnrichment, work: () => Promise<T>): Promise<T | null> => {
       try {
         return await withDeadline(work(), deadline);
       } catch (err) {
         warnings.push(`${label} unavailable: ${errorMessage(err)}`);
+        unavailable.add(section);
         return null;
       }
     };
     const taskIds = runs.flatMap((r) => (r.taskId ? [r.taskId] : []));
     const stageNames = [...new Set(allTests.flatMap((t) => t.stages.map((s) => s.name)))];
 
-    const [defense, alertsByRun, startTimes, acceptances] = await Promise.all([
-      optional('Defense Score', () => this.deps.es.getDefenseScore({ ...filterParams, scoringMode: 'any-stage' })),
-      optional('EDR alerts', () => this.correlate(runs, deadline, warnings)),
+    const [defense, correlation, startTimes, acceptances] = await Promise.all([
+      optional('Defense Score', 'defenseScore', () => this.deps.es.getDefenseScore({ ...filterParams, scoringMode: 'any-stage' })),
+      optional('EDR alerts', 'alerts', () => this.correlate(runs, deadline)),
       scope.runs <= RUN_STRIP_MAX_RUNS && taskIds.length > 0
-        ? optional('Run start times', () => this.deps.getRunStartTimes(taskIds))
+        ? optional('Run start times', 'startTimes', () => this.deps.getRunStartTimes(taskIds))
         : Promise.resolve(null),
       params.includeAcceptedRisks
-        ? optional('Accepted risks', () => this.deps.getAcceptances(stageNames, params.org))
+        ? optional('Accepted risks', 'acceptedRisks', () => this.deps.getAcceptances(stageNames, params.org))
         : Promise.resolve(null),
     ]);
 
+    // A vendor failing while another answers is conveyed by its warning alone; only a wholly failed step is "unavailable".
+    if (correlation) {
+      warnings.push(...correlation.warnings);
+      if (correlation.allFailed) unavailable.add('alerts');
+    }
+    meta.unavailable = ENRICHMENT_ORDER.filter((section) => unavailable.has(section));
+
     for (const run of runs) {
-      run.alerts = alertsByRun?.get(run.key) ?? [];
+      run.alerts = correlation?.alerts.get(run.key) ?? [];
       run.startedAt = run.taskId ? startTimes?.get(run.taskId) ?? null : null;
     }
     countStageAlerts(allTests, runs);
@@ -355,14 +377,19 @@ export class ExecutionReportService {
     };
   }
 
-  /** Each vendor fails alone: one vendor's rejection drops only its own alerts. */
-  private async correlate(runs: ReportRun[], deadline: number, warnings: string[]): Promise<Map<string, ReportAlert[]>> {
+  /**
+   * Each vendor fails alone, inside its own budget: one vendor's rejection or hang drops only that
+   * vendor's alerts. `correlateRuns` only checks its deadline between batches, so the race is what
+   * bounds an msearch that is already in flight.
+   */
+  private async correlate(runs: ReportRun[], deadline: number): Promise<Correlation> {
     const adapters: VendorAdapter[] = [
       ...(this.deps.vendors.defender ? [DEFENDER_ADAPTER] : []),
       ...(this.deps.vendors.crowdstrike ? [CROWDSTRIKE_ADAPTER] : []),
     ];
     const merged = new Map<string, ReportAlert[]>();
-    if (adapters.length === 0 || runs.length === 0) return merged;
+    const warnings: string[] = [];
+    if (adapters.length === 0 || runs.length === 0) return { alerts: merged, warnings, allFailed: false };
 
     const correlationRuns: CorrelationRun[] = runs.map((r) => ({
       key: r.key,
@@ -374,12 +401,17 @@ export class ExecutionReportService {
     }));
     const vendorDeadline = Math.min(deadline, Date.now() + this.deps.vendorBudgetMs);
     const settled = await Promise.allSettled(
-      adapters.map((a) => correlateRuns(this.deps.client, a, correlationRuns, { deadline: vendorDeadline })),
+      adapters.map((a) => withDeadline(
+        correlateRuns(this.deps.client, a, correlationRuns, { deadline: vendorDeadline }),
+        vendorDeadline,
+      )),
     );
 
+    let failedVendors = 0;
     settled.forEach((outcome, i) => {
       const label = VENDOR_LABEL[adapters[i].vendor];
       if (outcome.status === 'rejected') {
+        failedVendors++;
         warnings.push(`${label} alerts unavailable: ${errorMessage(outcome.reason)}`);
         return;
       }
@@ -389,6 +421,6 @@ export class ExecutionReportService {
       for (const [key, list] of res.alerts) merged.set(key, [...(merged.get(key) ?? []), ...list]);
     });
     for (const list of merged.values()) list.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
-    return merged;
+    return { alerts: merged, warnings, allFailed: failedVendors === adapters.length };
   }
 }
