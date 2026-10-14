@@ -3,6 +3,7 @@
 import type { ReportAlert, ReportRun, ReportRunStage, StageOutcome } from '@/services/api/reports';
 import { COUNTED_OUTCOMES, emptyCounts } from '../lib/outcomes';
 import { fmtLatency, plural } from '../lib/format';
+import { stageForAlert } from '../lib/runs';
 import { Glyph } from './StageGlyph';
 
 const W = 680;
@@ -27,16 +28,10 @@ const CAPTION_H = 12;
 
 /**
  * "S<n>" for the stage an alert's evidence names (the same numbering as the kill-chain chevrons),
- * or "bundle". The token is the backend's lowercased control id, optionally with a variant suffix,
- * so it is compared case-insensitively against the stage's controlId.
+ * or "bundle". The match is stageForAlert's: case-insensitive, optional variant suffix.
  */
 export function stageLabelFor(run: ReportRun, token: string | null): string {
-  if (!token) return 'bundle';
-  const wanted = token.toLowerCase();
-  const stage = run.stages.find((s) => {
-    const id = s.controlId?.toLowerCase();
-    return !!id && (wanted === id || wanted.startsWith(`${id}-`));
-  });
+  const stage = stageForAlert(run, token);
   return stage ? `S${stage.order}` : 'bundle';
 }
 

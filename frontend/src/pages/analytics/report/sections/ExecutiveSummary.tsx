@@ -6,7 +6,7 @@ import { CampaignTimeline } from '../diagrams/CampaignTimeline';
 import { OutcomeBar } from '../diagrams/OutcomeBar';
 import { firstAlertMinutes, median } from '../diagrams/LatencyDotPlot';
 import { Sheet, type SheetHead } from './Sheet';
-import { PartialBanner, defenseScoreText } from './scope';
+import { AlertsIncompleteNote, PartialBanner, defenseScoreText } from './scope';
 
 const HOSTS_SHOWN = 12;
 
@@ -22,7 +22,6 @@ export function ExecutiveSummary({ report, head }: { report: ExecutionReport; he
   const { totals, defenseScore, meta } = report;
   // No configured EDR vendor means no EDR content at all, not even a placeholder tile.
   const showEdr = meta.edrVendors.length > 0;
-  const alertsIncomplete = showEdr && meta.unavailable.includes('alerts');
   const latency = median(firstAlertMinutes(report.runs));
   const scoreText = defenseScoreText(report);
   const rawScore = defenseScore?.rawScore != null && defenseScore.riskAcceptedCount > 0 ? defenseScore.rawScore : null;
@@ -58,9 +57,7 @@ export function ExecutiveSummary({ report, head }: { report: ExecutionReport; he
           </div>
         )}
       </div>
-      {alertsIncomplete && (
-        <p className="rp-caption">EDR alert correlation was incomplete — see the notice on the summary page.</p>
-      )}
+      <AlertsIncompleteNote report={report} />
       <div className="rp-avoid">
         <h3 className="rp-h3">Outcome of every stage <small>{plural(totals.stageResults, 'stage result')}</small></h3>
         <OutcomeBar counts={totals.outcomes} />

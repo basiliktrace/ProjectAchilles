@@ -40,6 +40,13 @@ export function PartialBanner({ report }: { report: ExecutionReport }) {
   );
 }
 
+/** One line under any alert content when the EDR lookup was incomplete. Nothing on a tenant without EDR. */
+export function AlertsIncompleteNote({ report }: { report: ExecutionReport }) {
+  const { edrVendors, unavailable } = report.meta;
+  if (edrVendors.length === 0 || !unavailable.includes('alerts')) return null;
+  return <p className="rp-caption">EDR alert correlation was incomplete — see the notice on the summary page.</p>;
+}
+
 export function ScopeList({ report }: { report: ExecutionReport }) {
   const { meta } = report;
   const tz = meta.tz;
