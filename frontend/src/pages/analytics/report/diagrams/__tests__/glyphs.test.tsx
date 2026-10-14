@@ -28,6 +28,22 @@ describe('GlyphRow', () => {
     expect(more[0]).toHaveTextContent('+44 (+10 not fetched)');
   });
 
+  it('puts the count below the glyph row, never inside the row that sets the cell width', () => {
+    const sixty = Array.from({ length: 60 }, () => ({ outcome: 'protected' as const }));
+    const { container } = render(<GlyphRow stages={sixty} max={16} notFetched={10} />);
+    const note = container.querySelector('.rp-more') as HTMLElement;
+    const svg = container.querySelector('svg') as SVGElement;
+    const row = container.querySelector('.rp-glyph-row') as HTMLElement;
+    expect(row.contains(svg)).toBe(true);
+    expect(row.contains(note)).toBe(false);
+    expect(note.parentElement).not.toBe(svg.parentElement);
+  });
+
+  it('puts the hidden-glyph count below the row too when nothing was left unfetched', () => {
+    const { container } = render(<GlyphRow stages={Array.from({ length: 20 }, () => ({ outcome: 'protected' as const }))} max={16} />);
+    expect(container.querySelector('.rp-glyph-row')!.contains(screen.getByText('+4'))).toBe(false);
+  });
+
   it('says only what was not fetched when every fetched stage is drawn', () => {
     const { container } = render(<GlyphRow stages={[{ outcome: 'protected' }]} notFetched={7} />);
     expect(container.querySelector('.rp-more')).toHaveTextContent(/^\(\+7 not fetched\)$/);

@@ -25,7 +25,8 @@ export function GlyphIcon({ outcome, highImpact, size = 9 }: GlyphDatum & { size
 
 /**
  * Up to `max` glyphs, then one count: "+44" for glyphs not drawn and, when the run has stages the
- * backend did not fetch, "(+10 not fetched)" (the run strip's wording).
+ * backend did not fetch, "(+10 not fetched)" (the run strip's wording). The count sits on its own line
+ * under the glyphs, so only the glyph row sets the width of the cell it is in.
  */
 export function GlyphRow({ stages, size = 8, gap = 3, max = 16, notFetched = 0 }: {
   stages: GlyphDatum[];
@@ -41,14 +42,16 @@ export function GlyphRow({ stages, size = 8, gap = 3, max = 16, notFetched = 0 }
     notFetched > 0 ? `(+${notFetched.toLocaleString('en-US')} not fetched)` : '',
   ].filter(Boolean).join(' ');
   return (
-    <span className="rp-glyph-row">
-      <svg width={width} height={size} viewBox={`0 0 ${width} ${size}`} role="img" aria-label={shown.map((s) => OUTCOME_LABEL[s.outcome]).join(', ')}>
-        {shown.map((s, i) => (
-          <Glyph key={i} outcome={s.outcome} highImpact={s.highImpact} x={i * (size + gap)} y={0} size={size} />
-        ))}
-      </svg>
+    <>
+      <span className="rp-glyph-row">
+        <svg width={width} height={size} viewBox={`0 0 ${width} ${size}`} role="img" aria-label={shown.map((s) => OUTCOME_LABEL[s.outcome]).join(', ')}>
+          {shown.map((s, i) => (
+            <Glyph key={i} outcome={s.outcome} highImpact={s.highImpact} x={i * (size + gap)} y={0} size={size} />
+          ))}
+        </svg>
+      </span>
       {more && <span className="rp-more">{more}</span>}
-    </span>
+    </>
   );
 }
 

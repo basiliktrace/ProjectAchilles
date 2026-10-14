@@ -123,8 +123,11 @@ html:has(.report-print) body {
 .report-print .rp-g-inconclusive { fill: var(--rp-paper); stroke: var(--rp-inconclusive); stroke-width: 1.5; }
 .report-print .rp-g-skipped { fill: var(--rp-paper); stroke: var(--rp-skipped); stroke-width: 1.5; }
 .report-print .rp-glyph-icon, .report-print .rp-glyph-row svg { display: inline-block; vertical-align: -1px; overflow: visible; }
-.report-print .rp-glyph-row { display: inline-flex; align-items: center; gap: 4px; }
-.report-print .rp-more { font: 8pt var(--rp-mono); color: var(--rp-ink-2); }
+.report-print .rp-glyph-row { display: inline-flex; align-items: center; }
+/* The "+N (+M not fetched)" note sits on its own line under the glyphs. Beside them it added its width to
+   the cell's, and with 16 glyphs already 173 px wide that pushed the Execution log past the A4 content box.
+   Unbreakable, so the "+M" stays whole; it is narrower than the 16-glyph row it hangs from. */
+.report-print .rp-more { display: block; margin-top: 1px; font: 8pt/1.25 var(--rp-mono); color: var(--rp-ink-2); white-space: nowrap; }
 
 /* ── SVG diagrams ── */
 .report-print .rp-figure { margin: 0; }
@@ -168,12 +171,16 @@ html:has(.report-print) body {
 .report-print .rp-table th { font: 500 7.5pt var(--rp-sans); color: var(--rp-ink-2); text-align: left; padding: 4px 6px; border-bottom: 1px solid var(--rp-ink-3); white-space: nowrap; }
 .report-print .rp-table td { padding: 4px 6px; border-bottom: 1px solid var(--rp-rule); vertical-align: middle; }
 .report-print .rp-table th:first-child, .report-print .rp-table td:first-child { padding-left: 0; }
-.report-print .rp-table .rp-num { text-align: right; font-family: var(--rp-mono); font-variant-numeric: tabular-nums; }
+.report-print .rp-table .rp-num, .report-print .rp-table .rp-num-wrap { text-align: right; font-family: var(--rp-mono); font-variant-numeric: tabular-nums; }
 /* Numbers and dates stay on one line. Identifiers (hostnames, control ids, technique lists) wrap, at
    any character if they must: one unbreakable cell wider than the page makes Chromium shrink the whole PDF.
-   The min-width keeps a NetBIOS-length name (15 characters) whole when a busy table hands out its width. */
+   rp-num-wrap is a right-aligned figure that may also wrap between words (the First alert cell, a latency
+   then a vendor name); the markup keeps a latency's own spaces non-breaking. */
 .report-print .rp-table td.rp-num, .report-print .rp-table td.rp-nowrap { white-space: nowrap; }
-.report-print .rp-table td.rp-id { white-space: normal; overflow-wrap: anywhere; min-width: 15ch; }
+.report-print .rp-table td.rp-num-wrap { white-space: normal; }
+/* content-box: min-width is border-box under the app's global box-sizing, so the cell's 12px of padding
+   would come out of the 15ch and break a NetBIOS-length name (up to 15 characters) mid-label. */
+.report-print .rp-table td.rp-id { box-sizing: content-box; white-space: normal; overflow-wrap: anywhere; min-width: 15ch; }
 .report-print .rp-chips { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
 .report-print .rp-chip { font: 500 7.5pt var(--rp-mono); border: 1px solid var(--rp-rule); padding: 2px 5px; color: var(--rp-ink-2); }
 .report-print .rp-chip-strong { border-color: var(--rp-unprotected-hi); color: var(--rp-unprotected-hi); }

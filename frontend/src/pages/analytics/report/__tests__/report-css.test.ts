@@ -93,4 +93,35 @@ describe('report.css table cells', () => {
     expect(declarationsFor('.report-print .rp-table td.rp-num')).toMatch(/white-space:\s*nowrap/);
     expect(declarationsFor('.report-print .rp-table td.rp-nowrap')).toMatch(/white-space:\s*nowrap/);
   });
+
+  it('keeps a 15-character NetBIOS name whole: the identifier column reserves 15ch of content width', () => {
+    // min-width is border-box under the app's global box-sizing, so the cell's 12px of padding
+    // would come out of the 15ch and leave room for only about 13.8 characters.
+    const id = declarationsFor('.report-print .rp-table td.rp-id');
+    const contentBox = /box-sizing:\s*content-box/.test(id) && /min-width:\s*15ch/.test(id);
+    const paddedCalc = /min-width:\s*calc\(\s*15ch\s*\+\s*12px\s*\)/.test(id);
+    expect(contentBox || paddedCalc, id).toBe(true);
+    // Longer names still wrap inside the cell instead of widening the table.
+    expect(id).toMatch(/overflow-wrap:\s*anywhere/);
+  });
+
+  it('lets the first-alert cell wrap between its words, right-aligned like a number', () => {
+    // A latency plus a vendor name on one unbreakable line made the Execution log wider than A4.
+    const wrap = declarationsFor('.report-print .rp-table td.rp-num-wrap');
+    expect(wrap).toMatch(/white-space:\s*normal/);
+    expect(wrap).not.toMatch(/white-space:\s*nowrap/);
+    const aligned = declarationsFor('.report-print .rp-table .rp-num-wrap');
+    expect(aligned).toMatch(/text-align:\s*right/);
+    expect(aligned).toMatch(/font-family:\s*var\(--rp-mono\)/);
+  });
+});
+
+describe('report.css glyph rows', () => {
+  it('puts the "+N (+M not fetched)" note on its own unbreakable line below the glyphs', () => {
+    // Beside the row, the note widened the Stages cell past what A4 leaves for it.
+    const more = declarationsFor('.report-print .rp-more');
+    expect(more).toMatch(/display:\s*block/);
+    expect(more).toMatch(/white-space:\s*nowrap/);
+    expect(declarationsFor('.report-print .rp-glyph-row')).toMatch(/display:\s*inline-flex/);
+  });
 });

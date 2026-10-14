@@ -6,14 +6,17 @@ import { GlyphRow, OutcomeLegend } from '../diagrams/StageGlyph';
 import { Sheet, type SheetHead } from './Sheet';
 import { AlertsIncompleteNote } from './scope';
 
+/** Non-breaking spaces: the First alert cell wraps between its parts, never inside one. */
+const keep = (part: string) => part.replace(/ /g, '\u00a0');
+
 /**
  * The run's earliest alert; a dash when its alerts were searched and none matched, "not checked" when
  * they were not searched. Alerts that all lack a time still say an alert was raised.
  */
 function firstAlertText(run: ReportRun): string {
   const first = firstAlert(run);
-  if (first) return `${fmtLatency((Date.parse(first.createdAt) - Date.parse(run.completedAt)) / 1000)} ${vendorName(first.vendor)}`;
-  if (run.alerts.length > 0) return `${vendorName(run.alerts[0].vendor)} (time unknown)`;
+  if (first) return `${keep(fmtLatency((Date.parse(first.createdAt) - Date.parse(run.completedAt)) / 1000))} ${vendorName(first.vendor)}`;
+  if (run.alerts.length > 0) return `${vendorName(run.alerts[0].vendor)} ${keep('(time unknown)')}`;
   return run.alertsChecked ? '—' : 'not checked';
 }
 
@@ -48,7 +51,7 @@ export function ExecutionLog({ report, head }: { report: ExecutionReport; head: 
                 <td>{truncate(r.testName, 40)}</td>
                 <td><GlyphRow stages={r.stages.filter((s) => s.outcome !== 'skipped')} notFetched={r.moreStages} /></td>
                 <td className="rp-num">{defended(c)}/{conclusive(c)}</td>
-                {edr && <td className="rp-num">{firstAlertText(r)}</td>}
+                {edr && <td className="rp-num-wrap">{firstAlertText(r)}</td>}
               </tr>
             );
           })}

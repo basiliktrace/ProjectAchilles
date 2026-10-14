@@ -454,6 +454,35 @@ describe('ExecutionLog', () => {
     expect(more[0]).toHaveTextContent('+44 (+10 not fetched)');
   });
 
+  it('keeps the not-fetched note out of the glyph row, which alone sets the Stages column width', () => {
+    const stages = Array.from({ length: 70 }, (_, i) => ({ ...makeRun().stages[1], controlId: `C-${i + 1}`, order: i + 1 }));
+    render(<ExecutionLog report={makeReport({ runs: [makeRun({ stages, moreStages: 10 })] })} head={head} />);
+    const row = hostRow('WS-FIN-014');
+    const note = row.querySelector('.rp-more') as HTMLElement;
+    const svg = row.querySelector('svg[role="img"]') as SVGElement;
+    expect(note).toHaveTextContent('+54 (+10 not fetched)');
+    expect(note.parentElement).not.toBe(svg.parentElement);
+    expect(svg.closest('.rp-glyph-row')!.contains(note)).toBe(false);
+  });
+
+  it('lets the first-alert cell wrap, but never inside a latency', () => {
+    const report = makeReport();
+    const alert = report.runs[0].alerts[0];
+    report.runs[0] = { ...report.runs[0], alerts: [{ ...alert, createdAt: '' }] };
+    // The second run completed 09:12:00, so this alert is 13m 34s after it.
+    report.runs[1] = { ...report.runs[1], alerts: [{ ...alert, createdAt: '2026-10-11T09:25:34.000Z' }] };
+    render(<ExecutionLog report={report} head={head} />);
+    const unknown = within(hostRow('WS-FIN-014')).getByText('Defender (time unknown)');
+    expect(unknown).toHaveClass('rp-num-wrap');
+    expect(unknown).not.toHaveClass('rp-num');
+    expect(unknown).not.toHaveClass('rp-nowrap');
+    // Words break between the vendor and what follows, so the two parts may stack; a latency does not split.
+    expect(unknown.textContent).toBe('Defender (time\u00a0unknown)');
+    const timed = within(hostRow('WS-OPS-022')).getAllByRole('cell')[5];
+    expect(timed).toHaveClass('rp-num-wrap');
+    expect(timed.textContent).toBe('+13m\u00a034s Defender');
+  });
+
   it('lets a 63-character hostname wrap instead of widening the table past the page', () => {
     render(<ExecutionLog report={makeReport({ runs: [makeRun({ hostname: LONG_HOST })] })} head={head} />);
     const cell = within(hostRow(LONG_HOST)).getAllByRole('cell')[1];
