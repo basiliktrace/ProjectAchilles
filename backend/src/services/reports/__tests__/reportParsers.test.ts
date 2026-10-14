@@ -161,7 +161,7 @@ describe('parseRuns', () => {
     const [run] = parseRuns(res);
     expect(run).toMatchObject({
       testKey: BUNDLE, testName: 'LockBit kill chain', hostname: 'WS-FIN-014', completedAt: '2026-10-12T12:47:49.000Z',
-      taskId: TASK, startedAt: null, alerts: [], moreStages: 61,
+      taskId: TASK, startedAt: null, alerts: [], alertsChecked: false, moreStages: 61,
     });
     expect(run.stages.map((s) => [s.order, s.controlId, s.outcome, s.highImpact, s.exitCode])).toEqual([
       [1, 'T1003.001', 'protected', false, 126],

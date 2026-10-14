@@ -151,6 +151,8 @@ describe('ExecutionReportService.generate', () => {
     expect(run).toMatchObject({ taskId: TASK, startedAt: '2026-10-12T12:41:06.000Z', hostname: 'WS-FIN-014', moreStages: 0 });
     expect(run.stages.map((s) => [s.controlId, s.outcome, s.highImpact])).toEqual([['T1567.002', 'unprotected', true], ['T1486', 'protected', false]]);
     expect(run.alerts[0]).toMatchObject({ vendor: 'defender', title: 'RcloneExfiltration', stageControlId: 't1567.002' });
+    expect(run.alertsChecked).toBe(true);
+    expect(report.meta.edrVendors).toEqual(['defender']);
 
     expect(report.findings[0]).toMatchObject({
       techniqueId: 'T1567.002', highImpact: true,
@@ -306,8 +308,20 @@ describe('ExecutionReportService.generate', () => {
     const deps = makeDeps({ vendors: { defender: false, crowdstrike: false } });
     const report = await new ExecutionReportService(settings, deps).generate(params(), NOW);
     expect(deps.client.msearch).not.toHaveBeenCalled();
+    expect(report.meta.edrVendors).toEqual([]);
     expect(report.runs[0].alerts).toEqual([]);
+    expect(report.runs.every((r) => r.alertsChecked === false)).toBe(true);
     expect(report.meta.unavailable).toEqual([]);
+  });
+
+  it('flags alerts unavailable when a vendor answered but every sub-search failed', async () => {
+    const deps = makeDeps();
+    deps.client.msearch.mockResolvedValue({ responses: [{ error: { type: 'search_phase_execution_exception' } }] });
+    const report = await new ExecutionReportService(settings, deps).generate(params(), NOW);
+    expect(report.runs[0].alerts).toEqual([]);
+    expect(report.runs[0].alertsChecked).toBe(false);
+    expect(report.meta.unavailable).toEqual(['alerts']);
+    expect(report.meta.warnings).toEqual(['Microsoft Defender alerts partially unavailable: 2 searches failed']);
   });
 
   it('keeps one vendor\'s alerts when the other vendor rejects', async () => {
@@ -317,10 +331,13 @@ describe('ExecutionReportService.generate', () => {
       return msearchHits({ 'achilles-crowdstrike': 'FalconDetection' })(req);
     });
     const report = await new ExecutionReportService(settings, deps).generate(params(), NOW);
+    expect(report.meta.edrVendors).toEqual(['defender', 'crowdstrike']);
     expect(report.runs[0].alerts).toHaveLength(1);
     expect(report.runs[0].alerts[0]).toMatchObject({ vendor: 'crowdstrike', title: 'FalconDetection' });
+    // CrowdStrike's alerts stay, but no run was checked by every configured vendor.
+    expect(report.runs[0].alertsChecked).toBe(false);
     expect(report.meta.warnings).toEqual(['Microsoft Defender alerts unavailable: defender index closed']);
-    expect(report.meta.unavailable).toEqual([]); // CrowdStrike still answered
+    expect(report.meta.unavailable).toEqual(['alerts']);
   });
 
   it('flags alerts unavailable when every configured vendor fails', async () => {
@@ -346,8 +363,9 @@ describe('ExecutionReportService.generate', () => {
     expect(Date.now() - started).toBeLessThan(2_000);
     expect(report.runs[0].alerts).toHaveLength(1);
     expect(report.runs[0].alerts[0]).toMatchObject({ vendor: 'crowdstrike', title: 'FalconDetection' });
+    expect(report.runs[0].alertsChecked).toBe(false);
     expect(report.meta.warnings).toEqual(['Microsoft Defender alerts unavailable: time budget reached']);
-    expect(report.meta.unavailable).not.toContain('alerts');
+    expect(report.meta.unavailable).toEqual(['alerts']);
   });
 
   it('warns when some correlation searches failed but keeps the alerts that were found', async () => {
@@ -358,6 +376,8 @@ describe('ExecutionReportService.generate', () => {
     const report = await new ExecutionReportService(settings, deps).generate(params(), NOW);
     expect(report.meta.warnings).toEqual(['Microsoft Defender alerts partially unavailable: 1 searches failed']);
     expect(report.runs[0].alerts[0]).toMatchObject({ vendor: 'defender', title: 'RcloneExfiltration' });
+    expect(report.runs[0].alertsChecked).toBe(true); // the tier-2 search answered
+    expect(report.meta.unavailable).toEqual([]);
   });
 
   it('warns when the vendor time budget cuts correlation short', async () => {
@@ -366,6 +386,8 @@ describe('ExecutionReportService.generate', () => {
     expect(deps.client.msearch).not.toHaveBeenCalled();
     expect(report.runs[0].alerts).toEqual([]);
     expect(report.meta.warnings).toEqual(['Microsoft Defender alerts incomplete: time budget reached']);
+    expect(report.runs[0].alertsChecked).toBe(false);
+    expect(report.meta.unavailable).toEqual(['alerts']);
   });
 
   it('maps a required query failure to a 502', async () => {

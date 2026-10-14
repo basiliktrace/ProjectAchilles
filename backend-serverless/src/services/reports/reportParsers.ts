@@ -250,6 +250,7 @@ export function parseRuns(response: Agg): ReportRun[] {
       stages,
       moreStages: Math.max(0, (b.doc_count ?? hits.length) - hits.length),
       alerts: [],
+      alertsChecked: false,
     };
   });
 }

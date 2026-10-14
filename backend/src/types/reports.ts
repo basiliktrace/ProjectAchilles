@@ -52,6 +52,8 @@ export interface ReportMeta {
   unavailable: ReportEnrichment[];
   /** Set when part of the data in scope could not be read (partial shard failure); the cover shows a banner. */
   partial: { failedShards: number; totalShards: number } | null;
+  /** EDR vendors configured for this report; empty means EDR content is omitted silently (matching the console). */
+  edrVendors: Array<'defender' | 'crowdstrike'>;
 }
 
 export interface ReportTotals {
@@ -199,6 +201,11 @@ export interface ReportRun {
   /** Stage docs beyond MEMBERS_CAP that were not fetched. */
   moreStages: number;
   alerts: ReportAlert[];
+  /**
+   * True when every configured EDR vendor completed a search for this run.
+   * False means not (fully) checked, which is not the same as "no alerts".
+   */
+  alertsChecked: boolean;
 }
 
 export interface AcceptedRiskRow {

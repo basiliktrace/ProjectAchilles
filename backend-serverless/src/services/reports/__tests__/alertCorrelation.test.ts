@@ -81,7 +81,7 @@ describe('correlateRuns', () => {
     msearch.mockResolvedValueOnce({ responses: [{ error: { type: 'index_not_found_exception' } }] });
     const res = await correlateRuns(client, DEFENDER_ADAPTER, [run(1)], { deadline: far() });
     expect(msearch).toHaveBeenCalledTimes(1);
-    expect(res).toEqual({ alerts: new Map(), complete: true, failed: 0 });
+    expect(res).toEqual({ alerts: new Map(), complete: true, failed: 0, searched: new Set([run(1).key]) });
   });
 
   it('counts a rejected tier-1 sub-search as failed, not as no alerts', async () => {
@@ -116,6 +116,49 @@ describe('correlateRuns', () => {
     const res = await correlateRuns(client, DEFENDER_ADAPTER, [run(1)], { deadline: Date.now() - 1 });
     expect(msearch).not.toHaveBeenCalled();
     expect(res.complete).toBe(false);
+    expect(res.searched.size).toBe(0);
+  });
+
+  describe('searched', () => {
+    it('contains a run whose tier-1 sub-search answered, with or without hits', async () => {
+      msearch
+        .mockResolvedValueOnce({ responses: [{ hits: { hits: [alertHit('A')] } }, { hits: { hits: [] } }] })
+        .mockResolvedValueOnce({ responses: [{ hits: { hits: [] } }] });
+      const res = await correlateRuns(client, DEFENDER_ADAPTER, [run(1), run(2)], { deadline: far() });
+      expect(res.searched).toEqual(new Set([run(1).key, run(2).key]));
+    });
+
+    it('excludes a run whose tier-1 and tier-2 sub-searches both errored', async () => {
+      msearch
+        .mockResolvedValueOnce({ responses: [{ error: { type: 'es_rejected_execution_exception' } }] })
+        .mockResolvedValueOnce({ responses: [{ error: { type: 'es_rejected_execution_exception' } }] });
+      const res = await correlateRuns(client, DEFENDER_ADAPTER, [run(1)], { deadline: far() });
+      expect(res.failed).toBe(2);
+      expect(res.searched.has(run(1).key)).toBe(false);
+    });
+
+    it('contains a run whose tier-1 sub-search errored but whose tier-2 sub-search answered', async () => {
+      msearch
+        .mockResolvedValueOnce({ responses: [{ error: { type: 'es_rejected_execution_exception' } }] })
+        .mockResolvedValueOnce({ responses: [{ hits: { hits: [] } }] });
+      const res = await correlateRuns(client, DEFENDER_ADAPTER, [run(1)], { deadline: far() });
+      expect(res.failed).toBe(1);
+      expect(res.searched.has(run(1).key)).toBe(true);
+    });
+
+    it('counts a missing alert index as searched', async () => {
+      msearch.mockResolvedValueOnce({ responses: [{ error: { type: 'index_not_found_exception' } }] });
+      const res = await correlateRuns(client, DEFENDER_ADAPTER, [run(1)], { deadline: far() });
+      expect(res.searched.has(run(1).key)).toBe(true);
+    });
+
+    it('counts sub-searches missing from a short msearch response as failed and unsearched', async () => {
+      msearch.mockResolvedValueOnce({ responses: [{ hits: { hits: [] } }] });
+      const res = await correlateRuns(client, DEFENDER_ADAPTER, [run(1, []), run(2, [])], { deadline: far() });
+      expect(msearch).toHaveBeenCalledTimes(1);
+      expect(res.failed).toBe(1);
+      expect(res.searched).toEqual(new Set([run(1).key]));
+    });
   });
 });
 

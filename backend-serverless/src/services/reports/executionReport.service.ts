@@ -72,8 +72,8 @@ const ENRICHMENT_ORDER: readonly ReportEnrichment[] = ['defenseScore', 'alerts',
 interface Correlation {
   alerts: Map<string, ReportAlert[]>;
   warnings: string[];
-  /** Every configured vendor rejected or timed out. */
-  allFailed: boolean;
+  /** Run keys every configured vendor completed a search for (a vendor that rejected or timed out searched none). */
+  checked: Set<string>;
 }
 
 const VENDOR_LABEL: Record<ReportAlert['vendor'], string> = {
@@ -289,6 +289,7 @@ export class ExecutionReportService {
       warnings,
       unavailable: [],
       partial: null,
+      edrVendors: this.adapters().map((a) => a.vendor),
     };
     if (scope.stageResults + scope.outcomes.skipped === 0) {
       meta.partial = await this.probePartialFailure(shardFailures, filters, deadline, warnings);
@@ -333,17 +334,16 @@ export class ExecutionReportService {
         : Promise.resolve(null),
     ]);
 
-    // A vendor failing while another answers is conveyed by its warning alone; only a wholly failed step is "unavailable".
-    if (correlation) {
-      warnings.push(...correlation.warnings);
-      if (correlation.allFailed) unavailable.add('alerts');
-    }
-    meta.unavailable = ENRICHMENT_ORDER.filter((section) => unavailable.has(section));
-
+    if (correlation) warnings.push(...correlation.warnings);
     for (const run of runs) {
       run.alerts = correlation?.alerts.get(run.key) ?? [];
+      run.alertsChecked = correlation?.checked.has(run.key) ?? false;
       run.startedAt = run.taskId ? startTimes?.get(run.taskId) ?? null : null;
     }
+    // "Never searched" must not read as "no alerts": with EDR configured and no run checked, the section is unavailable.
+    if (meta.edrVendors.length > 0 && runs.length > 0 && !runs.some((r) => r.alertsChecked)) unavailable.add('alerts');
+    meta.unavailable = ENRICHMENT_ORDER.filter((section) => unavailable.has(section));
+
     countStageAlerts(allTests, runs);
 
     const findings = attachGuidance(
@@ -461,19 +461,25 @@ export class ExecutionReportService {
     };
   }
 
-  /**
-   * Each vendor fails alone, inside its own budget: one vendor's rejection or hang drops only that
-   * vendor's alerts. `correlateRuns` only checks its deadline between batches, so the race is what
-   * bounds an msearch that is already in flight.
-   */
-  private async correlate(runs: ReportRun[], deadline: number): Promise<Correlation> {
-    const adapters: VendorAdapter[] = [
+  /** The EDR vendors configured for this report, in a fixed order. */
+  private adapters(): VendorAdapter[] {
+    return [
       ...(this.deps.vendors.defender ? [DEFENDER_ADAPTER] : []),
       ...(this.deps.vendors.crowdstrike ? [CROWDSTRIKE_ADAPTER] : []),
     ];
+  }
+
+  /**
+   * Each vendor fails alone, inside its own budget: one vendor's rejection or hang drops only that
+   * vendor's alerts. `correlateRuns` only checks its deadline between batches, so the race is what
+   * bounds an msearch that is already in flight. A run counts as checked only when every vendor
+   * searched it.
+   */
+  private async correlate(runs: ReportRun[], deadline: number): Promise<Correlation> {
+    const adapters = this.adapters();
     const merged = new Map<string, ReportAlert[]>();
     const warnings: string[] = [];
-    if (adapters.length === 0 || runs.length === 0) return { alerts: merged, warnings, allFailed: false };
+    if (adapters.length === 0 || runs.length === 0) return { alerts: merged, warnings, checked: new Set() };
 
     const correlationRuns: CorrelationRun[] = runs.map((r) => ({
       key: r.key,
@@ -491,20 +497,21 @@ export class ExecutionReportService {
       )),
     );
 
-    let failedVendors = 0;
+    let checked = new Set(runs.map((r) => r.key));
     settled.forEach((outcome, i) => {
       const label = VENDOR_LABEL[adapters[i].vendor];
       if (outcome.status === 'rejected') {
-        failedVendors++;
+        checked = new Set();
         warnings.push(`${label} alerts unavailable: ${errorMessage(outcome.reason)}`);
         return;
       }
       const res = outcome.value;
+      checked = new Set([...checked].filter((key) => res.searched.has(key)));
       if (!res.complete) warnings.push(`${label} alerts incomplete: time budget reached`);
       if (res.failed > 0) warnings.push(`${label} alerts partially unavailable: ${res.failed} searches failed`);
       for (const [key, list] of res.alerts) merged.set(key, [...(merged.get(key) ?? []), ...list]);
     });
     for (const list of merged.values()) list.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
-    return { alerts: merged, warnings, allFailed: failedVendors === adapters.length };
+    return { alerts: merged, warnings, checked };
   }
 }
