@@ -43,8 +43,28 @@ export function rankFindings(techniques: ReportTechnique[], tests: ReportTest[])
 }
 
 /**
- * Acceptance lookup keys are `test_name` or `test_name::control_id`; for
- * bundle stages test_name is the stage name (see getAcceptancesForControls).
+ * An acceptance entry covers only when it is global. Host-scoped entries cover
+ * one endpoint's executions, not the fleet-wide gap, so they never badge a
+ * finding. Read defensively: entries arrive as unknown[] from the lookup.
+ * Mirrors effectiveScope() in the frontend (scope wins; legacy entries infer
+ * host from a hostname).
+ */
+function isGlobalAcceptance(entry: unknown): boolean {
+  const e = (typeof entry === 'object' && entry !== null ? entry : {}) as { scope?: unknown; hostname?: unknown };
+  const scope = typeof e.scope === 'string' ? e.scope : undefined;
+  const hostname = typeof e.hostname === 'string' ? e.hostname : undefined;
+  return (scope ?? (hostname ? 'host' : 'global')) === 'global';
+}
+
+/**
+ * A finding is an accepted risk only when both hold:
+ *   1. across every test in f.testKeys, some stage exercised the technique, and
+ *   2. every such stage is covered by a global acceptance under `name` or
+ *      `name::control_id` (a key is covered when one of its entries is global).
+ * Any single covered stage is not enough: an uncovered test that exercised the
+ * same technique is still an open gap. Acceptance lookup keys are
+ * `test_name` or `test_name::control_id`; for bundle stages test_name is the
+ * stage name (see getAcceptancesForControls).
  */
 export function markAcceptedRisks(
   findings: ReportFinding[],
@@ -52,13 +72,17 @@ export function markAcceptedRisks(
   acceptances: Record<string, unknown[]>,
 ): ReportFinding[] {
   const testsByKey = new Map(tests.map((t) => [t.testKey, t]));
-  const covered = (key: string) => (acceptances[key]?.length ?? 0) > 0;
-  return findings.map((f) => ({
-    ...f,
-    acceptedRisk: f.testKeys.some((k) => (testsByKey.get(k)?.stages ?? []).some((s) =>
-      s.techniques.includes(f.techniqueId)
-      && (covered(s.name) || (s.controlId !== null && covered(`${s.name}::${s.controlId}`))))),
-  }));
+  const covered = (key: string) => {
+    const list = acceptances[key];
+    return Array.isArray(list) && list.some(isGlobalAcceptance);
+  };
+  return findings.map((f) => {
+    const exercising = f.testKeys.flatMap((k) =>
+      (testsByKey.get(k)?.stages ?? []).filter((s) => s.techniques.includes(f.techniqueId)));
+    const acceptedRisk = exercising.length > 0 && exercising.every((s) =>
+      covered(s.name) || (s.controlId !== null && covered(`${s.name}::${s.controlId}`)));
+    return { ...f, acceptedRisk };
+  });
 }
 
 export function attachGuidance(

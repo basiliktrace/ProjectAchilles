@@ -54,6 +54,37 @@ describe('markAcceptedRisks', () => {
   it('ignores unrelated or empty acceptances', () => {
     expect(markAcceptedRisks([finding], TESTS, { 'C2 stage::T1071.001': [{}], 'Exfiltration stage': [] })[0].acceptedRisk).toBe(false);
   });
+
+  it('does not count a host-scoped acceptance as covering the technique', () => {
+    expect(markAcceptedRisks([finding], TESTS, { 'Exfiltration stage::T1567.002': [{ scope: 'host', hostname: 'LAB-1' }] })[0].acceptedRisk).toBe(false);
+  });
+
+  it('treats a legacy entry with a hostname and no scope as host-scoped', () => {
+    expect(markAcceptedRisks([finding], TESTS, { 'Exfiltration stage': [{ hostname: 'LAB-1' }] })[0].acceptedRisk).toBe(false);
+  });
+
+  it('counts a global acceptance on the only exercising stage', () => {
+    expect(markAcceptedRisks([finding], TESTS, { 'Exfiltration stage': [{ scope: 'global' }] })[0].acceptedRisk).toBe(true);
+  });
+
+  it('needs a global acceptance on every exercising stage, not just one test', () => {
+    const [both] = rankFindings([tech('T1567.002', 'Exfiltration', { unprotected: 5 }, ['b1', 'b2'])], TESTS);
+    expect(markAcceptedRisks([both], TESTS, { 'Exfiltration stage': [{ scope: 'global' }] })[0].acceptedRisk).toBe(false);
+  });
+
+  it('marks a technique covered when every exercising stage has a global acceptance', () => {
+    const [both] = rankFindings([tech('T1567.002', 'Exfiltration', { unprotected: 5 }, ['b1', 'b2'])], TESTS);
+    expect(markAcceptedRisks([both], TESTS, {
+      'Exfiltration stage': [{ scope: 'global' }],
+      'C2 stage': [{ scope: 'global' }],
+    })[0].acceptedRisk).toBe(true);
+  });
+
+  it('covers a key when at least one of its entries is global', () => {
+    expect(markAcceptedRisks([finding], TESTS, {
+      'Exfiltration stage': [{ scope: 'host', hostname: 'LAB-1' }, { scope: 'global' }],
+    })[0].acceptedRisk).toBe(true);
+  });
 });
 
 describe('attachGuidance', () => {
