@@ -77,12 +77,31 @@ describe('correlateRuns', () => {
     expect(res.alerts.size).toBe(0);
   });
 
-  it('treats sub-search errors (e.g. a missing alert index) as no alerts', async () => {
-    msearch
-      .mockResolvedValueOnce({ responses: [{ error: { type: 'index_not_found_exception' } }] })
-      .mockResolvedValueOnce({ responses: [{ error: { type: 'index_not_found_exception' } }] });
+  it('treats a missing alert index as no alerts, not a failure, and skips tier 2', async () => {
+    msearch.mockResolvedValueOnce({ responses: [{ error: { type: 'index_not_found_exception' } }] });
     const res = await correlateRuns(client, DEFENDER_ADAPTER, [run(1)], { deadline: far() });
-    expect(res).toEqual({ alerts: new Map(), complete: true });
+    expect(msearch).toHaveBeenCalledTimes(1);
+    expect(res).toEqual({ alerts: new Map(), complete: true, failed: 0 });
+  });
+
+  it('counts a rejected tier-1 sub-search as failed, not as no alerts', async () => {
+    msearch
+      .mockResolvedValueOnce({ responses: [{ error: { type: 'es_rejected_execution_exception', reason: 'x' } }] })
+      .mockResolvedValueOnce({ responses: [{ hits: { hits: [] } }] });
+    const res = await correlateRuns(client, DEFENDER_ADAPTER, [run(1)], { deadline: far() });
+    expect(res.failed).toBe(1);
+    expect(res.alerts.get(run(1).key)).toBeUndefined();
+    expect(res.complete).toBe(true);
+  });
+
+  it('counts a tier-2 sub-search error with no type as failed', async () => {
+    msearch
+      .mockResolvedValueOnce({ responses: [{ hits: { hits: [] } }] })
+      .mockResolvedValueOnce({ responses: [{ error: { reason: 'no type' } }] });
+    const res = await correlateRuns(client, DEFENDER_ADAPTER, [run(1)], { deadline: far() });
+    expect(msearch).toHaveBeenCalledTimes(2);
+    expect(res.failed).toBe(1);
+    expect(res.alerts.size).toBe(0);
   });
 
   it('batches by batchSize', async () => {

@@ -6,6 +6,11 @@
 // then runs the technique+host fallback only for runs that came back empty.
 // Those are the console's tiers whenever a hostname is known: its two
 // fallbacks build the same query once a hostname is present.
+//
+// A sub-search error is never read as "no alerts". Any error other than
+// index_not_found_exception is counted in `failed`, so the report can warn.
+// A missing index is an expected empty result, and when every tier-1 search
+// reports it, tier 2 is skipped because it would fail the same way.
 
 import type { Client } from '@elastic/elasticsearch';
 import {
@@ -69,6 +74,12 @@ export interface CorrelationResult {
   alerts: Map<string, ReportAlert[]>;
   /** false when the deadline cut correlation short. */
   complete: boolean;
+  /**
+   * Sub-search responses (tier 1 and tier 2) that errored with anything other
+   * than index_not_found_exception. A run counted here may have no entry in
+   * `alerts` because the search failed, not because it was clean.
+   */
+  failed: number;
 }
 
 export function buildHostTechniqueQuery(adapter: VendorAdapter, run: CorrelationRun): Record<string, unknown> {
@@ -114,21 +125,32 @@ function toReportAlert(adapter: VendorAdapter, source: Record<string, unknown>, 
 
 interface Entry { run: CorrelationRun; query: Record<string, unknown> }
 
-/** One msearch; a sub-response with `error` (e.g. missing index) yields no hits. */
+/** Outcome of one sub-search. `missing-index` is an expected empty result; `failed` is not. */
+interface SubOutcome {
+  sources: Record<string, unknown>[];
+  failure: 'missing-index' | 'failed' | null;
+}
+
+/** One msearch. A sub-response with `error` yields no sources and is classified by its error type. */
 async function msearchSources(
   client: Client,
   adapter: VendorAdapter,
   entries: Entry[],
-): Promise<Record<string, unknown>[][]> {
+): Promise<SubOutcome[]> {
   if (entries.length === 0) return [];
   const searches = entries.flatMap(({ query }) => [
     { index: adapter.index },
     { size: HITS_PER_RUN, query, sort: [{ created_at: { order: 'asc' } }], _source: ALERT_SOURCE_FIELDS },
   ]);
   const response = await client.msearch({ searches } as never);
-  return ((response as { responses?: unknown[] }).responses ?? []).map((r) => {
+  return ((response as { responses?: unknown[] }).responses ?? []).map((r): SubOutcome => {
     const sub = r as { error?: unknown; hits?: { hits?: { _source?: Record<string, unknown> }[] } };
-    return sub.error ? [] : (sub.hits?.hits ?? []).map((h) => h._source ?? {});
+    if (sub.error) {
+      // An error with no type counts as a failure; only the known missing-index case is expected.
+      const type = (sub.error as { type?: string } | undefined)?.type;
+      return { sources: [], failure: type === 'index_not_found_exception' ? 'missing-index' : 'failed' };
+    }
+    return { sources: (sub.hits?.hits ?? []).map((h) => h._source ?? {}), failure: null };
   });
 }
 
@@ -141,10 +163,15 @@ export async function correlateRuns(
   const alerts = new Map<string, ReportAlert[]>();
   const batchSize = opts.batchSize ?? CORRELATION_BATCH_SIZE;
   const unmatched: CorrelationRun[] = [];
+  let failed = 0;
+  let tier1Searches = 0;
+  let tier1MissingIndex = 0;
 
-  const record = (entries: Entry[], results: Record<string, unknown>[][], onEmpty?: (run: CorrelationRun) => void) => {
+  const record = (entries: Entry[], outcomes: SubOutcome[], onEmpty?: (run: CorrelationRun) => void) => {
     entries.forEach(({ run }, i) => {
-      const hits = results[i] ?? [];
+      const outcome: SubOutcome | undefined = outcomes[i];
+      if (outcome?.failure === 'failed') failed += 1;
+      const hits = outcome?.sources ?? [];
       if (hits.length > 0) alerts.set(run.key, hits.map((s) => toReportAlert(adapter, s, run)));
       else onEmpty?.(run);
     });
@@ -152,7 +179,7 @@ export async function correlateRuns(
 
   // Tier 1: evidence (the same query the enrichment pass uses).
   for (let i = 0; i < runs.length; i += batchSize) {
-    if (Date.now() > opts.deadline) return { alerts, complete: false };
+    if (Date.now() > opts.deadline) return { alerts, complete: false, failed };
     const entries: Entry[] = [];
     for (const run of runs.slice(i, i + batchSize)) {
       const query = adapter.buildEvidenceQuery({
@@ -164,16 +191,22 @@ export async function correlateRuns(
       if (query) entries.push({ run, query });
       else unmatched.push(run);
     }
-    record(entries, await msearchSources(client, adapter, entries), (run) => unmatched.push(run));
+    const outcomes = await msearchSources(client, adapter, entries);
+    tier1Searches += entries.length;
+    tier1MissingIndex += outcomes.filter((o) => o.failure === 'missing-index').length;
+    record(entries, outcomes, (run) => unmatched.push(run));
   }
 
-  // Tier 2: technique + host, only for runs the evidence tier missed.
-  const fallback = unmatched.filter((r) => r.techniques.length > 0);
+  // Tier 2: technique + host, only for runs the evidence tier missed. Skipped when
+  // every tier-1 search reported a missing index: the vendor has no alert index,
+  // so the fallback cannot match either.
+  const indexMissing = tier1Searches > 0 && tier1MissingIndex === tier1Searches;
+  const fallback = indexMissing ? [] : unmatched.filter((r) => r.techniques.length > 0);
   for (let i = 0; i < fallback.length; i += batchSize) {
-    if (Date.now() > opts.deadline) return { alerts, complete: false };
+    if (Date.now() > opts.deadline) return { alerts, complete: false, failed };
     const entries = fallback.slice(i, i + batchSize).map((run) => ({ run, query: buildHostTechniqueQuery(adapter, run) }));
     record(entries, await msearchSources(client, adapter, entries));
   }
 
-  return { alerts, complete: true };
+  return { alerts, complete: true, failed };
 }
