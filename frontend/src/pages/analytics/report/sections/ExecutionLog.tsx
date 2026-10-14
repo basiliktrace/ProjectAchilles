@@ -17,7 +17,7 @@ function firstAlertText(run: ReportRun): string {
   const first = firstAlert(run);
   if (first) return `${keep(fmtLatency((Date.parse(first.createdAt) - Date.parse(run.completedAt)) / 1000))} ${vendorName(first.vendor)}`;
   if (run.alerts.length > 0) return `${vendorName(run.alerts[0].vendor)} ${keep('(time unknown)')}`;
-  return run.alertsChecked ? '—' : 'not checked';
+  return run.alertsChecked ? '—' : keep('not checked');
 }
 
 export function ExecutionLog({ report, head }: { report: ExecutionReport; head: SheetHead }) {

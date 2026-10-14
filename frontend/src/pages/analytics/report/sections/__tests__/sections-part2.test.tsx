@@ -483,6 +483,13 @@ describe('ExecutionLog', () => {
     expect(timed.textContent).toBe('+13m\u00a034s Defender');
   });
 
+  it('keeps "not checked" on one line, like "(time unknown)"', () => {
+    render(<ExecutionLog report={makeReport({ runs: silentRuns({ alertsChecked: false }) })} head={head} />);
+    const unchecked = within(hostRow('WS-FIN-014')).getAllByRole('cell')[5];
+    expect(unchecked).toHaveClass('rp-num-wrap');
+    expect(unchecked.textContent).toBe('not checked');
+  });
+
   it('lets a 63-character hostname wrap instead of widening the table past the page', () => {
     render(<ExecutionLog report={makeReport({ runs: [makeRun({ hostname: LONG_HOST })] })} head={head} />);
     const cell = within(hostRow(LONG_HOST)).getAllByRole('cell')[1];
