@@ -3,14 +3,21 @@ import { BAND_LABEL, bandOf, conclusive, defended, protectionRate } from '../lib
 import { fmtCount, fmtPct, plural } from '../lib/format';
 import { OutcomeBar } from '../diagrams/OutcomeBar';
 import { Sheet, type SheetHead } from './Sheet';
+import { testNamesText } from './scope';
 
 const ACTORS_SHOWN = 6;
 const TECHNIQUES_PER_ACTOR = 8;
 
 export function ActorsAndCoverage({ report, head }: { report: ExecutionReport; head: SheetHead }) {
-  const names = new Map<string, string>([...report.tests, ...report.otherTests].map((t) => [t.testKey, t.name]));
-  const techniquesOf = (keys: string[]) =>
-    [...new Set(report.tests.filter((t) => keys.includes(t.testKey)).flatMap((t) => t.stages.flatMap((s) => s.techniques)))];
+  // Techniques from the stages of the actor's tests; a test without its own page has no stages,
+  // so then from the coverage table's techniques that those tests exercised.
+  const techniquesOf = (keys: string[]) => {
+    const fromStages = report.tests.filter((t) => keys.includes(t.testKey)).flatMap((t) => t.stages.flatMap((s) => s.techniques));
+    const ids = fromStages.length > 0
+      ? fromStages
+      : report.techniques.filter((t) => t.testKeys.some((k) => keys.includes(k))).map((t) => t.id);
+    return [...new Set(ids)];
+  };
   const actors = [...report.actors].sort((a, b) => b.runs - a.runs).slice(0, ACTORS_SHOWN);
 
   // Techniques arrive sorted in kill-chain order (unknown tactic last).
@@ -28,6 +35,9 @@ export function ActorsAndCoverage({ report, head }: { report: ExecutionReport; h
         <h2 className="rp-h2">Threat actors and ATT&amp;CK coverage</h2>
         <p className="rp-muted">Actors come from test metadata. Techniques are grouped by tactic in kill-chain order.</p>
       </div>
+      {report.actors.length > actors.length && (
+        <h3 className="rp-h3">Top {actors.length} of {report.actors.length} threat actors by runs</h3>
+      )}
       {actors.length > 0 ? (
         <div className="rp-grid-2">
           {actors.map((a) => {
@@ -37,7 +47,7 @@ export function ActorsAndCoverage({ report, head }: { report: ExecutionReport; h
                 <h3 className="rp-h3">{a.name}</h3>
                 <dl className="rp-kv">
                   <dt>Emulated by</dt>
-                  <dd>{a.testKeys.map((k) => names.get(k) ?? k).join(', ')}</dd>
+                  <dd>{testNamesText(report, a.testKeys)}</dd>
                   <dt>Runs</dt>
                   <dd>{fmtCount(a.runs)}</dd>
                   <dt>Techniques</dt>

@@ -1,7 +1,30 @@
 import type { ExecutionReport } from '@/services/api/reports';
 import { ALL_TIME_FROM } from '@/hooks/useAnalyticsFilters';
-import { fmtDate, fmtDateTime, tzName } from '../lib/format';
+import { fmtDate, fmtDateTime, plural, tzName } from '../lib/format';
 import { FILTER_LABELS } from '../lib/verdict';
+
+const NAMES_SHOWN = 5;
+
+/**
+ * The tests behind `keys`, for "tested by" and "Emulated by": each name once, at most five, then
+ * "+N more". A key the report cannot name is counted as "1 other test" rather than printed as an id.
+ */
+export function testNamesText(report: ExecutionReport, keys: string[]): string {
+  const known = new Map([...report.tests, ...report.otherTests].map((t) => [t.testKey, t.name]));
+  const names = new Set<string>();
+  let unnamed = 0;
+  for (const key of new Set(keys)) {
+    const name = known.get(key);
+    if (name) names.add(name);
+    else unnamed += 1;
+  }
+  const shown = [...names].slice(0, NAMES_SHOWN);
+  const more = names.size - shown.length;
+  return [
+    shown.join(', ') + (more > 0 ? ` +${more} more` : ''),
+    unnamed > 0 ? plural(unnamed, 'other test') : '',
+  ].filter(Boolean).join(', ');
+}
 
 /** The window to print: an All-time window starts at the first execution, not the year 2000. */
 export function windowRange(report: ExecutionReport): { from: string; to: string } {

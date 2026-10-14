@@ -6,7 +6,7 @@ import { ExecutionLog } from '../ExecutionLog';
 import { RunStrips } from '../RunStrips';
 import { Method } from '../Method';
 import { countStages, firstAlert } from '../../lib/runs';
-import { counts, makeReport, makeRun, makeTest } from '../../__tests__/fixtures';
+import { BUNDLE, counts, makeReport, makeRun, makeTest } from '../../__tests__/fixtures';
 import type { AcceptedRiskRow, ReportMeta, ReportRun } from '@/services/api/reports';
 
 const head = { left: 'h', right: 'r' };
@@ -216,6 +216,22 @@ describe('Findings', () => {
     expect(screen.getByText('Exfiltration · M1021 Restrict Web-Based Content')).toBeInTheDocument();
     expect(screen.getByText('From the defense guidance of LockBit 3.0 Double Extortion Kill Chain')).toBeInTheDocument();
     expect(screen.getByText('high impact')).toBeInTheDocument();
+  });
+
+  it('names each test once, caps the list at five and never prints a test id', () => {
+    const otherTests = Array.from({ length: 8 }, (_, i) => ({ testKey: `k${i}`, name: i < 3 ? 'DPRK BlueNoroff Chain' : `Test ${i}`, runs: 1, outcomes: counts({ protected: 1 }) }));
+    const report = makeReport({ otherTests });
+    report.findings[0] = {
+      ...report.findings[0],
+      testKeys: [BUNDLE, ...otherTests.map((t) => t.testKey), 'f00dfeed-0000-4000-8000-000000000000'],
+      // The backend prints the key when it cannot name a test.
+      testNames: ['LockBit 3.0 Double Extortion Kill Chain', ...otherTests.map((t) => t.name), 'f00dfeed-0000-4000-8000-000000000000'],
+    };
+    const { container } = render(<Findings report={report} head={head} />);
+    expect(container.textContent).toContain(
+      'tested by LockBit 3.0 Double Extortion Kill Chain, DPRK BlueNoroff Chain, Test 3, Test 4, Test 5 +2 more, 1 other test',
+    );
+    expect(container.textContent).not.toContain('f00dfeed');
   });
 
   it('points to the file when no section matches, and omits accepted risks when not permitted', () => {

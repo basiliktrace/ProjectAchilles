@@ -3,7 +3,7 @@ import { conclusive, defended, protectionRate } from '../lib/outcomes';
 import { fmtDate, fmtPct, plural } from '../lib/format';
 import { LatencyDotPlot } from '../diagrams/LatencyDotPlot';
 import { Sheet, type SheetHead } from './Sheet';
-import { AlertsIncompleteNote } from './scope';
+import { AlertsIncompleteNote, testNamesText } from './scope';
 
 const HELD_MIN_RESULTS = 5;
 const HELD_RATE = 0.9;
@@ -96,7 +96,7 @@ export function Findings({ report, head }: { report: ExecutionReport; head: Shee
                   </span>
                 </h3>
                 <p className="rp-muted">
-                  {f.tactic ?? 'Unknown tactic'} · got through on {f.outcomes.unprotected} of {conclusive(f.outcomes)} conclusive results · {f.outcomes.detected} detected, {f.outcomes.protected + f.outcomes.prevented} stopped · tested by {f.testNames.join(', ')}
+                  {f.tactic ?? 'Unknown tactic'} · got through on {f.outcomes.unprotected} of {conclusive(f.outcomes)} conclusive results · {f.outcomes.detected} detected, {f.outcomes.protected + f.outcomes.prevented} stopped · tested by {testNamesText(report, f.testKeys)}
                 </p>
                 {f.guidance?.excerpt ? (
                   <>

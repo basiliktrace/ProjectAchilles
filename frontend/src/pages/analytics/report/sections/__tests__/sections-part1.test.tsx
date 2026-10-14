@@ -273,6 +273,41 @@ describe('ActorsAndCoverage', () => {
     expect(screen.getByText('No threat actor is attributed to the tests in this scope.')).toBeInTheDocument();
   });
 
+  it('names each emulating test once, caps the list at five and never prints a test id', () => {
+    const otherTests = Array.from({ length: 8 }, (_, i) => ({ testKey: `k${i}`, name: i < 2 ? 'BlueNoroff Chain' : `Test ${i}`, runs: 1, outcomes: counts({ protected: 1 }) }));
+    const report = makeReport({
+      otherTests,
+      actors: [{ name: 'Lazarus', testKeys: [...otherTests.map((t) => t.testKey), '0f4d3c2b-unknown-key'], runs: 9, outcomes: counts({ protected: 9 }) }],
+    });
+    render(<ActorsAndCoverage report={report} head={head} />);
+    // Two keys share "BlueNoroff Chain": 7 distinct names, 5 shown, plus the key the report cannot name.
+    expect(valueOf('Emulated by')).toHaveTextContent('BlueNoroff Chain, Test 2, Test 3, Test 4, Test 5 +2 more, 1 other test');
+    expect(valueOf('Emulated by')).not.toHaveTextContent('0f4d3c2b');
+  });
+
+  it('says how many actors there are when it shows only the top six', () => {
+    const actor = (i: number) => ({ name: `Actor ${i}`, testKeys: [], runs: 100 - i, outcomes: counts({ protected: 1 }) });
+    const { rerender } = render(<ActorsAndCoverage report={makeReport({ actors: Array.from({ length: 8 }, (_, i) => actor(i)) })} head={head} />);
+    expect(screen.getByRole('heading', { name: 'Top 6 of 8 threat actors by runs' })).toBeInTheDocument();
+    expect(screen.queryByText('Actor 6')).toBeNull();
+    rerender(<ActorsAndCoverage report={makeReport()} head={head} />);
+    expect(screen.queryByRole('heading', { name: /threat actors by runs/ })).toBeNull();
+  });
+
+  it('lists an actor\'s techniques from the coverage table when its tests have no page', () => {
+    const report = makeReport({
+      otherTests: [{ testKey: 'x', name: 'Mimikatz', runs: 3, outcomes: counts({ protected: 3 }) }],
+      actors: [{ name: 'APT29', testKeys: ['x'], runs: 3, outcomes: counts({ protected: 3 }) }],
+      techniques: [
+        { id: 'T1003.001', name: 'LSASS Memory', tactic: 'Credential Access', outcomes: counts({ protected: 3 }), testKeys: ['x'] },
+        { id: 'T1059.001', name: 'PowerShell', tactic: 'Execution', outcomes: counts({ detected: 2 }), testKeys: ['other'] },
+      ],
+    });
+    render(<ActorsAndCoverage report={report} head={head} />);
+    expect(valueOf('Techniques')).toHaveTextContent('T1003.001');
+    expect(valueOf('Techniques')).not.toHaveTextContent('T1059.001');
+  });
+
   it('labels each percentage a stage protection rate', () => {
     const report = makeReport({ otherTests: [{ testKey: 'x', name: 'Mimikatz', runs: 3, outcomes: counts({ protected: 3 }) }] });
     render(<ActorsAndCoverage report={report} head={head} />);
