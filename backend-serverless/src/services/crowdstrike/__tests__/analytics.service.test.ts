@@ -430,6 +430,27 @@ describe('CrowdStrikeAnalyticsService', () => {
       binaryName: '92b0b4f6-a09b-4c7b-b593-31ce461f804c.exe',
     };
 
+    it('returns prevention_action and portal_url from the alert doc', async () => {
+      mockSearch.mockResolvedValueOnce({
+        hits: {
+          total: { value: 1 },
+          hits: [{
+            _source: {
+              alert_id: 'p1', alert_title: 'Blocked', severity: 'high', status: 'closed',
+              created_at: '2026-02-25T10:01:00Z', updated_at: '2026-02-25T10:01:00Z',
+              mitre_techniques: ['T1486'], prevention_action: 'quarantined',
+              portal_url: 'https://falcon.crowdstrike.com/alerts/p1',
+            },
+          }],
+        },
+      });
+      const result = await service.getAlertsForTest(['T1486'], '2026-02-25T10:00:00Z', 30);
+      expect(result.alerts[0]).toMatchObject({
+        prevention_action: 'quarantined',
+        portal_url: 'https://falcon.crowdstrike.com/alerts/p1',
+      });
+    });
+
     it('tier 1: evidence-based match with stage attribution', async () => {
       mockSearch.mockResolvedValueOnce({
         hits: { total: { value: 1 }, hits: [alertHit()] },

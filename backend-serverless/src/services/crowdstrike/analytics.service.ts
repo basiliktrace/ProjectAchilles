@@ -8,6 +8,7 @@ import { createEsClient } from '../analytics/client.js';
 import { CROWDSTRIKE_INDEX } from './index-management.js';
 import { buildAlertTimeWindowQuery, buildCrowdStrikeEvidenceQuery } from './evidence-correlation.js';
 import { attackSimulationExclusions } from '../analytics/attack-simulation-filter.js';
+import { projectAlertHit } from '../alerts/alertHit.js';
 import type { Client } from '@elastic/elasticsearch';
 import type { QueryDslQueryContainer } from '@elastic/elasticsearch/lib/api/types.js';
 
@@ -137,6 +138,12 @@ export interface RelatedAlertsResponse {
     attribution: 'stage' | 'bundle';
     /** Lowercased technique token when attribution === 'stage'. */
     attributed_control_id?: string;
+    /** Vendor-confirmed prevention disposition (quarantined | process_killed | blocked | kill_failed). */
+    prevention_action?: string;
+    /** Deep link to the alert in the vendor console. */
+    portal_url?: string;
+    /** Set when ProjectAchilles auto-resolved this alert. */
+    auto_resolved_at?: string;
   }>;
   matchedTechniques: string[];
   total: number;
@@ -694,25 +701,6 @@ export class CrowdStrikeAnalyticsService {
       ? binaryName.toLowerCase().replace(/\.exe$/, '')
       : '';
 
-    /**
-     * Inspect an alert's `evidence_filenames` for a `<bundleUuid>-<token>.exe`
-     * pattern. FIRST match wins (evidence often carries orchestrator + stage
-     * binaries together). Returns 'bundle' for the orchestrator UUID-only
-     * binary, no UUID prefix, or a different bundle's UUID.
-     */
-    const classifyAttribution = (
-      filenames: string[],
-    ): { attribution: 'stage' | 'bundle'; attributed_control_id?: string } => {
-      if (!bundleUuidForAttribution) return { attribution: 'bundle' };
-      const escaped = bundleUuidForAttribution.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      const stagePattern = new RegExp(`^${escaped}-([a-z0-9._-]+?)\\.exe$`, 'i');
-      for (const fn of filenames) {
-        const m = fn.match(stagePattern);
-        if (m) return { attribution: 'stage', attributed_control_id: m[1].toLowerCase() };
-      }
-      return { attribution: 'bundle' };
-    };
-
     const parseHits = (hits: any[]) => {
       const matchedTechniqueSet = new Set<string>();
       const alerts = hits.map((hit) => {
@@ -721,24 +709,7 @@ export class CrowdStrikeAnalyticsService {
         for (const t of alertTechniques) {
           if (techniques.includes(t)) matchedTechniqueSet.add(t);
         }
-        const evidenceFilenames = (s.evidence_filenames as string[]) ?? [];
-        const { attribution, attributed_control_id } = classifyAttribution(evidenceFilenames);
-        return {
-          alert_id: String(s.alert_id ?? ''),
-          alert_title: String(s.alert_title ?? ''),
-          description: String(s.description ?? ''),
-          severity: String(s.severity ?? ''),
-          status: String(s.status ?? ''),
-          category: String(s.category ?? ''),
-          service_source: String(s.service_source ?? ''),
-          mitre_techniques: alertTechniques,
-          created_at: String(s.created_at ?? ''),
-          updated_at: String(s.updated_at ?? ''),
-          resolved_at: s.resolved_at ? String(s.resolved_at) : null,
-          recommended_actions: String(s.recommended_actions ?? ''),
-          attribution,
-          ...(attributed_control_id ? { attributed_control_id } : {}),
-        };
+        return projectAlertHit(s, bundleUuidForAttribution);
       });
       // Sort by proximity to the test execution timestamp
       alerts.sort((a, b) => {

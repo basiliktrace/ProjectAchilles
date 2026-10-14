@@ -374,6 +374,12 @@ export interface RelatedAlertsResponse {
      * stage's drill-down. Undefined when `attribution === 'bundle'`.
      */
     attributed_control_id?: string;
+    /** Vendor-confirmed prevention disposition (quarantined | process_killed | blocked | kill_failed). */
+    prevention_action?: string;
+    /** Deep link to the alert in the vendor console. */
+    portal_url?: string;
+    /** Set when ProjectAchilles auto-resolved this alert. */
+    auto_resolved_at?: string;
   }>;
   matchedTechniques: string[];
   total: number;

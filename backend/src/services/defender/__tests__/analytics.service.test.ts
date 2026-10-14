@@ -824,6 +824,27 @@ describe('DefenderAnalyticsService', () => {
   });
 
   describe('getAlertsForTest', () => {
+    it('returns prevention_action and portal_url from the alert doc', async () => {
+      mockSearch.mockResolvedValueOnce({
+        hits: {
+          total: { value: 1 },
+          hits: [{
+            _source: {
+              alert_id: 'p1', alert_title: 'Blocked', severity: 'high', status: 'resolved',
+              created_at: '2026-02-25T10:01:00Z', updated_at: '2026-02-25T10:01:00Z',
+              mitre_techniques: ['T1486'], prevention_action: 'blocked',
+              portal_url: 'https://security.microsoft.com/alerts/p1',
+            },
+          }],
+        },
+      });
+      const result = await service.getAlertsForTest(['T1486'], '2026-02-25T10:00:00Z', 30);
+      expect(result.alerts[0]).toMatchObject({
+        prevention_action: 'blocked',
+        portal_url: 'https://security.microsoft.com/alerts/p1',
+      });
+    });
+
     it('returns alerts matching techniques within time window', async () => {
       mockSearch.mockResolvedValueOnce({
         hits: {

@@ -6,6 +6,7 @@ import { createEsClient } from '../analytics/client.js';
 import { DEFENDER_INDEX } from './index-management.js';
 import { buildAlertTimeWindowQuery, buildDefenderEvidenceQuery } from './evidence-correlation.js';
 import { attackSimulationExclusions } from '../analytics/attack-simulation-filter.js';
+import { projectAlertHit } from '../alerts/alertHit.js';
 import { getControlMitreTechniques } from './control-correlation.service.js';
 import type { Client } from '@elastic/elasticsearch';
 import type { QueryDslQueryContainer } from '@elastic/elasticsearch/lib/api/types.js';
@@ -73,6 +74,10 @@ export interface DefenderAlertItem {
   attribution?: 'stage' | 'bundle';
   /** Lowercased technique token from a stage-attributable evidence binary. */
   attributed_control_id?: string;
+  /** Vendor-confirmed prevention disposition (quarantined | process_killed | blocked | kill_failed). */
+  prevention_action?: string;
+  /** Deep link to the alert in the vendor console. */
+  portal_url?: string;
   auto_resolved?: boolean;
   auto_resolved_at?: string | null;
   auto_resolve_mode?: 'disabled' | 'dry_run' | 'enabled' | null;
@@ -806,19 +811,6 @@ export class DefenderAnalyticsService {
       ? binaryName.toLowerCase().replace(/\.exe$/, '')
       : '';
 
-    const classifyAttribution = (
-      filenames: string[],
-    ): { attribution: 'stage' | 'bundle'; attributed_control_id?: string } => {
-      if (!bundleUuidForAttribution) return { attribution: 'bundle' };
-      const escaped = bundleUuidForAttribution.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      const stagePattern = new RegExp(`^${escaped}-([a-z0-9._-]+?)\\.exe$`, 'i');
-      for (const fn of filenames) {
-        const m = fn.match(stagePattern);
-        if (m) return { attribution: 'stage', attributed_control_id: m[1].toLowerCase() };
-      }
-      return { attribution: 'bundle' };
-    };
-
     const parseHits = (hits: any[]) => {
       const matchedTechniqueSet = new Set<string>();
       const alerts: DefenderAlertItem[] = hits.map((hit) => {
@@ -827,24 +819,7 @@ export class DefenderAnalyticsService {
         for (const t of alertTechniques) {
           if (techniques.includes(t)) matchedTechniqueSet.add(t);
         }
-        const evidenceFilenames = (s.evidence_filenames as string[]) ?? [];
-        const { attribution, attributed_control_id } = classifyAttribution(evidenceFilenames);
-        return {
-          alert_id: String(s.alert_id ?? ''),
-          alert_title: String(s.alert_title ?? ''),
-          description: String(s.description ?? ''),
-          severity: String(s.severity ?? ''),
-          status: String(s.status ?? ''),
-          category: String(s.category ?? ''),
-          service_source: String(s.service_source ?? ''),
-          mitre_techniques: alertTechniques,
-          created_at: String(s.created_at ?? ''),
-          updated_at: String(s.updated_at ?? ''),
-          resolved_at: s.resolved_at ? String(s.resolved_at) : null,
-          recommended_actions: String(s.recommended_actions ?? ''),
-          attribution,
-          ...(attributed_control_id ? { attributed_control_id } : {}),
-        };
+        return projectAlertHit(s, bundleUuidForAttribution);
       });
       alerts.sort((a, b) => {
         const aDiff = Math.abs(new Date(a.created_at).getTime() - testTime);
