@@ -165,14 +165,20 @@ export interface ReportFinding {
   guidance: { testKey: string; testName: string; excerpt: string | null } | null;
 }
 
+/**
+ * name, techniques and tactics are present only when the report has at most
+ * RUN_STRIP_MAX_RUNS runs (the run-strip appendix); above that they are omitted
+ * to keep the payload under the 4.5 MB serverless response limit. Read them
+ * from tests[].stages by controlId instead.
+ */
 export interface ReportRunStage {
   controlId: string | null;
-  name: string;
+  name?: string;
   order: number;
   outcome: StageOutcome;
   exitCode: number | null;
-  techniques: string[];
-  tactics: string[];
+  techniques?: string[];
+  tactics?: string[];
   highImpact: boolean;
 }
 

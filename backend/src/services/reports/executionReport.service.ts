@@ -33,8 +33,8 @@ import { emptyCounts } from './stageOutcome.js';
 import type { AnalyticsSettings, DefenseScoreResponse, ExtendedAnalyticsQueryParams } from '../../types/analytics.js';
 import type { TestMetadata } from '../../types/test.js';
 import type {
-  AcceptedRiskRow, ExecutionReport, ReportAlert, ReportDefenseScore, ReportEnrichment, ReportMeta, ReportRun, ReportTest,
-  ReportTimelineLane,
+  AcceptedRiskRow, ExecutionReport, ReportAlert, ReportDefenseScore, ReportEnrichment, ReportMeta, ReportRun, ReportRunStage,
+  ReportTest, ReportTimelineLane,
 } from '../../types/reports.js';
 
 export const REPORT_BUDGET_MS = 45_000;
@@ -198,6 +198,19 @@ function buildLanes(tests: ReportTest[]): ReportTimelineLane[] {
     lanes.push({ testKey: OTHER_LANE, name: `Other tests (${rest.length})`, runs: rest.reduce((sum, t) => sum + t.runs, 0) });
   }
   return lanes;
+}
+
+/**
+ * Above RUN_STRIP_MAX_RUNS, run stages drop name, techniques and tactics: tests[].stages carries them
+ * by controlId, and at 500 runs × 60 stages they would push the payload past the 4.5 MB serverless
+ * response limit. Only for payload assembly — correlation and findings read the full stages first.
+ */
+function payloadRuns(runs: ReportRun[]): ReportRun[] {
+  if (runs.length <= RUN_STRIP_MAX_RUNS) return runs;
+  const slim = (s: ReportRunStage): ReportRunStage => ({
+    controlId: s.controlId, order: s.order, outcome: s.outcome, exitCode: s.exitCode, highImpact: s.highImpact,
+  });
+  return runs.map((run) => ({ ...run, stages: run.stages.map(slim) }));
 }
 
 /** Credit each correlated alert to the stage its evidence binary names. */
@@ -394,7 +407,7 @@ export class ExecutionReportService {
       actors: scope.actors,
       hosts: scope.hosts,
       findings,
-      runs,
+      runs: payloadRuns(runs),
       acceptedRisks: params.includeAcceptedRisks
         ? toAcceptedRiskRows(acceptances, allTests, { names: scope.hosts.map((h) => h.hostname), capped: scope.hostsCapped })
         : null,
@@ -507,7 +520,7 @@ export class ExecutionReportService {
       hostname: r.hostname,
       completedAt: r.completedAt,
       bundleName: r.key.startsWith('bundle::') ? r.testName : undefined,
-      techniques: [...new Set(r.stages.flatMap((s) => s.techniques))],
+      techniques: [...new Set(r.stages.flatMap((s) => s.techniques ?? []))],
     }));
     const vendorDeadline = Math.min(deadline, Date.now() + this.deps.vendorBudgetMs);
     const settled = await Promise.allSettled(

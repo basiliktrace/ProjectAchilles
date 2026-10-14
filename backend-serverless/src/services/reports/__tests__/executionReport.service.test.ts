@@ -156,6 +156,8 @@ describe('ExecutionReportService.generate', () => {
     expect(run.alerts[0]).toMatchObject({ vendor: 'defender', title: 'RcloneExfiltration', stageControlId: 't1567.002' });
     expect(run.alertsChecked).toBe(true);
     expect(report.meta.edrVendors).toEqual(['defender']);
+    // At or below RUN_STRIP_MAX_RUNS the run stages keep their names, techniques and tactics.
+    expect(run.stages[0]).toMatchObject({ name: 'T1567.002', techniques: ['T1567.002'], tactics: ['exfiltration'] });
 
     expect(report.findings[0]).toMatchObject({
       techniqueId: 'T1567.002', highImpact: true,
@@ -520,5 +522,45 @@ describe('partial shard failures', () => {
       expect(call[1].requestTimeout).toBeGreaterThanOrEqual(1);
       expect(call[1].requestTimeout).toBeLessThanOrEqual(5_000);
     }
+  });
+});
+
+describe('payload size at the caps', () => {
+  const RUNS = 500;
+  const STAGES = 60;
+  const controls = Array.from({ length: STAGES }, (_, i) => `CH-DEF-${String(i + 1).padStart(3, '0')}`);
+  const member = (run: number, controlId: string, i: number) => ({
+    _id: `${TASK}::${controlId}`,
+    _source: {
+      event: { ERROR: i % 2 ? 101 : 126 }, routing: { hostname: `WS-FIN-${run}` },
+      f0rtika: {
+        is_bundle_control: true, bundle_id: BUNDLE, bundle_name: 'Microsoft Defender Hardening Baseline', control_id: controlId,
+        control_validator: 'Windows Defender', test_name: `${controlId} Microsoft Defender real-time protection is enabled`,
+        techniques: ['T1562.001'], tactics: ['defense-evasion'],
+      },
+    },
+  });
+  const bigRuns = { aggregations: { runs: { buckets: Array.from({ length: RUNS }, (_, r) => ({
+    key: `bundle::${BUNDLE}::WS-FIN-${r}::${T_RUN - r * 60_000}`, doc_count: STAGES, completed: { value: T_RUN - r * 60_000 },
+    members: { hits: { hits: controls.map((c, i) => member(r, c, i)) } },
+  })) } } };
+
+  it(`keeps a ${RUNS} runs × ${STAGES} stages report under 4 MB by dropping per-stage names, techniques and tactics`, async () => {
+    const deps = makeDeps();
+    deps.client.search.mockImplementation(async (req: { aggs: Record<string, any> }) =>
+      (req.aggs.runs?.terms ? bigRuns : routeSearch(scopeResponse({ runs: RUNS }))(req)));
+    deps.client.msearch.mockImplementation(async ({ searches }: { searches: unknown[] }) => ({
+      responses: Array.from({ length: searches.length / 2 }, () => ({ hits: { hits: [] } })),
+    }));
+    const report = await new ExecutionReportService(settings, deps).generate(params(), NOW);
+
+    expect(report.runs).toHaveLength(RUNS);
+    expect(report.runs[0].stages).toHaveLength(STAGES);
+    expect(report.runs[0].stages[0]).toEqual({ controlId: 'CH-DEF-001', order: 1, outcome: 'protected', exitCode: 126, highImpact: false });
+    expect(report.runs.some((r) => r.stages.some((s) => 'name' in s || 'techniques' in s || 'tactics' in s))).toBe(false);
+    expect(JSON.stringify(report).length).toBeLessThan(4_000_000);
+    // Correlation ran on the full stages: the technique+host fallback still names the stage techniques.
+    const fallback = deps.client.msearch.mock.calls.map(([req]: [{ searches: any[] }]) => JSON.stringify(req.searches[1].query));
+    expect(fallback.some((q: string) => q.includes('"mitre_techniques":["T1562.001"]'))).toBe(true);
   });
 });
