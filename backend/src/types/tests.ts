@@ -38,6 +38,17 @@ export interface CertificateListResponse {
   activeCertId: string | null;
 }
 
+export type BuildJobStatus = 'running' | 'succeeded' | 'failed';
+
+/** Latest build attempt for a test, tracked in memory by BuildService. */
+export interface BuildJob {
+  status: BuildJobStatus;
+  startedAt: string;
+  finishedAt?: string;
+  /** The thrown error's message, when status is 'failed'. */
+  error?: string;
+}
+
 export interface BuildInfo {
   exists: boolean;
   platform?: { os: string; arch: string };
@@ -47,6 +58,7 @@ export interface BuildInfo {
   builtAt?: string;
   filename?: string;
   source?: 'built' | 'uploaded';
+  job?: BuildJob;
 }
 
 export interface BuildMetadata {
