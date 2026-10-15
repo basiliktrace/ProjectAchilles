@@ -1382,6 +1382,42 @@ var data string
 
       expect(result.platform).toEqual({ os: 'darwin', arch: 'amd64' });
     });
+
+    it('falls back to global platform when secondary files carry conflicting OS tags', async () => {
+      // Dual-platform test shape: untagged main + linux and windows companions.
+      // Regression test: previously the alphabetically-first tag (linux) won,
+      // producing an extensionless Linux binary for Windows agents.
+      setupBuildWithGoSource(
+        'package main\nfunc main() {}\n',
+        {
+          'orchestrator_embed_linux.go': '//go:build linux\npackage main\n',
+          'orchestrator_embed_windows.go': '//go:build windows\npackage main\n',
+          'test_logger_linux.go': '//go:build linux\npackage main\n',
+          'test_logger_windows.go': '//go:build windows\npackage main\n',
+        },
+      );
+
+      const result = await service.buildAndSign(VALID_UUID);
+
+      // Global setting is windows/amd64 from createMockSettingsService
+      expect(result.platform).toEqual({ os: 'windows', arch: 'amd64' });
+      expect(result.filename).toBe(`${VALID_UUID}.exe`);
+    });
+
+    it('detects OS when multiple secondary files agree on a single tag', async () => {
+      setupBuildWithGoSource(
+        'package main\nfunc main() {}\n',
+        {
+          'test_logger_linux.go': '//go:build linux\npackage main\n',
+          'stage1_paths_linux.go': '//go:build linux\npackage main\n',
+        },
+      );
+
+      const result = await service.buildAndSign(VALID_UUID);
+
+      expect(result.platform).toEqual({ os: 'linux', arch: 'amd64' });
+      expect(result.filename).toBe(VALID_UUID);
+    });
   });
 
   // ── Group 11: getDetectedPlatform ───────────────────────

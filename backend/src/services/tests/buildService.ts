@@ -321,14 +321,23 @@ const ARTIFACT_DIR = \`${artifactDir}\`
       if (os) return os;
     }
 
-    // 2. Check other .go files in the test directory
+    // 2. Check other .go files in the test directory. Collect ALL detected
+    //    OSes rather than taking the first: a dual-platform test (untagged
+    //    main file plus e.g. test_logger_linux.go + test_logger_windows.go)
+    //    would otherwise resolve to whichever filename readdir returns first
+    //    — alphabetically `*_linux.go` before `*_windows.go` — and silently
+    //    build the wrong-OS binary (observed: Linux binary shipped to a
+    //    Windows agent). On conflicting tags, fall back to the global
+    //    platform setting instead of guessing.
     const goFiles = fs.readdirSync(testDir).filter(f => f.endsWith('.go') && f !== `${uuid}.go`);
+    const detected = new Set<PlatformSettings['os']>();
     for (const goFile of goFiles) {
       const os = this.detectBuildTagOS(path.join(testDir, goFile));
-      if (os) return os;
+      if (os) detected.add(os);
     }
+    if (detected.size === 1) return [...detected][0];
 
-    // 3. Fall back to global platform setting
+    // 3. Fall back to global platform setting (no tags, or conflicting tags)
     return this.settingsService.getPlatformSettings().os;
   }
 
