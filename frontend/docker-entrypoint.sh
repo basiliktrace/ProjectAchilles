@@ -1,9 +1,12 @@
 #!/bin/sh
 # Generate runtime config from environment variables.
 # This replaces Vite's build-time import.meta.env for Docker deployments.
-# Reads CLERK_PUBLISHABLE_KEY from backend/.env (injected via docker-compose env_file).
+# CLERK_PUBLISHABLE_KEY comes from the container environment: docker compose
+# fills it from the ROOT .env (or the shell), not backend/.env. Compose also
+# passes VITE_CLERK_PUBLISHABLE_KEY, the name used in frontend/.env, so accept
+# that as a fallback.
 # I3: Use jq to safely JSON-encode env vars, preventing string breakout.
-CLERK_KEY_JSON=$(printf '%s' "${CLERK_PUBLISHABLE_KEY:-}" | jq -Rs .)
+CLERK_KEY_JSON=$(printf '%s' "${CLERK_PUBLISHABLE_KEY:-${VITE_CLERK_PUBLISHABLE_KEY:-}}" | jq -Rs .)
 API_URL_JSON=$(printf '%s' "${VITE_API_URL:-}" | jq -Rs .)
 cat <<EOF > /usr/share/nginx/html/env-config.js
 window.__env__ = {
