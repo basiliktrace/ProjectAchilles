@@ -13,8 +13,8 @@ Docker Compose is the recommended deployment method for local development, testi
 ```bash
 git clone https://github.com/projectachilles/ProjectAchilles.git
 cd ProjectAchilles
-./scripts/setup.sh          # Interactive configuration (writes backend/.env)
-# Create the root .env (see "Root .env" below), then:
+./scripts/setup.sh          # Interactive configuration (backend/.env + Clerk key in the root .env)
+# Check the root .env (see "Root .env" below), then:
 docker compose up -d        # Start services
 ```
 
@@ -54,7 +54,7 @@ Use the helper script to generate all secrets at once:
 
 ### Root `.env`
 
-Docker Compose fills in the variables it passes to the containers from a `.env` file in the **project root** (next to `docker-compose.yml`). Create it with at least:
+Docker Compose fills in the variables it passes to the containers from a `.env` file in the **project root** (next to `docker-compose.yml`). The setup wizards (`setup.sh`, `Install-ProjectAchilles.ps1`) write `CLERK_PUBLISHABLE_KEY` to it for you. If you configured manually, create it with at least:
 
 ```bash
 CLERK_PUBLISHABLE_KEY=pk_test_your_key

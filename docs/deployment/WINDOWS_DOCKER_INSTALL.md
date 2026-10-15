@@ -183,7 +183,7 @@ The script will:
 - Ask for your Clerk keys (with input masking for the secret key)
 - Ask about Elasticsearch and test repository configuration
 - Generate secure secrets (SESSION_SECRET, ENCRYPTION_SECRET)
-- Write everything to `backend/.env`
+- Write everything to `backend/.env`, and the Clerk publishable key to the root `.env` that Docker Compose reads
 - Build and start Docker containers
 - Wait for services to become healthy
 - Open `http://localhost` in your browser
@@ -204,7 +204,7 @@ The script will:
 
 ### Option B: Setup Wizard (Git Bash)
 
-The interactive setup wizard configures `backend/.env` (but does not build or launch containers).
+The interactive setup wizard configures `backend/.env` and copies the Clerk publishable key into the root `.env` (but does not build or launch containers).
 
 **Using Git Bash** (installed with Git for Windows):
 
@@ -219,7 +219,7 @@ The wizard will:
 - Ask about Elasticsearch (choose "Skip" for now — you can configure later)
 - Ask about the test repository and GitHub token
 - Generate secure secrets (SESSION_SECRET, ENCRYPTION_SECRET)
-- Write everything to `backend/.env`
+- Write everything to `backend/.env`, and the Clerk publishable key to the root `.env` that Docker Compose reads
 
 After the wizard completes, continue to [Section 7](#7-build-and-start-services) to build and start services.
 
@@ -272,12 +272,18 @@ Or use this online generator: https://generate-secret.vercel.app/32
 
 Replace both `REPLACE_ME` values with the generated strings.
 
+4. Create a `.env` file in the **project root** (next to `docker-compose.yml`) with the same publishable key. Docker Compose passes it to the frontend container from there; without it the UI loads a black page (`Missing publishableKey`):
+
+```powershell
+Set-Content -Path .env -Value "CLERK_PUBLISHABLE_KEY=pk_test_YOUR_KEY_HERE"
+```
+
 ### Optional: Test Repository
 
-If you have access to a private test library repository, also set:
+The public test library (`https://github.com/ubercylon8/f0_library.git`) is used by default, so nothing needs to be set. To use a private fork instead, also set:
 
 ```env
-TESTS_REPO_URL=https://github.com/ubercylon8/f0_library.git
+TESTS_REPO_URL=https://github.com/<owner>/<fork>.git
 GITHUB_TOKEN=ghp_YOUR_PERSONAL_ACCESS_TOKEN
 ```
 
