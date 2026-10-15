@@ -512,7 +512,11 @@ function Invoke-PhaseLineEndings {
     # Nested Join-Path: Windows PowerShell 5.1 has no -AdditionalChildPath,
     # so a third positional argument is an error there.
     $entrypoint = Join-Path (Join-Path $script:ProjectRoot 'frontend') 'docker-entrypoint.sh'
-    if ((Test-Path $entrypoint) -and ($shellFiles.FullName -notcontains $entrypoint)) {
+    # The root usually has no .sh files (they live in scripts/), and under
+    # StrictMode reading .FullName from an empty array throws. Collect the
+    # names through the pipeline instead.
+    $shellPaths = @($shellFiles | ForEach-Object { $_.FullName })
+    if ((Test-Path $entrypoint) -and ($shellPaths -notcontains $entrypoint)) {
         $shellFiles += Get-Item $entrypoint
     }
 
