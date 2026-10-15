@@ -1,0 +1,44 @@
+name: Windows installer
+
+# Runs scripts/Install-ProjectAchilles.ps1 end to end (git, docker, the health
+# check and prompts are stubbed) under Windows PowerShell 5.1 and PowerShell 7.
+# 5.1 ships with Windows and is what most users run; breakage specific to it
+# (e.g. a three-argument Join-Path) does not show up under pwsh.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'scripts/Install-ProjectAchilles.ps1'
+      - 'scripts/tests/Test-WindowsInstaller.ps1'
+      - 'backend/.env.example'
+      - '.github/workflows/windows-installer.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'scripts/Install-ProjectAchilles.ps1'
+      - 'scripts/tests/Test-WindowsInstaller.ps1'
+      - 'backend/.env.example'
+      - '.github/workflows/windows-installer.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  installer:
+    name: Installer (${{ matrix.exe }})
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        exe: [powershell, pwsh]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Run the installer end to end
+        shell: pwsh
+        env:
+          PS_EXE: ${{ matrix.exe }}
+        run: |
+          & $env:PS_EXE -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/tests/Test-WindowsInstaller.ps1
+          exit $LASTEXITCODE
