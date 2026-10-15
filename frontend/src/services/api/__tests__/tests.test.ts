@@ -67,7 +67,8 @@ describe('testsApi.waitForBuild', () => {
       .mockResolvedValueOnce(envelope(BUILT));
 
     const result = testsApi.waitForBuild(UUID, { intervalMs: 1000 });
-    await vi.advanceTimersByTimeAsync(3000);
+    // Backoff: polls at 1 s, then 2 s and 4 s later.
+    await vi.advanceTimersByTimeAsync(7000);
 
     await expect(result).resolves.toEqual(BUILT);
     expect(getMock).toHaveBeenCalledTimes(3);
@@ -78,9 +79,34 @@ describe('testsApi.waitForBuild', () => {
 
     const result = testsApi.waitForBuild(UUID, { intervalMs: 1000 });
     const assertion = expect(result).rejects.toMatchObject({ response: { status: 503 } });
-    await vi.advanceTimersByTimeAsync(5000);
+    // Backoff: polls at 1, 3, 7, 15 and 31 s.
+    await vi.advanceTimersByTimeAsync(31_000);
     await assertion;
     expect(getMock).toHaveBeenCalledTimes(5);
+  });
+
+  it('never gives up because of rate limiting (429), however long it lasts', async () => {
+    for (let i = 0; i < 8; i++) getMock.mockRejectedValueOnce(httpError(429));
+    getMock.mockResolvedValueOnce(envelope(BUILT));
+
+    const result = testsApi.waitForBuild(UUID, { intervalMs: 1000 });
+    await vi.advanceTimersByTimeAsync(120_000);
+
+    await expect(result).resolves.toEqual(BUILT);
+    expect(getMock).toHaveBeenCalledTimes(9);
+  });
+
+  it('waits out a backend restart of about half a minute and then reports the interrupted build', async () => {
+    const restartEndsAt = Date.now() + 25_000;
+    getMock.mockImplementation(async () => {
+      if (Date.now() < restartEndsAt) throw httpError(502);
+      return envelope({ exists: false });
+    });
+
+    const result = testsApi.waitForBuild(UUID, { intervalMs: 1000 });
+    const assertion = expect(result).rejects.toThrow(BUILD_INTERRUPTED_MESSAGE);
+    await vi.advanceTimersByTimeAsync(40_000);
+    await assertion;
   });
 
   it('fails immediately on a non-transient error', async () => {

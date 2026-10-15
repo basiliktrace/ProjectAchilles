@@ -32,14 +32,22 @@ export interface CertificateListResponse {
 export const BUILD_POLL_INTERVAL_MS = 2000;
 export const BUILD_INTERRUPTED_MESSAGE = 'Build was interrupted because the server restarted. Try again.';
 
-// Poll failures worth retrying: rate limiting (several builds polling at once
-// can hit the per-user API limit), a restarting backend, or no response.
+// Poll failures worth retrying: rate limiting (the per-user API limit is
+// shared with the rest of the dashboard), a restarting backend, or no response.
 const TRANSIENT_POLL_STATUSES = new Set([429, 502, 503, 504]);
 const MAX_CONSECUTIVE_POLL_FAILURES = 5;
+// Each failed poll doubles the wait, up to 16x the interval. With the 2 s
+// default, five server failures in a row span about a minute: long enough
+// for a backend restart to finish and report the interrupted build.
+const MAX_BACKOFF_STEPS = 4;
 
 function isTransientPollError(err: unknown): boolean {
   if (!isAxiosError(err)) return false;
   return !err.response || TRANSIENT_POLL_STATUSES.has(err.response.status);
+}
+
+function isRateLimited(err: unknown): boolean {
+  return isAxiosError(err) && err.response?.status === 429;
 }
 
 function abortError(): DOMException {
@@ -188,18 +196,29 @@ export const testsApi = {
     opts: { intervalMs?: number; signal?: AbortSignal } = {},
   ): Promise<BuildInfo> {
     const intervalMs = opts.intervalMs ?? BUILD_POLL_INTERVAL_MS;
-    let failures = 0;
+    let delay = intervalMs;
+    let streak = 0;   // consecutive failed polls of any transient kind (sets the backoff)
+    let failures = 0; // consecutive server/network failures (decides when to give up)
     for (;;) {
-      await sleep(intervalMs, opts.signal);
+      await sleep(delay, opts.signal);
       let info: BuildInfo;
       try {
         info = await testsApi.getBuildInfo(uuid);
       } catch (err) {
-        failures += 1;
-        if (!isTransientPollError(err) || failures >= MAX_CONSECUTIVE_POLL_FAILURES) throw err;
+        if (!isTransientPollError(err)) throw err;
+        // A 429 means "slow down", not "the build failed": the build keeps
+        // running on the server, so keep waiting however long the limit lasts.
+        if (!isRateLimited(err)) {
+          failures += 1;
+          if (failures >= MAX_CONSECUTIVE_POLL_FAILURES) throw err;
+        }
+        streak += 1;
+        delay = intervalMs * 2 ** Math.min(streak, MAX_BACKOFF_STEPS);
         continue;
       }
+      streak = 0;
       failures = 0;
+      delay = intervalMs;
       if (opts.signal?.aborted) throw abortError();
       if (!info.job) throw new Error(BUILD_INTERRUPTED_MESSAGE);
       if (info.job.status === 'succeeded') return info;
