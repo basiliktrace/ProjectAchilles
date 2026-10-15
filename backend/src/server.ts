@@ -19,6 +19,7 @@ import { createTestsRouter } from './api/tests.routes.js';
 import { errorHandler, notFoundHandler } from './middleware/error.middleware.js';
 import { GitSyncService } from './services/browser/gitSyncService.js';
 import { GitHubMetadataService } from './services/browser/githubMetadataService.js';
+import { localTestsSourceWarning } from './services/browser/testsSource.js';
 import { createAgentRouter } from './api/agent/index.js';
 import usersRoutes from './api/users.routes.js';
 import integrationsRoutes, { alertsService } from './api/integrations.routes.js';
@@ -207,6 +208,8 @@ async function startServer() {
     // No Git sync configured - use local TESTS_SOURCE_PATH
     testsSourcePath = process.env.TESTS_SOURCE_PATH || path.resolve(__dirname, '../../tests_source');
     console.log(`📁 Using local tests source: ${testsSourcePath}`);
+    const sourceWarning = localTestsSourceWarning(testsSourcePath);
+    if (sourceWarning) console.warn(sourceWarning);
   }
 
   // ============ MULTI-SOURCE TEST LIBRARY ============
