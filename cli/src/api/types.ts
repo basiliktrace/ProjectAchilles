@@ -451,14 +451,25 @@ export interface CrowdStrikeAlert {
 
 // ─── Builds ─────────────────────────────────────────────────────────────────
 
+export type BuildJobStatus = 'running' | 'succeeded' | 'failed';
+
+export interface BuildJob {
+  status: BuildJobStatus;
+  startedAt: string;
+  finishedAt?: string;
+  error?: string;
+}
+
 export interface BuildInfo {
-  uuid: string;
-  name: string;
-  platform: string;
-  signed: boolean;
-  size: number;
-  sha256: string;
-  created_at: string;
+  exists: boolean;
+  platform?: { os: string; arch: string };
+  detectedPlatform?: { os: string; arch: string } | null;
+  signed?: boolean;
+  fileSize?: number;
+  builtAt?: string;
+  filename?: string;
+  source?: 'built' | 'uploaded';
+  job?: BuildJob;
 }
 
 export interface EmbedDependency {

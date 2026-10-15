@@ -1,3 +1,4 @@
+import { isAxiosError } from 'axios';
 import { apiClient } from '@/hooks/useAuthenticatedApi';
 import type { BuildInfo, EmbedDependency } from '@/types/test';
 
@@ -26,6 +27,49 @@ export interface CertificateInfo {
 export interface CertificateListResponse {
   certificates: CertificateInfo[];
   activeCertId: string | null;
+}
+
+export const BUILD_POLL_INTERVAL_MS = 2000;
+export const BUILD_INTERRUPTED_MESSAGE = 'Build was interrupted because the server restarted. Try again.';
+
+// Poll failures worth retrying: rate limiting (the per-user API limit is
+// shared with the rest of the dashboard), a restarting backend, or no response.
+const TRANSIENT_POLL_STATUSES = new Set([429, 502, 503, 504]);
+const MAX_CONSECUTIVE_POLL_FAILURES = 5;
+// Each failed poll doubles the wait, up to 16x the interval. With the 2 s
+// default, five server failures in a row span about a minute: long enough
+// for a backend restart to finish and report the interrupted build.
+const MAX_BACKOFF_STEPS = 4;
+
+function isTransientPollError(err: unknown): boolean {
+  if (!isAxiosError(err)) return false;
+  return !err.response || TRANSIENT_POLL_STATUSES.has(err.response.status);
+}
+
+function isRateLimited(err: unknown): boolean {
+  return isAxiosError(err) && err.response?.status === 429;
+}
+
+function abortError(): DOMException {
+  return new DOMException('Build polling aborted', 'AbortError');
+}
+
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(abortError());
+      return;
+    }
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(abortError());
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+    signal?.addEventListener('abort', onAbort, { once: true });
+  });
 }
 
 export const testsApi = {
@@ -128,9 +172,58 @@ export const testsApi = {
     return response.data.data;
   },
 
-  async buildTest(uuid: string): Promise<BuildInfo> {
-    const response = await apiClient.post(`/tests/builds/${uuid}`);
-    return response.data.data;
+  /**
+   * Build & sign a test. The build runs in the background on the server
+   * (a cold Go build outlasts proxy timeouts), so this starts it with
+   * ?async=true and polls until it finishes.
+   */
+  async buildTest(uuid: string, opts: { signal?: AbortSignal } = {}): Promise<BuildInfo> {
+    const response = await apiClient.post(`/tests/builds/${uuid}`, null, { params: { async: 'true' } });
+    // A backend without background builds ignores ?async and answers 200
+    // with the finished BuildInfo.
+    if (response.status !== 202) return response.data.data;
+    return testsApi.waitForBuild(uuid, opts);
+  },
+
+  /**
+   * Poll GET /tests/builds/:uuid until the test's build job finishes.
+   * Resolves with BuildInfo on success. Rejects with the build's error on
+   * failure, BUILD_INTERRUPTED_MESSAGE if the server lost the job (restart),
+   * or an AbortError when `signal` aborts.
+   */
+  async waitForBuild(
+    uuid: string,
+    opts: { intervalMs?: number; signal?: AbortSignal } = {},
+  ): Promise<BuildInfo> {
+    const intervalMs = opts.intervalMs ?? BUILD_POLL_INTERVAL_MS;
+    let delay = intervalMs;
+    let streak = 0;   // consecutive failed polls of any transient kind (sets the backoff)
+    let failures = 0; // consecutive server/network failures (decides when to give up)
+    for (;;) {
+      await sleep(delay, opts.signal);
+      let info: BuildInfo;
+      try {
+        info = await testsApi.getBuildInfo(uuid);
+      } catch (err) {
+        if (!isTransientPollError(err)) throw err;
+        // A 429 means "slow down", not "the build failed": the build keeps
+        // running on the server, so keep waiting however long the limit lasts.
+        if (!isRateLimited(err)) {
+          failures += 1;
+          if (failures >= MAX_CONSECUTIVE_POLL_FAILURES) throw err;
+        }
+        streak += 1;
+        delay = intervalMs * 2 ** Math.min(streak, MAX_BACKOFF_STEPS);
+        continue;
+      }
+      streak = 0;
+      failures = 0;
+      delay = intervalMs;
+      if (opts.signal?.aborted) throw abortError();
+      if (!info.job) throw new Error(BUILD_INTERRUPTED_MESSAGE);
+      if (info.job.status === 'succeeded') return info;
+      if (info.job.status === 'failed') throw new Error(info.job.error || 'Build failed');
+    }
   },
 
   async deleteBuild(uuid: string): Promise<{ success: boolean }> {

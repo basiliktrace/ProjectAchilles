@@ -19,9 +19,11 @@ registerCommand({
       description: 'Build and sign a test binary',
       args: [{ name: 'uuid', required: true }],
       handler: async (ctx) => {
-        ctx.output.raw(`  Building ${ctx.args.uuid}...`);
+        ctx.output.raw(`  Building ${ctx.args.uuid}… (a first build can take several minutes)`);
         const build = await api.createBuild(ctx.args.uuid);
-        ctx.output.success(`Built ${build.name} — ${formatBytes(build.size)}, signed: ${build.signed}`);
+        ctx.output.success(
+          `Built ${build.filename ?? ctx.args.uuid} — ${formatBytes(build.fileSize ?? 0)}, signed: ${build.signed ?? false}`,
+        );
       },
     },
     download: {

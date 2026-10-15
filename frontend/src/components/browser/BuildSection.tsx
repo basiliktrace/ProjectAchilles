@@ -36,8 +36,45 @@ export default function BuildSection({ uuid }: BuildSectionProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const binaryInputRef = useRef<HTMLInputElement>(null);
   const pendingUploadFilename = useRef<string | null>(null);
+  // The build this section is following (started here, or resumed after a
+  // page refresh). Aborted when the test changes or the section unmounts.
+  const followRef = useRef<AbortController | null>(null);
 
   const capabilities = useCapabilities();
+
+  const followBuild = useCallback(async (start: boolean) => {
+    followRef.current?.abort();
+    const controller = new AbortController();
+    followRef.current = controller;
+    setBuilding(true);
+    setError(null);
+    try {
+      const info = start
+        ? await testsApi.buildTest(uuid, { signal: controller.signal })
+        : await testsApi.waitForBuild(uuid, { signal: controller.signal });
+      setBuildInfo(info);
+    } catch (err: unknown) {
+      if (controller.signal.aborted) return;
+      const msg = err instanceof Error ? err.message : 'Build failed';
+      const axiosErr = err as { response?: { data?: { error?: string } } };
+      setError(axiosErr?.response?.data?.error || msg);
+    } finally {
+      // Only the build still being followed may clear the spinner.
+      if (followRef.current === controller) {
+        followRef.current = null;
+        setBuilding(false);
+      }
+    }
+  }, [uuid]);
+
+  // Stop following (and drop the old test's error) when the test changes or
+  // the section unmounts.
+  useEffect(() => () => {
+    followRef.current?.abort();
+    followRef.current = null;
+    setBuilding(false);
+    setError(null);
+  }, [uuid]);
 
   const fetchData = useCallback(async () => {
     try {
@@ -52,30 +89,26 @@ export default function BuildSection({ uuid }: BuildSectionProps) {
       const [info, embedDeps] = await Promise.all(promises);
       setBuildInfo(info);
       setDeps(embedDeps);
+      // The build survives page refreshes on the server: pick it back up, or
+      // show why the last attempt failed.
+      if (info.job?.status === 'running') {
+        void followBuild(false);
+      } else if (info.job?.status === 'failed' && !info.exists) {
+        setError(info.job.error || 'Build failed');
+      }
     } catch {
       // Non-critical — just show empty state
     } finally {
       setLoading(false);
     }
-  }, [uuid, capabilities.build]);
+  }, [uuid, capabilities.build, followBuild]);
 
   useEffect(() => {
     fetchData();
   }, [fetchData]);
 
   async function handleBuild() {
-    setBuilding(true);
-    setError(null);
-    try {
-      const info = await testsApi.buildTest(uuid);
-      setBuildInfo(info);
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : 'Build failed';
-      const axiosErr = err as { response?: { data?: { error?: string } } };
-      setError(axiosErr?.response?.data?.error || msg);
-    } finally {
-      setBuilding(false);
-    }
+    await followBuild(true);
   }
 
   async function handleDelete() {

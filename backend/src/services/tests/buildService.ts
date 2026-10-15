@@ -5,8 +5,9 @@ import * as path from 'path';
 import * as os from 'os';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
-import type { BuildInfo, BuildMetadata, EmbedDependency, PlatformSettings } from '../../types/tests.js';
+import type { BuildInfo, BuildJob, BuildMetadata, EmbedDependency, PlatformSettings } from '../../types/tests.js';
 import type { TestsSettingsService } from './settings.js';
+import { BuildJobs } from './buildJobs.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -95,12 +96,42 @@ const BUILD_TIMEOUT = 300_000; // 5 minutes
 export class BuildService {
   private settingsService: TestsSettingsService;
   private testSourcePaths: string[];
+  private jobs = new BuildJobs<BuildInfo>();
 
   constructor(settingsService: TestsSettingsService, testSourcePaths: string[] | string) {
     this.settingsService = settingsService;
     this.testSourcePaths = typeof testSourcePaths === 'string'
       ? [testSourcePaths]
       : testSourcePaths;
+  }
+
+  /**
+   * Start the build for `uuid`, or join it if one is already running.
+   * The returned promise settles with buildAndSign's result; getBuildJob()
+   * exposes the same build's status for callers that don't wait.
+   */
+  startBuild(uuid: string): { job: BuildJob; promise: Promise<BuildInfo> } {
+    return this.jobs.run(uuid, async () => {
+      try {
+        return await this.buildAndSign(uuid);
+      } catch (err) {
+        // A background build has no request to fail, so the error middleware
+        // never sees it; log here so the host keeps a record of every failure.
+        // Constant format string: console.error treats the first argument as
+        // printf-style, so the id must never be interpolated into it.
+        console.error('Build failed for %s: %s', uuid, err instanceof Error ? err.message : String(err));
+        throw err;
+      }
+    });
+  }
+
+  /** Latest build job for `uuid` since this process started, if any. */
+  getBuildJob(uuid: string): BuildJob | undefined {
+    return this.jobs.get(uuid);
+  }
+
+  isBuilding(uuid: string): boolean {
+    return this.jobs.isRunning(uuid);
   }
 
   /**

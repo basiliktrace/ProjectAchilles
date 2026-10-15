@@ -180,6 +180,14 @@ export function createTestsRouter(options: { testSourcePaths: string[]; testsSou
     }
   }
 
+  // A build writes into the test's source dir and BUILDS_DIR/<uuid>; deleting
+  // or uploading into those while it runs would corrupt the result.
+  function assertNotBuilding(uuid: string): void {
+    if (buildService.isBuilding(uuid)) {
+      throw new AppError('Build in progress for this test', 409);
+    }
+  }
+
   // GET /api/tests/builds - List UUIDs of tests that currently have a binary
   router.get('/builds', requirePermission('tests:builds:read'), asyncHandler(async (_req, res) => {
     res.json({ success: true, data: buildService.listBuiltUuids() });
@@ -190,14 +198,25 @@ export function createTestsRouter(options: { testSourcePaths: string[]; testsSou
     validateUuid(req.params.uuid);
     const info = buildService.getBuildInfo(req.params.uuid);
     const detectedPlatform = buildService.getDetectedPlatform(req.params.uuid);
-    res.json({ success: true, data: { ...info, detectedPlatform } });
+    const job = buildService.getBuildJob(req.params.uuid);
+    res.json({ success: true, data: { ...info, detectedPlatform, ...(job && { job }) } });
   }));
 
   // POST /api/tests/builds/:uuid - Build & sign
+  // Default: wait for the build and return BuildInfo (unchanged contract).
+  // ?async=true: return 202 with the job at once; poll GET /builds/:uuid.
+  // Builds can take minutes, longer than reverse proxies wait (nginx: 60 s).
   router.post('/builds/:uuid', requirePermission('tests:builds:create'), asyncHandler(async (req, res) => {
     validateUuid(req.params.uuid);
+    const { job, promise } = buildService.startBuild(req.params.uuid);
+
+    if (req.query.async === 'true') {
+      res.status(202).json({ success: true, data: { job } });
+      return;
+    }
+
     try {
-      const info = await buildService.buildAndSign(req.params.uuid);
+      const info = await promise;
       res.json({ success: true, data: info });
     } catch (err) {
       if (err instanceof BuildError) {
@@ -210,6 +229,7 @@ export function createTestsRouter(options: { testSourcePaths: string[]; testsSou
   // DELETE /api/tests/builds/:uuid - Delete build
   router.delete('/builds/:uuid', requirePermission('tests:builds:delete'), asyncHandler(async (req, res) => {
     validateUuid(req.params.uuid);
+    assertNotBuilding(req.params.uuid);
     buildService.deleteBuild(req.params.uuid);
     res.json({ success: true });
   }));
@@ -234,6 +254,7 @@ export function createTestsRouter(options: { testSourcePaths: string[]; testsSou
   // POST /api/tests/builds/:uuid/upload - Upload embed dependency file
   router.post('/builds/:uuid/upload', requirePermission('tests:builds:create'), upload.single('file'), asyncHandler(async (req, res) => {
     validateUuid(req.params.uuid);
+    assertNotBuilding(req.params.uuid);
 
     if (!req.file) {
       throw new AppError('No file uploaded', 400);
@@ -255,6 +276,7 @@ export function createTestsRouter(options: { testSourcePaths: string[]; testsSou
   // POST /api/tests/builds/:uuid/upload-binary - Upload pre-built test binary
   router.post('/builds/:uuid/upload-binary', requirePermission('tests:builds:create'), upload.single('file'), asyncHandler(async (req, res) => {
     validateUuid(req.params.uuid);
+    assertNotBuilding(req.params.uuid);
 
     if (!req.file) {
       throw new AppError('No file uploaded', 400);

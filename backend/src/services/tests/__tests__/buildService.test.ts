@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { promisify } from 'util';
+import type { BuildInfo } from '../../../types/tests.js';
 
 // ── Mock setup ──────────────────────────────────────────────────────
 
@@ -1471,6 +1472,61 @@ var data string
       const info = service.getBuildInfo(VALID_UUID);
 
       expect(info.source).toBeUndefined();
+    });
+  });
+
+  // ── Build jobs ────────────────────────────────────────────
+
+  describe('build jobs', () => {
+    it('runs buildAndSign once, joins a running build, and records the outcome', async () => {
+      let finish!: (info: BuildInfo) => void;
+      const spy = vi.spyOn(service, 'buildAndSign').mockImplementation(
+        () => new Promise<BuildInfo>((resolve) => { finish = resolve; }),
+      );
+
+      const first = service.startBuild(VALID_UUID);
+      const second = service.startBuild(VALID_UUID);
+
+      expect(spy).toHaveBeenCalledTimes(1);
+      expect(spy).toHaveBeenCalledWith(VALID_UUID);
+      expect(second.promise).toBe(first.promise);
+      expect(service.isBuilding(VALID_UUID)).toBe(true);
+      expect(service.getBuildJob(VALID_UUID)?.status).toBe('running');
+
+      finish({ exists: true });
+      await first.promise;
+
+      expect(service.isBuilding(VALID_UUID)).toBe(false);
+      expect(service.getBuildJob(VALID_UUID)?.status).toBe('succeeded');
+    });
+
+    it('logs a failed build once, even when callers joined it', async () => {
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      vi.spyOn(service, 'buildAndSign').mockRejectedValue(new Error('go build: undefined: foo'));
+
+      const first = service.startBuild(VALID_UUID);
+      service.startBuild(VALID_UUID);
+      await expect(first.promise).rejects.toThrow('go build: undefined: foo');
+
+      expect(errorSpy).toHaveBeenCalledTimes(1);
+      expect(errorSpy).toHaveBeenCalledWith('Build failed for %s: %s', VALID_UUID, 'go build: undefined: foo');
+      errorSpy.mockRestore();
+    });
+
+    it('never puts the test id into the log format string', async () => {
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const hostileId = 'x%s%o';
+      vi.spyOn(service, 'buildAndSign').mockRejectedValue(new Error('boom'));
+
+      await expect(service.startBuild(hostileId).promise).rejects.toThrow('boom');
+
+      expect(errorSpy.mock.calls[0][0]).not.toContain(hostileId);
+      errorSpy.mockRestore();
+    });
+
+    it('has no job for a test that was never built in this process', () => {
+      expect(service.getBuildJob(VALID_UUID)).toBeUndefined();
+      expect(service.isBuilding(VALID_UUID)).toBe(false);
     });
   });
 });
