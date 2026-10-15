@@ -82,7 +82,9 @@ New-Item -ItemType Directory -Path (Join-Path $root 'frontend') | Out-Null
 [IO.File]::WriteAllText((Join-Path $root 'docker-compose.yml'), "services: {}`n")
 Copy-Item $EnvExample (Join-Path (Join-Path $root 'backend') '.env.example')
 [IO.File]::WriteAllText((Join-Path (Join-Path $root 'frontend') 'docker-entrypoint.sh'), $crlf)
-[IO.File]::WriteAllText((Join-Path $root 'start.sh'), $crlf)
+# No *.sh in the root, matching the real repo (setup.sh and start.sh moved to
+# scripts/ in March 2026). An invented root start.sh here once hid a Phase 4
+# crash that hit every real checkout. Scenario 2 adds one to cover that path.
 $backendEnv = Join-Path (Join-Path $root 'backend') '.env'
 $rootEnv = Join-Path $root '.env'
 
@@ -130,12 +132,14 @@ if (Test-Path $rootEnv) {
 }
 else { Check 'root .env written' $false }
 Check 'entrypoint CRLF fixed' (-not (HasCR (Join-Path (Join-Path $root 'frontend') 'docker-entrypoint.sh')))
-Check 'root *.sh CRLF fixed' (-not (HasCR (Join-Path $root 'start.sh')))
 Check 'docker compose up -d --build called' ($global:DockerCalls -contains 'compose up -d --build')
 
-# 2. Re-run and keep the existing config (the menu default).
+# 2. Re-run and keep the existing config (the menu default), now with a CRLF
+#    shell script in the root as well.
 Remove-Item $rootEnv -ErrorAction SilentlyContinue
+[IO.File]::WriteAllText((Join-Path $root 'start.sh'), $crlf)
 Invoke-Installer 'keep' @('') @{}
+Check 'keep: root *.sh CRLF fixed' (-not (HasCR (Join-Path $root 'start.sh')))
 Check 'keep: root .env re-created with the key' ((Test-Path $rootEnv) -and (EnvMap $rootEnv)['CLERK_PUBLISHABLE_KEY'] -eq $pub)
 Check 'keep: docker compose up called, no ES profile' ($global:DockerCalls -contains 'compose up -d --build')
 
