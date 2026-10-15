@@ -5,8 +5,9 @@ import * as path from 'path';
 import * as os from 'os';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
-import type { BuildInfo, BuildMetadata, EmbedDependency, PlatformSettings } from '../../types/tests.js';
+import type { BuildInfo, BuildJob, BuildMetadata, EmbedDependency, PlatformSettings } from '../../types/tests.js';
 import type { TestsSettingsService } from './settings.js';
+import { BuildJobs } from './buildJobs.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -95,12 +96,31 @@ const BUILD_TIMEOUT = 300_000; // 5 minutes
 export class BuildService {
   private settingsService: TestsSettingsService;
   private testSourcePaths: string[];
+  private jobs = new BuildJobs<BuildInfo>();
 
   constructor(settingsService: TestsSettingsService, testSourcePaths: string[] | string) {
     this.settingsService = settingsService;
     this.testSourcePaths = typeof testSourcePaths === 'string'
       ? [testSourcePaths]
       : testSourcePaths;
+  }
+
+  /**
+   * Start the build for `uuid`, or join it if one is already running.
+   * The returned promise settles with buildAndSign's result; getBuildJob()
+   * exposes the same build's status for callers that don't wait.
+   */
+  startBuild(uuid: string): { job: BuildJob; promise: Promise<BuildInfo> } {
+    return this.jobs.run(uuid, () => this.buildAndSign(uuid));
+  }
+
+  /** Latest build job for `uuid` since this process started, if any. */
+  getBuildJob(uuid: string): BuildJob | undefined {
+    return this.jobs.get(uuid);
+  }
+
+  isBuilding(uuid: string): boolean {
+    return this.jobs.isRunning(uuid);
   }
 
   /**

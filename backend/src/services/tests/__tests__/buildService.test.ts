@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { promisify } from 'util';
+import type { BuildInfo } from '../../../types/tests.js';
 
 // ── Mock setup ──────────────────────────────────────────────────────
 
@@ -1471,6 +1472,37 @@ var data string
       const info = service.getBuildInfo(VALID_UUID);
 
       expect(info.source).toBeUndefined();
+    });
+  });
+
+  // ── Build jobs ────────────────────────────────────────────
+
+  describe('build jobs', () => {
+    it('runs buildAndSign once, joins a running build, and records the outcome', async () => {
+      let finish!: (info: BuildInfo) => void;
+      const spy = vi.spyOn(service, 'buildAndSign').mockImplementation(
+        () => new Promise<BuildInfo>((resolve) => { finish = resolve; }),
+      );
+
+      const first = service.startBuild(VALID_UUID);
+      const second = service.startBuild(VALID_UUID);
+
+      expect(spy).toHaveBeenCalledTimes(1);
+      expect(spy).toHaveBeenCalledWith(VALID_UUID);
+      expect(second.promise).toBe(first.promise);
+      expect(service.isBuilding(VALID_UUID)).toBe(true);
+      expect(service.getBuildJob(VALID_UUID)?.status).toBe('running');
+
+      finish({ exists: true });
+      await first.promise;
+
+      expect(service.isBuilding(VALID_UUID)).toBe(false);
+      expect(service.getBuildJob(VALID_UUID)?.status).toBe('succeeded');
+    });
+
+    it('has no job for a test that was never built in this process', () => {
+      expect(service.getBuildJob(VALID_UUID)).toBeUndefined();
+      expect(service.isBuilding(VALID_UUID)).toBe(false);
     });
   });
 });

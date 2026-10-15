@@ -41,16 +41,25 @@ vi.mock('../../services/tests/settings.js', () => ({
 // Mock BuildService
 const mockUploadBinary = vi.fn();
 const mockListBuiltUuids = vi.fn();
+const mockStartBuild = vi.fn();
+const mockGetBuildJob = vi.fn().mockReturnValue(undefined);
+const mockIsBuilding = vi.fn().mockReturnValue(false);
+const mockGetBuildInfo = vi.fn();
+const mockDeleteBuild = vi.fn();
+const mockSaveUploadedFile = vi.fn();
 
 vi.mock('../../services/tests/buildService.js', () => ({
   BuildService: class MockBuildService {
-    getBuildInfo = vi.fn();
+    getBuildInfo = mockGetBuildInfo;
     getDetectedPlatform = vi.fn().mockReturnValue(null);
     buildAndSign = vi.fn();
-    deleteBuild = vi.fn();
+    startBuild = mockStartBuild;
+    getBuildJob = mockGetBuildJob;
+    isBuilding = mockIsBuilding;
+    deleteBuild = mockDeleteBuild;
     getBinaryPath = vi.fn();
     getEmbedDependencies = vi.fn();
-    saveUploadedFile = vi.fn();
+    saveUploadedFile = mockSaveUploadedFile;
     uploadBinary = mockUploadBinary;
     listBuiltUuids = mockListBuiltUuids;
   },
@@ -59,6 +68,7 @@ vi.mock('../../services/tests/buildService.js', () => ({
 
 const { createTestsRouter } = await import('../tests.routes.js');
 const { errorHandler } = await import('../../middleware/error.middleware.js');
+const { BuildError } = await import('../../services/tests/buildService.js');
 
 function createApp() {
   const app = express();
@@ -261,6 +271,141 @@ describe('tests routes', () => {
 
       expect(res.status).toBe(400);
       expect(res.body.error).toContain('missing MZ header');
+    });
+  });
+
+  describe('build jobs', () => {
+    const VALID_UUID = '12345678-1234-1234-1234-123456789abc';
+    const RUNNING = { status: 'running', startedAt: '2026-10-14T00:00:00.000Z' };
+    const BUILT = {
+      exists: true,
+      platform: { os: 'windows', arch: 'amd64' },
+      signed: true,
+      fileSize: 2048,
+      builtAt: '2026-10-14T00:05:00.000Z',
+      filename: `${VALID_UUID}.exe`,
+      source: 'built',
+    };
+
+    beforeEach(() => {
+      mockStartBuild.mockReset();
+      mockGetBuildJob.mockReset().mockReturnValue(undefined);
+      mockIsBuilding.mockReset().mockReturnValue(false);
+      mockGetBuildInfo.mockReset().mockReturnValue({ exists: false });
+      mockDeleteBuild.mockReset();
+      mockSaveUploadedFile.mockReset();
+      mockUploadBinary.mockReset();
+    });
+
+    describe('POST /api/tests/builds/:uuid', () => {
+      it('waits for the build and returns BuildInfo by default (unchanged contract)', async () => {
+        mockStartBuild.mockImplementation(() => ({ job: RUNNING, promise: Promise.resolve(BUILT) }));
+
+        const res = await request(createApp()).post(`/api/tests/builds/${VALID_UUID}`);
+
+        expect(res.status).toBe(200);
+        expect(res.body).toEqual({ success: true, data: BUILT });
+        expect(mockStartBuild).toHaveBeenCalledWith(VALID_UUID);
+      });
+
+      it('returns 422 with the build error message when a synchronous build fails', async () => {
+        mockStartBuild.mockImplementation(() => ({
+          job: RUNNING,
+          promise: Promise.reject(new BuildError('go build: undefined: foo')),
+        }));
+
+        const res = await request(createApp()).post(`/api/tests/builds/${VALID_UUID}`);
+
+        expect(res.status).toBe(422);
+        expect(res.body.error).toBe('go build: undefined: foo');
+      });
+
+      it('returns 202 with the job immediately when async=true', async () => {
+        // A promise that never settles proves the route does not wait for it.
+        mockStartBuild.mockImplementation(() => ({ job: RUNNING, promise: new Promise(() => {}) }));
+
+        const res = await request(createApp()).post(`/api/tests/builds/${VALID_UUID}?async=true`);
+
+        expect(res.status).toBe(202);
+        expect(res.body).toEqual({ success: true, data: { job: RUNNING } });
+      });
+
+      it('treats any other async value as synchronous', async () => {
+        mockStartBuild.mockImplementation(() => ({ job: RUNNING, promise: Promise.resolve(BUILT) }));
+
+        const res = await request(createApp()).post(`/api/tests/builds/${VALID_UUID}?async=1`);
+
+        expect(res.status).toBe(200);
+        expect(res.body.data).toEqual(BUILT);
+      });
+
+      it('rejects an invalid UUID without starting a build', async () => {
+        const res = await request(createApp()).post('/api/tests/builds/not-a-uuid?async=true');
+
+        expect(res.status).toBe(400);
+        expect(mockStartBuild).not.toHaveBeenCalled();
+      });
+    });
+
+    describe('GET /api/tests/builds/:uuid', () => {
+      it('includes the latest job when one exists', async () => {
+        mockGetBuildJob.mockReturnValue(RUNNING);
+
+        const res = await request(createApp()).get(`/api/tests/builds/${VALID_UUID}`);
+
+        expect(res.status).toBe(200);
+        expect(res.body.data.job).toEqual(RUNNING);
+        expect(res.body.data.exists).toBe(false);
+      });
+
+      it('omits job when there is none', async () => {
+        const res = await request(createApp()).get(`/api/tests/builds/${VALID_UUID}`);
+
+        expect(res.status).toBe(200);
+        expect(res.body.data).not.toHaveProperty('job');
+      });
+    });
+
+    describe('conflicts while building', () => {
+      beforeEach(() => {
+        mockIsBuilding.mockReturnValue(true);
+      });
+
+      it('DELETE returns 409 and keeps the build', async () => {
+        const res = await request(createApp()).delete(`/api/tests/builds/${VALID_UUID}`);
+
+        expect(res.status).toBe(409);
+        expect(res.body.error).toBe('Build in progress for this test');
+        expect(mockDeleteBuild).not.toHaveBeenCalled();
+      });
+
+      it('embed upload returns 409', async () => {
+        const res = await request(createApp())
+          .post(`/api/tests/builds/${VALID_UUID}/upload`)
+          .field('filename', 'payload.exe')
+          .attach('file', Buffer.from([0x4D, 0x5A]), 'payload.exe');
+
+        expect(res.status).toBe(409);
+        expect(mockSaveUploadedFile).not.toHaveBeenCalled();
+      });
+
+      it('binary upload returns 409', async () => {
+        const res = await request(createApp())
+          .post(`/api/tests/builds/${VALID_UUID}/upload-binary`)
+          .attach('file', Buffer.from([0x4D, 0x5A, 0x00]), 'test.exe');
+
+        expect(res.status).toBe(409);
+        expect(mockUploadBinary).not.toHaveBeenCalled();
+      });
+
+      it('DELETE works again once the build is done', async () => {
+        mockIsBuilding.mockReturnValue(false);
+
+        const res = await request(createApp()).delete(`/api/tests/builds/${VALID_UUID}`);
+
+        expect(res.status).toBe(200);
+        expect(mockDeleteBuild).toHaveBeenCalledWith(VALID_UUID);
+      });
     });
   });
 });
