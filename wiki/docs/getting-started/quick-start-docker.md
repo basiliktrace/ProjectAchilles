@@ -113,8 +113,10 @@ If you've already cloned with Windows line endings, re-clone after changing this
 ```powershell
 git clone https://github.com/projectachilles/ProjectAchilles.git
 cd ProjectAchilles
-.\scripts\Install-ProjectAchilles.ps1
+powershell -ExecutionPolicy Bypass -File .\scripts\Install-ProjectAchilles.ps1
 ```
+
+`-ExecutionPolicy Bypass` applies only to that one PowerShell process. Windows blocks unsigned scripts by default ("running scripts is disabled on this system"), and this leaves your system policy unchanged. Windows PowerShell 5.1, built into Windows 10 and 11, is enough.
 
 The PowerShell script will:
 - Check prerequisites (Docker Desktop, WSL2, Git)

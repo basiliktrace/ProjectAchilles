@@ -132,8 +132,10 @@ If already cloned with Windows line endings, delete and re-clone.
 ### PowerShell Bootstrap
 
 ```powershell
-.\scripts\Install-ProjectAchilles.ps1
+powershell -ExecutionPolicy Bypass -File .\scripts\Install-ProjectAchilles.ps1
 ```
+
+`-ExecutionPolicy Bypass` applies only to that one PowerShell process. Windows blocks unsigned scripts by default ("running scripts is disabled on this system"), and this leaves your system policy unchanged. Windows PowerShell 5.1, built into Windows 10 and 11, is enough.
 
 The script checks prerequisites (Docker Desktop, WSL2, Git), fixes line endings, configures `.env` interactively, builds images, and starts services.
 

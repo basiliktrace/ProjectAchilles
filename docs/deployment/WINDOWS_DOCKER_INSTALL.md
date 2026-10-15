@@ -28,7 +28,7 @@ Complete guide for installing and running ProjectAchilles on Windows using Docke
 | Requirement | Minimum | Recommended |
 |-------------|---------|-------------|
 | Windows | 10 (21H2+) or 11 | Windows 11 |
-| PowerShell | 7.0+ | Latest version |
+| PowerShell | 5.1 (built into Windows) | 7.x |
 | RAM | 8 GB | 16 GB (32 GB if using Elasticsearch) |
 | Disk | 10 GB free | 20 GB free |
 | CPU | 64-bit with virtualization | 4+ cores |
@@ -174,8 +174,10 @@ ProjectAchilles uses [Clerk](https://clerk.com) for authentication. You need a f
 The all-in-one PowerShell script handles configuration **and** building/launching in a single step:
 
 ```powershell
-.\scripts\Install-ProjectAchilles.ps1
+powershell -ExecutionPolicy Bypass -File .\scripts\Install-ProjectAchilles.ps1
 ```
+
+`-ExecutionPolicy Bypass` applies only to that one PowerShell process. Windows blocks unsigned scripts by default ("running scripts is disabled on this system"), and this leaves your system policy unchanged. Windows PowerShell 5.1, built into Windows 10 and 11, is enough.
 
 The script will:
 - Check that Git, Docker, and Docker Compose are installed and running
@@ -191,13 +193,13 @@ The script will:
 **Quick mode** (minimal prompts — just provide Clerk keys):
 
 ```powershell
-.\scripts\Install-ProjectAchilles.ps1 -Quick -ClerkPublishableKey pk_test_YOUR_KEY -ClerkSecretKey sk_test_YOUR_KEY
+powershell -ExecutionPolicy Bypass -File .\scripts\Install-ProjectAchilles.ps1 -Quick -ClerkPublishableKey pk_test_YOUR_KEY -ClerkSecretKey sk_test_YOUR_KEY
 ```
 
 **With local Elasticsearch** (skips the ES prompt):
 
 ```powershell
-.\scripts\Install-ProjectAchilles.ps1 -WithElasticsearch
+powershell -ExecutionPolicy Bypass -File .\scripts\Install-ProjectAchilles.ps1 -WithElasticsearch
 ```
 
 > If you use the bootstrap script, skip to [Section 8: Verify Installation](#8-verify-installation) — the script handles Sections 6 and 7 automatically.
