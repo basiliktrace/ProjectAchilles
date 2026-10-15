@@ -111,7 +111,16 @@ export class BuildService {
    * exposes the same build's status for callers that don't wait.
    */
   startBuild(uuid: string): { job: BuildJob; promise: Promise<BuildInfo> } {
-    return this.jobs.run(uuid, () => this.buildAndSign(uuid));
+    return this.jobs.run(uuid, async () => {
+      try {
+        return await this.buildAndSign(uuid);
+      } catch (err) {
+        // A background build has no request to fail, so the error middleware
+        // never sees it; log here so the host keeps a record of every failure.
+        console.error(`Build failed for ${uuid}:`, err instanceof Error ? err.message : String(err));
+        throw err;
+      }
+    });
   }
 
   /** Latest build job for `uuid` since this process started, if any. */

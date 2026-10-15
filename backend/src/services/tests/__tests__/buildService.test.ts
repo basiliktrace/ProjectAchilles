@@ -1500,6 +1500,19 @@ var data string
       expect(service.getBuildJob(VALID_UUID)?.status).toBe('succeeded');
     });
 
+    it('logs a failed build once, even when callers joined it', async () => {
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      vi.spyOn(service, 'buildAndSign').mockRejectedValue(new Error('go build: undefined: foo'));
+
+      const first = service.startBuild(VALID_UUID);
+      service.startBuild(VALID_UUID);
+      await expect(first.promise).rejects.toThrow('go build: undefined: foo');
+
+      expect(errorSpy).toHaveBeenCalledTimes(1);
+      expect(errorSpy).toHaveBeenCalledWith(`Build failed for ${VALID_UUID}:`, 'go build: undefined: foo');
+      errorSpy.mockRestore();
+    });
+
     it('has no job for a test that was never built in this process', () => {
       expect(service.getBuildJob(VALID_UUID)).toBeUndefined();
       expect(service.isBuilding(VALID_UUID)).toBe(false);
