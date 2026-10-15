@@ -108,8 +108,10 @@ docker compose --profile elasticsearch up -d
 ```powershell
 git clone https://github.com/projectachilles/ProjectAchilles.git
 cd ProjectAchilles
-.\scripts\Install-ProjectAchilles.ps1
+powershell -ExecutionPolicy Bypass -File .\scripts\Install-ProjectAchilles.ps1
 ```
+
+`-ExecutionPolicy Bypass` applies only to that one PowerShell process. Windows blocks unsigned scripts by default ("running scripts is disabled on this system"), and this leaves your system policy unchanged. Windows PowerShell 5.1, built into Windows 10 and 11, is enough.
 
 The PowerShell script checks prerequisites, fixes line endings, configures `backend/.env` interactively (and copies the Clerk publishable key into the root `.env` that Docker Compose reads), builds Docker images, and opens the dashboard. See [Windows Docker Installation](docs/deployment/WINDOWS_DOCKER_INSTALL.md) for the full manual guide.
 
