@@ -172,7 +172,9 @@ function Read-SecurePrompt {
     $secure = Read-Host -Prompt $Prompt -AsSecureString
     $bstr = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
     try {
-        return [System.Runtime.InteropServices.Marshal]::PtrToStringAuto($bstr)
+        # A BSTR is always UTF-16. PtrToStringAuto reads it as UTF-8 on
+        # pwsh for Linux/macOS and returns only the first character.
+        return [System.Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr)
     }
     finally {
         [System.Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr)
@@ -507,7 +509,9 @@ function Invoke-PhaseLineEndings {
     # Collect all .sh files in the project root (non-recursive for top-level)
     $shellFiles += Get-ChildItem -Path $script:ProjectRoot -Filter '*.sh' -ErrorAction SilentlyContinue
     # Also check the critical entrypoint
-    $entrypoint = Join-Path $script:ProjectRoot 'frontend' 'docker-entrypoint.sh'
+    # Nested Join-Path: Windows PowerShell 5.1 has no -AdditionalChildPath,
+    # so a third positional argument is an error there.
+    $entrypoint = Join-Path (Join-Path $script:ProjectRoot 'frontend') 'docker-entrypoint.sh'
     if ((Test-Path $entrypoint) -and ($shellFiles.FullName -notcontains $entrypoint)) {
         $shellFiles += Get-Item $entrypoint
     }
@@ -538,8 +542,8 @@ function Invoke-PhaseLineEndings {
 function Invoke-PhaseConfigDetection {
     Write-Step 5 "Checking existing configuration..."
 
-    $script:EnvFile = Join-Path $script:ProjectRoot 'backend' '.env'
-    $script:EnvExample = Join-Path $script:ProjectRoot 'backend' '.env.example'
+    $script:EnvFile = Join-Path (Join-Path $script:ProjectRoot 'backend') '.env'
+    $script:EnvExample = Join-Path (Join-Path $script:ProjectRoot 'backend') '.env.example'
     $script:ConfigAction = 'fresh'  # fresh | keep | reconfigure
 
     if (Test-Path $script:EnvFile) {
@@ -591,6 +595,14 @@ function Invoke-PhaseConfiguration {
     Write-Step 6 "Configuring environment..."
 
     if ($script:ConfigAction -eq 'keep') {
+        # The build and health-check phases still need the Elasticsearch mode
+        # (StrictMode makes reading it unset an error). Take it from the kept
+        # config, so a local-Elasticsearch install restarts with its profile.
+        $kept = Read-EnvFile -Path $script:EnvFile
+        $script:EsMode = 'skip'
+        if ($WithElasticsearch -or ($kept.ContainsKey('ELASTICSEARCH_NODE') -and $kept['ELASTICSEARCH_NODE'] -eq 'http://elasticsearch:9200')) {
+            $script:EsMode = 'local'
+        }
         Write-Success "Keeping existing configuration"
         Write-Host ""
         return
