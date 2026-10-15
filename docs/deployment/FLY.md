@@ -160,12 +160,11 @@ The backend uses a 1 GB volume at `/root/.projectachilles`:
 | `certs/` | Code signing certificates (max 5, subdirectory per cert) |
 | `binaries/` | Built agent binaries organized by `<os>-<arch>/` |
 | `go-cache/mod/` | Go module cache (persisted across redeploys) |
-| `go-cache/build/` | Go build cache (persisted across redeploys) |
 | `agent-source/` | Sparse-checkout clone of the agent Go source |
 
 > **Important:** Fly.io volumes are tied to a single Machine in a single region. This is fine because SQLite doesn't support multi-machine concurrency. If you destroy and recreate a Machine, the volume data persists as long as the volume itself isn't deleted.
 
-> **Go cache persistence:** The Go module and build caches (`go-cache/`) are stored on the persistent volume so that `go mod download` and compilation results survive container redeploys. Without this, every agent build would re-download all Go dependencies and recompile from scratch, adding 1-2 minutes per build.
+> **Go cache persistence:** The Go module cache (`go-cache/mod/`) is stored on the persistent volume, so `go mod download` results survive container redeploys. The compiler cache is kept in `/tmp` instead: across cross-compilation targets it can grow past 600 MB, which would fill the 1 GB volume. The first build after a redeploy therefore recompiles from scratch.
 
 ## Deploying Updates
 

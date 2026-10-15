@@ -148,12 +148,11 @@ The backend uses a 1 GB persistent disk at `/root/.projectachilles`:
 | `certs/` | Code signing certificates (max 5, subdirectory per cert) |
 | `binaries/` | Built agent binaries organized by `<os>-<arch>/` |
 | `go-cache/mod/` | Go module cache (persisted across redeploys) |
-| `go-cache/build/` | Go build cache (persisted across redeploys) |
 | `agent-source/` | Sparse-checkout clone of the agent Go source |
 
 > **Note:** Persistent disks disable Render's zero-downtime deploys. During a deploy, there will be brief downtime while the new container starts. This differs from Railway, which supports zero-downtime deploys with volumes.
 
-> **Go cache persistence:** The Go module and build caches (`go-cache/`) are stored on the persistent disk so that `go mod download` and compilation results survive container redeploys. Without this, every agent build would re-download all Go dependencies and recompile from scratch, adding 1-2 minutes per build.
+> **Go cache persistence:** The Go module cache (`go-cache/mod/`) is stored on the persistent disk, so `go mod download` results survive container redeploys. The compiler cache is kept in `/tmp` instead: across cross-compilation targets it can grow past 600 MB, which would fill the 1 GB disk. The first build after a redeploy therefore recompiles from scratch.
 
 ## Auto-Deploy
 

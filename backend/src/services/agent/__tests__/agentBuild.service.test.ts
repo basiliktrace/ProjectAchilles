@@ -180,6 +180,38 @@ describe('AgentBuildService', () => {
       expect(opts.env.CGO_ENABLED).toBe('0');
     });
 
+    it('uses GOCACHE from the environment when one is configured', async () => {
+      // docker-compose sets GOCACHE inside the go-cache volume so compiled
+      // objects survive container recreates.
+      vi.stubEnv('GOCACHE', '/root/go/build-cache');
+      try {
+        await service.buildAndSign('1.0.0', 'windows', 'amd64');
+      } finally {
+        vi.unstubAllEnvs();
+      }
+
+      const buildCall = mockExecFileAsync.mock.calls.find(
+        c => (c[1] as string[]).includes('build'),
+      );
+      expect((buildCall![2] as { env: NodeJS.ProcessEnv }).env.GOCACHE).toBe('/root/go/build-cache');
+    });
+
+    it('keeps the build cache in /tmp when GOCACHE is not configured', async () => {
+      // Render/Fly only persist the small ~/.projectachilles disk; the cache
+      // must not land there.
+      vi.stubEnv('GOCACHE', '');
+      try {
+        await service.buildAndSign('1.0.0', 'windows', 'amd64');
+      } finally {
+        vi.unstubAllEnvs();
+      }
+
+      const buildCall = mockExecFileAsync.mock.calls.find(
+        c => (c[1] as string[]).includes('build'),
+      );
+      expect((buildCall![2] as { env: NodeJS.ProcessEnv }).env.GOCACHE).toBe('/tmp/go-build-cache');
+    });
+
     it('uses .tmp extension during build, renames to final on success', async () => {
       await service.buildAndSign('1.0.0', 'windows', 'amd64');
 

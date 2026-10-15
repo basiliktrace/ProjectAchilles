@@ -640,7 +640,7 @@ When running with Docker Compose, the services are networked as follows:
 |--------|---------|--------------------------|
 | `achilles-data` | Agent database, certificates, settings | `/root/.projectachilles` |
 | `repo-cache` | Cached test library (Git) | `/app/data` |
-| `go-cache` | Go module cache (faster builds) | `/root/go` |
+| `go-cache` | Go module and compiler caches (faster builds, kept across container recreates) | `/root/go` |
 | `esdata` | Elasticsearch indices (if enabled) | `/usr/share/elasticsearch/data` |
 
 These volumes persist across container restarts and rebuilds. Only `docker compose down -v` removes them.

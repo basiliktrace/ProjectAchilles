@@ -110,8 +110,10 @@ Docker Compose uses a named volume for persistent data:
 │   ├── cert-1709000000/
 │   └── active-cert.txt
 ├── binaries/           # Built test binaries (cache)
-└── go-cache/           # Go build cache
+└── go-cache/           # Go module cache for agent builds
 ```
+
+Go's compiler cache lives in the separate `go-cache` volume (`/root/go`, via `GOCACHE=/root/go/build-cache`), so test and agent builds stay fast after a container is recreated.
 
 ## Windows Docker Installation
 

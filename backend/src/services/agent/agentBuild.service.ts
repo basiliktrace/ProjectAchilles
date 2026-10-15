@@ -135,8 +135,10 @@ export class AgentBuildService {
 
     // 5. Build environment — persist Go module cache on the data disk so
     //    module downloads survive container redeploys. Build cache (compiled
-    //    objects) goes to /tmp to avoid filling the persistent volume — it
-    //    can grow to 600 MB+ across cross-compilation targets.
+    //    objects) can grow to 600 MB+ across cross-compilation targets, so it
+    //    never goes on the data disk (1 GB on Render/Fly): use GOCACHE when the
+    //    deployment sets one (docker-compose points it into the go-cache
+    //    volume), otherwise /tmp.
     const modCacheDir = path.join(os.homedir(), '.projectachilles', 'go-cache', 'mod');
     const env: NodeJS.ProcessEnv = {
       ...process.env,
@@ -144,7 +146,7 @@ export class AgentBuildService {
       GOARCH: arch,
       CGO_ENABLED: '0',
       GOMODCACHE: modCacheDir,
-      GOCACHE: '/tmp/go-build-cache',
+      GOCACHE: process.env.GOCACHE || '/tmp/go-build-cache',
     };
 
     try {
