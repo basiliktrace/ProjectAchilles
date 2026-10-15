@@ -91,7 +91,14 @@ git clone https://github.com/projectachilles/ProjectAchilles.git
 cd ProjectAchilles
 ./scripts/setup.sh
 
-# Start services
+# Docker Compose reads the Clerk publishable key and CORS origin from a
+# root .env (frontend/.env is not used in Docker)
+cat > .env << 'EOF'
+CLERK_PUBLISHABLE_KEY=pk_test_...
+CORS_ORIGIN=http://localhost
+EOF
+
+# Start services, then open http://localhost
 docker compose up -d
 
 # Optional: include local Elasticsearch with synthetic data
@@ -453,13 +460,19 @@ ProjectAchilles/
 All modules require [Clerk](https://clerk.com) authentication. Create a Clerk application and configure your keys:
 
 ```bash
-# frontend/.env
+# frontend/.env (local dev server only)
 VITE_CLERK_PUBLISHABLE_KEY=pk_test_...
 
 # backend/.env
 CLERK_PUBLISHABLE_KEY=pk_test_...
 CLERK_SECRET_KEY=sk_test_...
+
+# .env in the project root (Docker Compose only)
+CLERK_PUBLISHABLE_KEY=pk_test_...
+CORS_ORIGIN=http://localhost
 ```
+
+In Docker Compose, the frontend container ignores `frontend/.env` and reads the publishable key from the root `.env` when it starts.
 
 ### Environment Variables
 
