@@ -13,7 +13,8 @@ Docker Compose is the recommended deployment method for local development, testi
 ```bash
 git clone https://github.com/projectachilles/ProjectAchilles.git
 cd ProjectAchilles
-./scripts/setup.sh          # Interactive configuration
+./scripts/setup.sh          # Interactive configuration (writes backend/.env)
+# Create the root .env (see "Root .env" below), then:
 docker compose up -d        # Start services
 ```
 
@@ -22,7 +23,7 @@ docker compose up -d        # Start services
 | Service | Port | Description |
 |---------|------|-------------|
 | `backend` | 3000 (internal) | Express API server with SQLite |
-| `frontend` | 8080 | nginx serving React SPA + API proxy |
+| `frontend` | 80 | nginx serving React SPA + API proxy |
 | `elasticsearch` | 9200 | ES 8.17 single-node (optional profile) |
 | `es-seed` | — | Seeds 1,000 synthetic results (optional) |
 
@@ -35,7 +36,6 @@ Create `backend/.env`:
 ```bash
 CLERK_PUBLISHABLE_KEY=pk_test_your_key
 CLERK_SECRET_KEY=sk_test_your_key
-CORS_ORIGIN=http://localhost:8080
 NODE_ENV=production
 ENCRYPTION_SECRET=$(openssl rand -hex 32)
 SESSION_SECRET=$(openssl rand -hex 32)
@@ -52,11 +52,28 @@ Use the helper script to generate all secrets at once:
 ```
 :::
 
-Create `frontend/.env`:
+### Root `.env`
+
+Docker Compose fills in the variables it passes to the containers from a `.env` file in the **project root** (next to `docker-compose.yml`). Create it with at least:
 
 ```bash
-VITE_CLERK_PUBLISHABLE_KEY=pk_test_your_key
+CLERK_PUBLISHABLE_KEY=pk_test_your_key
+CORS_ORIGIN=http://localhost
 ```
+
+- **`CLERK_PUBLISHABLE_KEY`**: the frontend container reads it when it starts and writes it to `/env-config.js`. Without it, the UI loads a black page and the browser console shows `@clerk/clerk-react: Missing publishableKey`.
+- **`CORS_ORIGIN`**: the exact URL you open in the browser, including the port if it isn't 80. `docker-compose.yml` sets it on the backend container, so it overrides any `CORS_ORIGIN` in `backend/.env`.
+
+See `.env.example` in the project root for the other optional overrides.
+
+:::warning `frontend/.env` is not used by Docker
+`frontend/.env` is only for the local Vite dev server. `frontend/.dockerignore` keeps it out of the image, and the Clerk key isn't baked in at build time, so rebuilding won't pick it up. After changing the root `.env`, recreate the containers. No rebuild is needed:
+
+```bash
+docker compose up -d --force-recreate frontend backend
+curl -s http://localhost/env-config.js   # should show VITE_CLERK_PUBLISHABLE_KEY: "pk_..."
+```
+:::
 
 ### With Elasticsearch
 
@@ -166,15 +183,17 @@ docker compose up -d
 
 ## Troubleshooting
 
-### Port 8080 Conflict
+### Port 80 Conflict
 
 Change the frontend port in `docker-compose.yml`:
 
 ```yaml
 frontend:
   ports:
-    - "9090:80"
+    - "127.0.0.1:9090:80"
 ```
+
+Then set `CORS_ORIGIN=http://localhost:9090` in the root `.env` and recreate the containers.
 
 ### Backend Logs
 

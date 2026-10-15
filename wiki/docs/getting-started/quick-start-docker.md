@@ -29,7 +29,7 @@ cd ProjectAchilles
 ./scripts/setup.sh
 ```
 
-The setup wizard will interactively configure your Clerk keys and other settings.
+The setup wizard will interactively configure your Clerk keys and other settings in `backend/.env`.
 
 **Or configure manually** by creating `backend/.env`:
 
@@ -37,16 +37,31 @@ The setup wizard will interactively configure your Clerk keys and other settings
 cat > backend/.env << 'EOF'
 CLERK_PUBLISHABLE_KEY=pk_test_your_key_here
 CLERK_SECRET_KEY=sk_test_your_key_here
-CORS_ORIGIN=http://localhost:8080
 NODE_ENV=production
-EOF
-
-cat > frontend/.env << 'EOF'
-VITE_CLERK_PUBLISHABLE_KEY=pk_test_your_key_here
 EOF
 ```
 
-### 3. Start Services
+### 3. Create the Root `.env` for Docker Compose
+
+Whether you used the wizard or configured manually, create a `.env` file in the **project root** (next to `docker-compose.yml`):
+
+```bash
+cat > .env << 'EOF'
+CLERK_PUBLISHABLE_KEY=pk_test_your_key_here
+CORS_ORIGIN=http://localhost
+EOF
+```
+
+Docker Compose reads this file to fill in the variables it passes to the containers:
+
+- **`CLERK_PUBLISHABLE_KEY`**: the frontend container reads it when it starts and writes it to `/env-config.js`. Without it, the UI loads a black page and the browser console shows `@clerk/clerk-react: Missing publishableKey`.
+- **`CORS_ORIGIN`**: must be the exact URL you open in the browser, including the port if it isn't 80 (for example `http://localhost:9090` or `http://<server-ip>`). `docker-compose.yml` sets this value on the backend container, so it overrides any `CORS_ORIGIN` in `backend/.env`.
+
+:::warning `frontend/.env` is not used by Docker
+`frontend/.env` is only for the local Vite dev server (`npm run dev`). `frontend/.dockerignore` keeps it out of the image, and the Clerk key isn't baked in at build time. Rebuilding the image won't pick it up; set the key in the root `.env` instead.
+:::
+
+### 4. Start Services
 
 ```bash
 # Backend + Frontend only
@@ -56,12 +71,20 @@ docker compose up -d
 docker compose --profile elasticsearch up -d
 ```
 
-### 4. Access the Dashboard
+### 5. Access the Dashboard
 
-Open **http://localhost:8080** (frontend) in your browser.
+Open **http://localhost** (frontend) in your browser.
+
+To confirm the Clerk key reached the frontend:
+
+```bash
+curl -s http://localhost/env-config.js
+```
+
+The output should contain `VITE_CLERK_PUBLISHABLE_KEY: "pk_test_..."`. If the value is `""`, see [Missing publishableKey](#missing-publishablekey-black-page).
 
 :::info Port Mapping
-In Docker Compose mode, the frontend runs on port **8080** (via nginx), not 5173. The backend runs on port **3000** internally but is proxied through nginx.
+In Docker Compose mode, the frontend is served by nginx on port **80** (bound to `127.0.0.1`), not 5173. The backend runs on port **3000** internally but is proxied through nginx.
 :::
 
 ## Windows
@@ -123,7 +146,7 @@ After startup, configure the Analytics module:
 | Service | Port | Description |
 |---------|------|-------------|
 | `backend` | 3000 (internal) | Express API server |
-| `frontend` | 8080 | nginx serving the React SPA + API proxy |
+| `frontend` | 80 | nginx serving the React SPA + API proxy |
 | `elasticsearch` | 9200 | Elasticsearch 8.17 (optional profile) |
 | `es-seed` | — | One-shot container that seeds synthetic data |
 
@@ -155,15 +178,17 @@ Ensure Docker Desktop is running (Windows/macOS) or the Docker service is active
 sudo systemctl start docker   # Linux
 ```
 
-### Port 8080 Already In Use
+### Port 80 Already In Use
 
 Edit `docker-compose.yml` and change the frontend port mapping:
 
 ```yaml
 frontend:
   ports:
-    - "9090:80"  # Change 8080 to 9090
+    - "127.0.0.1:9090:80"  # Change 80 to 9090
 ```
+
+Then set `CORS_ORIGIN=http://localhost:9090` in the root `.env` and recreate the containers (`docker compose up -d --force-recreate frontend backend`).
 
 ### Elasticsearch Fails to Start
 
@@ -179,9 +204,20 @@ On Windows (WSL2):
 wsl -d docker-desktop sh -c "sysctl -w vm.max_map_count=262144"
 ```
 
-### Clerk Authentication Loop
+### Missing publishableKey (Black Page)
 
-Ensure `CORS_ORIGIN` in `backend/.env` matches the actual URL you're accessing (e.g., `http://localhost:8080`).
+The UI loads a black page and the browser console shows `@clerk/clerk-react: Missing publishableKey`. The frontend container started without `CLERK_PUBLISHABLE_KEY`.
+
+1. Check that `.env` exists in the project root (next to `docker-compose.yml`) and contains `CLERK_PUBLISHABLE_KEY=pk_...`. Setting it in `frontend/.env` has no effect in Docker.
+2. Recreate the containers. No rebuild is needed, because the key is read when the container starts:
+   ```bash
+   docker compose up -d --force-recreate frontend backend
+   ```
+3. Verify with `curl -s http://localhost/env-config.js`, then hard-refresh the browser (Ctrl+Shift+R).
+
+### Clerk Authentication Loop or CORS Errors
+
+Ensure `CORS_ORIGIN` in the **root** `.env` matches the exact URL you're accessing, including the port (e.g., `http://localhost` or `http://localhost:9090`). The value in `backend/.env` is overridden by `docker-compose.yml`. Also check that this URL is allowed in your Clerk application settings.
 
 ## Next Steps
 
