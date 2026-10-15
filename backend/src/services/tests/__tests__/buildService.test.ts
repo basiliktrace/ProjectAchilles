@@ -1509,7 +1509,18 @@ var data string
       await expect(first.promise).rejects.toThrow('go build: undefined: foo');
 
       expect(errorSpy).toHaveBeenCalledTimes(1);
-      expect(errorSpy).toHaveBeenCalledWith(`Build failed for ${VALID_UUID}:`, 'go build: undefined: foo');
+      expect(errorSpy).toHaveBeenCalledWith('Build failed for %s: %s', VALID_UUID, 'go build: undefined: foo');
+      errorSpy.mockRestore();
+    });
+
+    it('never puts the test id into the log format string', async () => {
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const hostileId = 'x%s%o';
+      vi.spyOn(service, 'buildAndSign').mockRejectedValue(new Error('boom'));
+
+      await expect(service.startBuild(hostileId).promise).rejects.toThrow('boom');
+
+      expect(errorSpy.mock.calls[0][0]).not.toContain(hostileId);
       errorSpy.mockRestore();
     });
 

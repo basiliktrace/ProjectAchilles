@@ -117,7 +117,9 @@ export class BuildService {
       } catch (err) {
         // A background build has no request to fail, so the error middleware
         // never sees it; log here so the host keeps a record of every failure.
-        console.error(`Build failed for ${uuid}:`, err instanceof Error ? err.message : String(err));
+        // Constant format string: console.error treats the first argument as
+        // printf-style, so the id must never be interpolated into it.
+        console.error('Build failed for %s: %s', uuid, err instanceof Error ? err.message : String(err));
         throw err;
       }
     });
