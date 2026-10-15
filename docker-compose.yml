@@ -10,6 +10,10 @@ services:
       # These can be overridden via .env file in project root or shell environment
       - CORS_ORIGIN=${CORS_ORIGIN:-http://localhost}
       - AGENT_SOURCE_PATH=/agent-src
+      # Keep Go's compiled-object cache in the go-cache volume (Go's default,
+      # /root/.cache/go-build, is lost on every container recreate, so the next
+      # build compiles everything again). Agent builds use it too.
+      - GOCACHE=/root/go/build-cache
       # Default to local Docker ES (override Cloud settings that may come from env_file).
       # To use Elastic Cloud instead, configure via the Settings UI — file-based
       # settings take priority over these env vars.
