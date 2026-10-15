@@ -73,7 +73,7 @@ The backend uses a 1 GB persistent disk at `/root/.projectachilles`:
 | `analytics.json` | Encrypted ES credentials |
 | `certs/` | Code signing certificates |
 | `binaries/` | Built agent binaries |
-| `go-cache/` | Go module and build cache |
+| `go-cache/` | Go module cache (the compiler cache stays in `/tmp` to keep the 1 GB disk free) |
 
 :::warning Disk Disables Zero-Downtime Deploys
 Persistent disks disable Render's zero-downtime deploys. There will be brief downtime during deploys while the new container starts.
