@@ -4,7 +4,8 @@ vi.mock('../../analytics/client.js', () => ({ createEsClient: vi.fn() }));
 
 import { createEsClient } from '../../analytics/client.js';
 import { STAGE_OUTCOMES } from '../stageOutcome.js';
-import { ExecutionReportService } from '../executionReport.service.js';
+import { ExecutionReportService, ORG_NAME_MAX, deploymentOrgName } from '../executionReport.service.js';
+import { ORG_NAMES } from '../../analytics/elasticsearch.js';
 import type { OutcomeCounts } from '../../../types/reports.js';
 import type { AnalyticsSettings } from '../../../types/analytics.js';
 
@@ -499,6 +500,63 @@ describe('ExecutionReportService.generate', () => {
   it('rejects an unknown time zone with a 400', async () => {
     await expect(new ExecutionReportService(settings, makeDeps()).generate(params({ tz: 'Nope/Nowhere' }), NOW))
       .rejects.toMatchObject({ statusCode: 400 });
+  });
+});
+
+describe('organization name', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('names the deployment organization when the URL names no org', async () => {
+    vi.stubEnv('ORGANIZATION_NAME', '  Banco\n  Caribe  ');
+    const report = await new ExecutionReportService(settings, makeDeps()).generate(params(), NOW);
+    expect(report.meta.org).toEqual({ id: null, name: 'Banco Caribe' });
+  });
+
+  it('leaves the name empty when ORGANIZATION_NAME is blank', async () => {
+    vi.stubEnv('ORGANIZATION_NAME', ' \t ');
+    const report = await new ExecutionReportService(settings, makeDeps()).generate(params(), NOW);
+    expect(report.meta.org).toEqual({ id: null, name: null });
+  });
+
+  it('lets an org named in the URL win over the deployment name', async () => {
+    vi.stubEnv('ORGANIZATION_NAME', 'Acme Corp');
+    const [mappedId, mappedName] = Object.entries(ORG_NAMES)[0];
+    const mapped = await new ExecutionReportService(settings, makeDeps()).generate(params({ org: mappedId }), NOW);
+    expect(mapped.meta.org).toEqual({ id: mappedId, name: mappedName });
+    // An unmapped agent org prints its id; it is a subset of the deployment, not the whole of it.
+    const unmapped = await new ExecutionReportService(settings, makeDeps()).generate(params({ org: 'agent-org' }), NOW);
+    expect(unmapped.meta.org).toEqual({ id: 'agent-org', name: null });
+  });
+});
+
+describe('deploymentOrgName', () => {
+  it('reads nothing as unset', () => {
+    expect(deploymentOrgName(undefined)).toBeNull();
+    expect(deploymentOrgName('')).toBeNull();
+  });
+
+  it('keeps a name of exactly ORG_NAME_MAX characters', () => {
+    const name = 'x'.repeat(ORG_NAME_MAX);
+    expect(deploymentOrgName(name)).toBe(name);
+  });
+
+  it('cuts a longer name to ORG_NAME_MAX characters ending in an ellipsis', () => {
+    const cut = deploymentOrgName('x'.repeat(ORG_NAME_MAX + 20))!;
+    expect(Array.from(cut)).toHaveLength(ORG_NAME_MAX);
+    expect(cut.endsWith('x…')).toBe(true);
+  });
+
+  it('does not leave a space before the ellipsis', () => {
+    const cut = deploymentOrgName(`${'x'.repeat(ORG_NAME_MAX - 2)} tail`)!;
+    expect(cut).toBe(`${'x'.repeat(ORG_NAME_MAX - 2)}…`);
+  });
+
+  it('counts characters, not UTF-16 units, so it never splits a surrogate pair', () => {
+    const cut = deploymentOrgName('\u{1F6E1}'.repeat(ORG_NAME_MAX + 1))!;
+    expect(Array.from(cut)).toHaveLength(ORG_NAME_MAX);
+    expect(cut).toBe(`${'\u{1F6E1}'.repeat(ORG_NAME_MAX - 1)}…`);
   });
 });
 

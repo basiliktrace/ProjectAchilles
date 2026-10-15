@@ -41,6 +41,20 @@ import type {
 
 export const REPORT_BUDGET_MS = 45_000;
 export const VENDOR_BUDGET_MS = 15_000;
+/** Longest organization name the report prints, in characters; it shares the page header with the date range. */
+export const ORG_NAME_MAX = 56;
+
+/**
+ * The organization this deployment serves (ORGANIZATION_NAME), as the report prints it.
+ * Runs of whitespace, line breaks included, become one space; a blank value means unset;
+ * a longer name is cut to ORG_NAME_MAX characters, the last one an ellipsis.
+ */
+export function deploymentOrgName(raw: string | undefined = process.env.ORGANIZATION_NAME): string | null {
+  const name = (raw ?? '').replace(/\s+/g, ' ').trim();
+  if (!name) return null;
+  const chars = Array.from(name);
+  return chars.length > ORG_NAME_MAX ? `${chars.slice(0, ORG_NAME_MAX - 1).join('').trimEnd()}…` : name;
+}
 
 const FILTER_KEYS = [
   'org', 'from', 'to', 'result', 'hostnames', 'tests', 'techniques', 'categories',
@@ -351,7 +365,7 @@ export class ExecutionReportService {
       reportId: makeReportId(now),
       generatedAt: now.toISOString(),
       tz,
-      org: { id: params.org ?? null, name: params.org ? ORG_NAMES[params.org] ?? null : null },
+      org: { id: params.org ?? null, name: params.org ? ORG_NAMES[params.org] ?? null : deploymentOrgName() },
       filters: echoFilters(params),
       outcomeFiltered: outcomeFilters(params),
       window: { ...window, ...axis, firstExecution: scope.firstExecution, lastExecution: scope.lastExecution },
