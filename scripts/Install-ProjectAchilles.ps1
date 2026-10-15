@@ -262,9 +262,12 @@ function Set-EnvValue {
 # and leaves every other root .env setting alone.
 function Sync-RootEnv {
     $backend = Read-EnvFile -Path $script:EnvFile
-    if (-not $backend.ContainsKey('CLERK_PUBLISHABLE_KEY') -or [string]::IsNullOrEmpty($backend['CLERK_PUBLISHABLE_KEY'])) { return }
+    $pub = if ($backend.ContainsKey('CLERK_PUBLISHABLE_KEY')) { $backend['CLERK_PUBLISHABLE_KEY'] } else { '' }
+    # Skip unset keys and the .env.example placeholder (pk_test_...), so a real
+    # key already in the root .env is never replaced by one.
+    if ([string]::IsNullOrEmpty($pub) -or $pub.EndsWith('...')) { return }
     $rootEnv = Join-Path $script:ProjectRoot '.env'
-    Set-EnvValue -Path $rootEnv -Key 'CLERK_PUBLISHABLE_KEY' -Value $backend['CLERK_PUBLISHABLE_KEY']
+    Set-EnvValue -Path $rootEnv -Key 'CLERK_PUBLISHABLE_KEY' -Value $pub
     Write-Success "Frontend Clerk key written to .env (read by docker compose)"
 }
 

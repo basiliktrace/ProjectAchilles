@@ -194,7 +194,9 @@ env_comment() {
 sync_root_env() {
     local pub
     pub=$(env_get "CLERK_PUBLISHABLE_KEY")
-    [[ -z "$pub" ]] && return 0
+    # Skip unset keys and the .env.example placeholder (pk_test_...), so a real
+    # key already in the root .env is never replaced by one.
+    [[ -z "$pub" || "$pub" == *... ]] && return 0
 
     [[ -f "$ROOT_ENV_FILE" ]] || ( umask 077 && : > "$ROOT_ENV_FILE" )
     local ENV_FILE="$ROOT_ENV_FILE"   # env_set writes to $ENV_FILE
