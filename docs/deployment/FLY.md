@@ -59,9 +59,9 @@ flyctl secrets set \
   CLI_AUTH_SECRET="$(openssl rand -base64 32)" \
   CORS_ORIGIN="https://<your-frontend>.fly.dev" \
   AGENT_SERVER_URL="https://<your-backend>.fly.dev" \
-  TESTS_REPO_URL="https://github.com/your-org/f0_library.git" \
+  TESTS_REPO_URL="https://github.com/ubercylon8/f0_library.git" \
   TESTS_REPO_BRANCH="main" \
-  AGENT_REPO_URL="https://github.com/your-org/ProjectAchilles.git" \
+  AGENT_REPO_URL="https://github.com/projectachilles/ProjectAchilles.git" \
   AGENT_REPO_BRANCH="main" \
   GITHUB_TOKEN="ghp_..." \
   ELASTICSEARCH_CLOUD_ID="<from Elastic Cloud console>" \
@@ -78,9 +78,9 @@ flyctl secrets set \
 | `CLI_AUTH_SECRET` | `<openssl rand -base64 32>` | **Required** for CLI login (`achilles login`) |
 | `CORS_ORIGIN` | `https://<your-frontend>.fly.dev` | Your frontend's Fly URL |
 | `AGENT_SERVER_URL` | `https://<your-backend>.fly.dev` | Your backend's Fly URL |
-| `TESTS_REPO_URL` | `https://github.com/your-org/f0_library.git` | Test library repo |
+| `TESTS_REPO_URL` | `https://github.com/ubercylon8/f0_library.git` | Test library repo |
 | `TESTS_REPO_BRANCH` | `main` | |
-| `AGENT_REPO_URL` | `https://github.com/your-org/ProjectAchilles.git` | Agent source for builds |
+| `AGENT_REPO_URL` | `https://github.com/projectachilles/ProjectAchilles.git` | Agent source for builds |
 | `AGENT_REPO_BRANCH` | `main` | |
 | `GITHUB_TOKEN` | `ghp_...` | PAT with `repo` scope |
 | `ELASTICSEARCH_CLOUD_ID` | From Elastic Cloud console | |
@@ -305,7 +305,7 @@ Before **every build**, the backend fetches the latest commit of `AGENT_REPO_BRA
 
 | Variable | Value | Notes |
 |----------|-------|-------|
-| `AGENT_REPO_URL` | `https://github.com/your-org/ProjectAchilles.git` | Required for agent builds |
+| `AGENT_REPO_URL` | `https://github.com/projectachilles/ProjectAchilles.git` | Required for agent builds |
 | `AGENT_REPO_BRANCH` | `main` | Branch to clone from |
 | `GITHUB_TOKEN` | `ghp_...` | Required if the repo is private |
 

@@ -50,7 +50,7 @@ services:
       - key: TESTS_REPO_BRANCH
         value: main
       - key: AGENT_REPO_URL
-        sync: false  # https://github.com/your-org/ProjectAchilles.git (for agent builds)
+        sync: false  # https://github.com/projectachilles/ProjectAchilles.git (for agent builds)
       - key: AGENT_REPO_BRANCH
         value: main
       - key: GITHUB_TOKEN

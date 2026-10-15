@@ -57,7 +57,7 @@ Services communicate over Railway's [private network](https://docs.railway.com/g
    CLI_AUTH_SECRET=<openssl rand -base64 32>
    CORS_ORIGIN=https://<your-frontend>.up.railway.app
    AGENT_SERVER_URL=https://<your-backend>.up.railway.app
-   TESTS_REPO_URL=https://github.com/your-org/f0_library.git
+   TESTS_REPO_URL=https://github.com/ubercylon8/f0_library.git
    TESTS_REPO_BRANCH=main
    AGENT_REPO_URL=https://github.com/projectachilles/ProjectAchilles.git
    AGENT_REPO_BRANCH=main

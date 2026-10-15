@@ -34,7 +34,7 @@ Render's private network DNS is only available on Standard plan and above. On St
    CLERK_SECRET_KEY=sk_live_...
    CORS_ORIGIN=https://<frontend>.onrender.com
    AGENT_SERVER_URL=https://<backend>.onrender.com
-   TESTS_REPO_URL=https://github.com/your-org/f0_library.git
+   TESTS_REPO_URL=https://github.com/ubercylon8/f0_library.git
    GITHUB_TOKEN=ghp_...
    ELASTICSEARCH_CLOUD_ID=...
    ELASTICSEARCH_API_KEY=...
@@ -84,7 +84,7 @@ Persistent disks disable Render's zero-downtime deploys. There will be brief dow
 The backend Docker image includes Go 1.24.3. Set `AGENT_REPO_URL` to enable agent cross-compilation:
 
 ```bash
-AGENT_REPO_URL=https://github.com/your-org/ProjectAchilles.git
+AGENT_REPO_URL=https://github.com/projectachilles/ProjectAchilles.git
 AGENT_REPO_BRANCH=main
 GITHUB_TOKEN=ghp_...  # if repo is private
 ```

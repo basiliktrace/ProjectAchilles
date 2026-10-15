@@ -148,7 +148,7 @@ Configure these in the Vercel Dashboard (**Settings → Environment Variables**)
 | `BLOB_READ_WRITE_TOKEN` | (auto-provisioned) | From Step 3 — linked Blob store |
 | `CORS_ORIGIN` | `https://<frontend>.vercel.app` | Your frontend's Vercel URL |
 | `AGENT_SERVER_URL` | `https://<backend>.vercel.app` | Your backend's Vercel URL |
-| `TESTS_REPO_URL` | `https://github.com/your-org/f0_library.git` | Test library repo |
+| `TESTS_REPO_URL` | `https://github.com/ubercylon8/f0_library.git` | Test library repo |
 | `TESTS_REPO_BRANCH` | `main` | |
 | `GITHUB_TOKEN` | `ghp_...` | PAT with `repo` scope |
 | `ELASTICSEARCH_CLOUD_ID` | From Elastic Cloud console | |
