@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { testsApi } from '@/services/api/tests';
 import { Badge } from '@/components/shared/ui/Badge';
 import { Button } from '@/components/shared/ui/Button';
@@ -12,6 +12,21 @@ function formatBytes(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+/**
+ * An AbortSignal source that aborts when the component unmounts, which is
+ * when the drawer closes. Builds keep running on the server; this only stops
+ * the polling that follows them.
+ */
+function useAbortOnUnmount() {
+  const controllerRef = useRef<AbortController | null>(null);
+  useEffect(() => {
+    const controller = new AbortController();
+    controllerRef.current = controller;
+    return () => controller.abort();
+  }, []);
+  return controllerRef;
+}
+
 interface SingleBuildProps {
   uuid: string;
   buildInfo: BuildInfo | null;
@@ -22,19 +37,22 @@ interface SingleBuildProps {
 function SingleBuild({ uuid, buildInfo, onBuildComplete, loading }: SingleBuildProps) {
   const [building, setBuilding] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const abortRef = useAbortOnUnmount();
 
   async function handleBuild() {
+    const signal = abortRef.current?.signal;
     setBuilding(true);
     setError(null);
     try {
-      const info = await testsApi.buildTest(uuid);
+      const info = await testsApi.buildTest(uuid, { signal });
       onBuildComplete(info);
     } catch (err: unknown) {
+      if (signal?.aborted) return;
       const msg = err instanceof Error ? err.message : 'Build failed';
       const axiosErr = err as { response?: { data?: { error?: string } } };
       setError(axiosErr?.response?.data?.error || msg);
     } finally {
-      setBuilding(false);
+      if (!signal?.aborted) setBuilding(false);
     }
   }
 
@@ -150,20 +168,24 @@ interface DrawerBuildSectionProps {
 
 export default function DrawerBuildSection({ builds, onBuildComplete, loading }: DrawerBuildSectionProps) {
   const [buildingAll, setBuildingAll] = useState(false);
+  const abortRef = useAbortOnUnmount();
 
   async function handleBuildAll() {
+    const signal = abortRef.current?.signal;
     setBuildingAll(true);
     const unbuilt = Array.from(builds.entries()).filter(([, b]) => !b?.exists);
-    await Promise.allSettled(
-      unbuilt.map(async ([uuid]) => {
-        try {
-          const info = await testsApi.buildTest(uuid);
-          onBuildComplete(uuid, info);
-        } catch {
-          // individual failures are non-fatal
-        }
-      })
-    );
+    // One build at a time: each build is polled every 2 s, and that traffic
+    // shares the per-user API limit (1000 requests / 15 min) with the rest of
+    // the dashboard. Parallel Go builds would also compete for the same CPU.
+    for (const [uuid] of unbuilt) {
+      try {
+        const info = await testsApi.buildTest(uuid, { signal });
+        onBuildComplete(uuid, info);
+      } catch {
+        // individual failures are non-fatal
+      }
+      if (signal?.aborted) return;
+    }
     setBuildingAll(false);
   }
 
