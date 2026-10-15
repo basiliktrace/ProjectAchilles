@@ -48,7 +48,7 @@ flyctl secrets set \
   CLI_AUTH_SECRET="$(openssl rand -base64 32)" \
   CORS_ORIGIN="https://achilles-frontend.fly.dev" \
   AGENT_SERVER_URL="https://achilles-backend.fly.dev" \
-  TESTS_REPO_URL="https://github.com/your-org/f0_library.git" \
+  TESTS_REPO_URL="https://github.com/ubercylon8/f0_library.git" \
   GITHUB_TOKEN="ghp_..." \
   ELASTICSEARCH_CLOUD_ID="..." \
   ELASTICSEARCH_API_KEY="..." \

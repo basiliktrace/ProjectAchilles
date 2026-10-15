@@ -38,8 +38,8 @@ The fastest path — Render reads `render.yaml` and creates both services automa
    CLERK_SECRET_KEY=sk_live_...
    CORS_ORIGIN=https://<your-frontend>.onrender.com
    AGENT_SERVER_URL=https://<your-backend>.onrender.com
-   TESTS_REPO_URL=https://github.com/your-org/f0_library.git
-   AGENT_REPO_URL=https://github.com/your-org/ProjectAchilles.git
+   TESTS_REPO_URL=https://github.com/ubercylon8/f0_library.git
+   AGENT_REPO_URL=https://github.com/projectachilles/ProjectAchilles.git
    GITHUB_TOKEN=ghp_...
    ELASTICSEARCH_CLOUD_ID=<from Elastic Cloud console>
    ELASTICSEARCH_API_KEY=<from Elastic Cloud console>
@@ -87,9 +87,9 @@ The fastest path — Render reads `render.yaml` and creates both services automa
    | `CLI_AUTH_SECRET` | `<openssl rand -base64 32>` | **Required** for CLI login (`achilles login`) |
    | `CORS_ORIGIN` | `https://achilles-frontend.onrender.com` | Your frontend's Render URL |
    | `AGENT_SERVER_URL` | `https://achilles-backend.onrender.com` | Your backend's Render URL |
-   | `TESTS_REPO_URL` | `https://github.com/your-org/f0_library.git` | Test library repo |
+   | `TESTS_REPO_URL` | `https://github.com/ubercylon8/f0_library.git` | Test library repo |
    | `TESTS_REPO_BRANCH` | `main` | |
-   | `AGENT_REPO_URL` | `https://github.com/your-org/ProjectAchilles.git` | Agent source for builds |
+   | `AGENT_REPO_URL` | `https://github.com/projectachilles/ProjectAchilles.git` | Agent source for builds |
    | `AGENT_REPO_BRANCH` | `main` | |
    | `GITHUB_TOKEN` | `ghp_...` | PAT with `repo` scope |
    | `ELASTICSEARCH_CLOUD_ID` | `<from Elastic Cloud>` | |
@@ -267,7 +267,7 @@ Before **every build**, the backend fetches the latest commit of `AGENT_REPO_BRA
 
 | Variable | Value | Notes |
 |----------|-------|-------|
-| `AGENT_REPO_URL` | `https://github.com/your-org/ProjectAchilles.git` | Required for agent builds |
+| `AGENT_REPO_URL` | `https://github.com/projectachilles/ProjectAchilles.git` | Required for agent builds |
 | `AGENT_REPO_BRANCH` | `main` | Branch to clone from |
 | `GITHUB_TOKEN` | `ghp_...` | Required if the repo is private (same token used for test library) |
 

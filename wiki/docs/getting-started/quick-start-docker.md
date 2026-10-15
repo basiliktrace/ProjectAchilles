@@ -29,7 +29,7 @@ cd ProjectAchilles
 ./scripts/setup.sh
 ```
 
-The setup wizard will interactively configure your Clerk keys and other settings in `backend/.env`.
+The setup wizard will interactively configure your Clerk keys and other settings in `backend/.env`, and copy the Clerk publishable key into the root `.env` described in the next step.
 
 **Or configure manually** by creating `backend/.env`:
 
@@ -43,7 +43,9 @@ EOF
 
 ### 3. Create the Root `.env` for Docker Compose
 
-Whether you used the wizard or configured manually, create a `.env` file in the **project root** (next to `docker-compose.yml`):
+**If you used the wizard**, it has already written `CLERK_PUBLISHABLE_KEY` to this file. Check that it's there (`cat .env`), and only add `CORS_ORIGIN` if you'll open the UI on a URL other than `http://localhost`. Don't recreate the file with the command below: that would replace your key with the placeholder.
+
+**If you configured manually**, create a `.env` file in the **project root** (next to `docker-compose.yml`):
 
 ```bash
 cat > .env << 'EOF'
@@ -117,7 +119,7 @@ cd ProjectAchilles
 The PowerShell script will:
 - Check prerequisites (Docker Desktop, WSL2, Git)
 - Fix line endings if needed
-- Configure `backend/.env` interactively
+- Configure `backend/.env` interactively, and copy the Clerk publishable key into the root `.env`
 - Build Docker images
 - Start services
 - Open the dashboard in your browser

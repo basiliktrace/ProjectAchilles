@@ -86,17 +86,15 @@ Configure Clerk authentication (see [Configuration](#configuration)), then open 
 ### Path B — Docker Compose
 
 ```bash
-# Clone and run the setup wizard
+# Clone and run the setup wizard (choose Docker). It writes backend/.env and
+# copies the Clerk publishable key into the root .env, which is where Docker
+# Compose reads it from (frontend/.env is not used in Docker).
 git clone https://github.com/projectachilles/ProjectAchilles.git
 cd ProjectAchilles
 ./scripts/setup.sh
 
-# Docker Compose reads the Clerk publishable key and CORS origin from a
-# root .env (frontend/.env is not used in Docker)
-cat > .env << 'EOF'
-CLERK_PUBLISHABLE_KEY=pk_test_...
-CORS_ORIGIN=http://localhost
-EOF
+# Only if you'll open the UI somewhere other than http://localhost:
+#   echo 'CORS_ORIGIN=http://localhost:9090' >> .env
 
 # Start services, then open http://localhost
 docker compose up -d
@@ -108,12 +106,12 @@ docker compose --profile elasticsearch up -d
 ### Path C — Windows (PowerShell)
 
 ```powershell
-git clone https://github.com/your-org/ProjectAchilles.git
+git clone https://github.com/projectachilles/ProjectAchilles.git
 cd ProjectAchilles
 .\scripts\Install-ProjectAchilles.ps1
 ```
 
-The PowerShell script checks prerequisites, fixes line endings, configures `backend/.env` interactively, builds Docker images, and opens the dashboard. See [Windows Docker Installation](docs/deployment/WINDOWS_DOCKER_INSTALL.md) for the full manual guide.
+The PowerShell script checks prerequisites, fixes line endings, configures `backend/.env` interactively (and copies the Clerk publishable key into the root `.env` that Docker Compose reads), builds Docker images, and opens the dashboard. See [Windows Docker Installation](docs/deployment/WINDOWS_DOCKER_INSTALL.md) for the full manual guide.
 
 ### Deployment Targets
 
