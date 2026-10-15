@@ -90,6 +90,16 @@ export interface FileContent {
   size?: number;
 }
 
+export type BuildJobStatus = 'running' | 'succeeded' | 'failed';
+
+/** Latest build attempt for a test, tracked in memory by the backend. */
+export interface BuildJob {
+  status: BuildJobStatus;
+  startedAt: string;
+  finishedAt?: string;
+  error?: string;
+}
+
 export interface BuildInfo {
   exists: boolean;
   platform?: { os: string; arch: string };
@@ -99,6 +109,7 @@ export interface BuildInfo {
   builtAt?: string;
   filename?: string;
   source?: 'built' | 'uploaded';
+  job?: BuildJob;
 }
 
 export interface EmbedDependency {

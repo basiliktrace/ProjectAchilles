@@ -1,3 +1,4 @@
+import { isAxiosError } from 'axios';
 import { apiClient } from '@/hooks/useAuthenticatedApi';
 import type { BuildInfo, EmbedDependency } from '@/types/test';
 
@@ -26,6 +27,41 @@ export interface CertificateInfo {
 export interface CertificateListResponse {
   certificates: CertificateInfo[];
   activeCertId: string | null;
+}
+
+export const BUILD_POLL_INTERVAL_MS = 2000;
+export const BUILD_INTERRUPTED_MESSAGE = 'Build was interrupted because the server restarted. Try again.';
+
+// Poll failures worth retrying: rate limiting (several builds polling at once
+// can hit the per-user API limit), a restarting backend, or no response.
+const TRANSIENT_POLL_STATUSES = new Set([429, 502, 503, 504]);
+const MAX_CONSECUTIVE_POLL_FAILURES = 5;
+
+function isTransientPollError(err: unknown): boolean {
+  if (!isAxiosError(err)) return false;
+  return !err.response || TRANSIENT_POLL_STATUSES.has(err.response.status);
+}
+
+function abortError(): DOMException {
+  return new DOMException('Build polling aborted', 'AbortError');
+}
+
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(abortError());
+      return;
+    }
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(abortError());
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+    signal?.addEventListener('abort', onAbort, { once: true });
+  });
 }
 
 export const testsApi = {
@@ -128,9 +164,47 @@ export const testsApi = {
     return response.data.data;
   },
 
-  async buildTest(uuid: string): Promise<BuildInfo> {
-    const response = await apiClient.post(`/tests/builds/${uuid}`);
-    return response.data.data;
+  /**
+   * Build & sign a test. The build runs in the background on the server
+   * (a cold Go build outlasts proxy timeouts), so this starts it with
+   * ?async=true and polls until it finishes.
+   */
+  async buildTest(uuid: string, opts: { signal?: AbortSignal } = {}): Promise<BuildInfo> {
+    const response = await apiClient.post(`/tests/builds/${uuid}`, null, { params: { async: 'true' } });
+    // A backend without background builds ignores ?async and answers 200
+    // with the finished BuildInfo.
+    if (response.status !== 202) return response.data.data;
+    return testsApi.waitForBuild(uuid, opts);
+  },
+
+  /**
+   * Poll GET /tests/builds/:uuid until the test's build job finishes.
+   * Resolves with BuildInfo on success. Rejects with the build's error on
+   * failure, BUILD_INTERRUPTED_MESSAGE if the server lost the job (restart),
+   * or an AbortError when `signal` aborts.
+   */
+  async waitForBuild(
+    uuid: string,
+    opts: { intervalMs?: number; signal?: AbortSignal } = {},
+  ): Promise<BuildInfo> {
+    const intervalMs = opts.intervalMs ?? BUILD_POLL_INTERVAL_MS;
+    let failures = 0;
+    for (;;) {
+      await sleep(intervalMs, opts.signal);
+      let info: BuildInfo;
+      try {
+        info = await testsApi.getBuildInfo(uuid);
+      } catch (err) {
+        failures += 1;
+        if (!isTransientPollError(err) || failures >= MAX_CONSECUTIVE_POLL_FAILURES) throw err;
+        continue;
+      }
+      failures = 0;
+      if (opts.signal?.aborted) throw abortError();
+      if (!info.job) throw new Error(BUILD_INTERRUPTED_MESSAGE);
+      if (info.job.status === 'succeeded') return info;
+      if (info.job.status === 'failed') throw new Error(info.job.error || 'Build failed');
+    }
   },
 
   async deleteBuild(uuid: string): Promise<{ success: boolean }> {
