@@ -55,7 +55,7 @@ $ErrorActionPreference = 'Stop'
 # -----------------------------------------------------------------------------
 
 $TOTAL_STEPS = 10
-$REPO_URL    = 'https://github.com/your-org/ProjectAchilles.git'
+$REPO_URL    = 'https://github.com/projectachilles/ProjectAchilles.git'
 
 # -----------------------------------------------------------------------------
 # Helper Functions
@@ -253,6 +253,19 @@ function Set-EnvValue {
     # Ensure trailing newline
     if (-not $output.EndsWith("`n")) { $output += "`n" }
     [System.IO.File]::WriteAllText($Path, $output, $utf8NoBom)
+}
+
+# Docker Compose fills the frontend container's CLERK_PUBLISHABLE_KEY from the
+# ROOT .env (or the shell), never from backend/.env: frontend/.env is kept out
+# of the image and the frontend service has no env_file. Without this the UI
+# is a black page ("Missing publishableKey"). Copies the key from backend/.env
+# and leaves every other root .env setting alone.
+function Sync-RootEnv {
+    $backend = Read-EnvFile -Path $script:EnvFile
+    if (-not $backend.ContainsKey('CLERK_PUBLISHABLE_KEY') -or [string]::IsNullOrEmpty($backend['CLERK_PUBLISHABLE_KEY'])) { return }
+    $rootEnv = Join-Path $script:ProjectRoot '.env'
+    Set-EnvValue -Path $rootEnv -Key 'CLERK_PUBLISHABLE_KEY' -Value $backend['CLERK_PUBLISHABLE_KEY']
+    Write-Success "Frontend Clerk key written to .env (read by docker compose)"
 }
 
 function Remove-EnvValue {
@@ -690,7 +703,7 @@ function Invoke-PhaseConfiguration {
     $script:GitHubToken  = ''
     $script:TestsRepoUrl = ''
     if (-not $Quick) {
-        $defaultRepo  = if ($defaults.ContainsKey('TESTS_REPO_URL')) { $defaults['TESTS_REPO_URL'] } else { 'https://github.com/your-org/f0_library.git' }
+        $defaultRepo  = if ($defaults.ContainsKey('TESTS_REPO_URL')) { $defaults['TESTS_REPO_URL'] } else { 'https://github.com/ubercylon8/f0_library.git' }
 
         Write-Host ""
         $repoInput = Read-Host "  Test library repository URL [$defaultRepo]"
@@ -718,6 +731,7 @@ function Invoke-PhaseWriteConfig {
 
     if ($script:ConfigAction -eq 'keep') {
         Write-Success "Using existing backend/.env"
+        Sync-RootEnv
         Write-Host ""
         return
     }
@@ -800,6 +814,8 @@ function Invoke-PhaseWriteConfig {
             Set-EnvValue -Path $script:EnvFile -Key 'ELASTICSEARCH_INDEX_PATTERN' -Value $script:EsIndex
         }
     }
+
+    Sync-RootEnv
 
     # Summary
     Write-Success "Configuration written to backend/.env"

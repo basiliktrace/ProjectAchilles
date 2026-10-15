@@ -15,6 +15,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 ENV_FILE="$PROJECT_ROOT/backend/.env"
+ROOT_ENV_FILE="$PROJECT_ROOT/.env"
 ENV_EXAMPLE="$PROJECT_ROOT/backend/.env.example"
 BACKTITLE="Project Achilles Setup"
 
@@ -160,7 +161,9 @@ show_radiolist() {
 env_get() {
     local key="$1"
     if [[ -f "$ENV_FILE" ]]; then
-        grep -E "^${key}=" "$ENV_FILE" 2>/dev/null | head -1 | cut -d'=' -f2-
+        # A missing key is not an error. Without `|| true`, grep's "no match"
+        # status fails the pipeline (pipefail) and `set -e` aborts the script.
+        { grep -E "^${key}=" "$ENV_FILE" 2>/dev/null || true; } | head -1 | cut -d'=' -f2-
     fi
 }
 
@@ -181,6 +184,22 @@ env_comment() {
     if [[ -f "$ENV_FILE" ]]; then
         sed -i.bak "s|^${key}=|# ${key}=|" "$ENV_FILE" && rm -f "${ENV_FILE}.bak"
     fi
+}
+
+# Docker Compose fills the frontend container's CLERK_PUBLISHABLE_KEY from the
+# ROOT .env (or the shell), never from backend/.env: frontend/.env is kept out
+# of the image and the frontend service has no env_file. Without this the UI
+# is a black page ("Missing publishableKey"). Copies the key from backend/.env
+# and leaves every other root .env setting alone.
+sync_root_env() {
+    local pub
+    pub=$(env_get "CLERK_PUBLISHABLE_KEY")
+    [[ -z "$pub" ]] && return 0
+
+    [[ -f "$ROOT_ENV_FILE" ]] || ( umask 077 && : > "$ROOT_ENV_FILE" )
+    local ENV_FILE="$ROOT_ENV_FILE"   # env_set writes to $ENV_FILE
+    env_set "CLERK_PUBLISHABLE_KEY" "$pub"
+    chmod 600 "$ROOT_ENV_FILE"
 }
 
 # =============================================================================
@@ -374,7 +393,7 @@ step_test_repo() {
 
     TESTS_REPO_URL=$(show_inputbox "Test Repository" \
         "Repository URL for the security test library.\n\nPublic repos work without a token." \
-        "${existing_url:-https://github.com/your-org/f0_library.git}")
+        "${existing_url:-https://github.com/ubercylon8/f0_library.git}")
 
     # Only ask for token if repo is private
     if [[ -n "$existing_token" && "$existing_token" != "ghp_xxxxx" ]]; then
@@ -602,7 +621,9 @@ show_summary() {
     local docker_cmd="docker compose up -d"
     [[ "${ES_MODE:-skip}" == "local" ]] && docker_cmd="docker compose --profile elasticsearch up -d" || true
 
-    local summary="Configuration saved to: backend/.env\n\n"
+    local summary="Configuration saved to: backend/.env\n"
+    [[ "$DEPLOY_MODE" == "docker" ]] && summary+="Frontend Clerk key saved to: .env (read by docker compose)\n" || true
+    summary+="\n"
 
     if [[ "$DEPLOY_MODE" == "docker" ]]; then
         summary+="To start:\n"
@@ -643,6 +664,7 @@ main() {
         step_generate_secrets
         if [[ -f "$ENV_FILE" ]]; then
             write_env
+            sync_root_env
             echo "Secrets generated and written to $ENV_FILE"
         else
             echo "No existing .env found. Copy .env.example first:"
@@ -697,6 +719,7 @@ main() {
     else
         step_seed_data
         write_env
+        [[ "$DEPLOY_MODE" == "docker" ]] && sync_root_env || true
         show_summary
     fi
 }
