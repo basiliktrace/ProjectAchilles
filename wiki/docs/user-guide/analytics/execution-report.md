@@ -33,6 +33,18 @@ The marking appears on the cover and in the bottom-left footer of every page, ne
 
 If no execution matches the filters, the report says so and lists them instead of printing empty sections.
 
+## Organization name
+
+The cover, the scope table and every page header name the organization the deployment serves. An administrator sets it once per deployment with the backend variable `ORGANIZATION_NAME` (see [Environment Variables](../../deployment/environment-variables)):
+
+- **Server install (`deploy-server.sh`):** set `ORGANIZATION_NAME` in `deploy.config.env` and re-run the installer. It rewrites `backend/.env` on every run, so a line added there by hand does not last.
+- **Docker Compose:** add `ORGANIZATION_NAME=Acme Corp` to `backend/.env`, then run `docker compose up -d`. A plain `docker compose restart` keeps the old environment.
+- **Render, Fly.io, Railway or Vercel:** add the variable to the backend service's environment and redeploy.
+
+Without it, the cover says *All organizations* and the page headers read *ProjectAchilles · Security Validation Report*.
+
+Keep the name to 56 characters or fewer, so the page header fits on one line beside the date range. A longer name is cut with an ellipsis everywhere it appears.
+
 ## How to read the numbers
 
 - **Defense Score** is the same number as on the Analytics dashboard for the same filters. When accepted risks are excluded from it, the summary also prints the score before accepted risks.
