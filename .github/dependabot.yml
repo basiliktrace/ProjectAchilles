@@ -3,9 +3,14 @@ version: 2
 # Noise vs. security, by design:
 # - VERSION updates (routine bumps) are batched: one grouped PR per ecosystem
 #   per month, and only for releases older than the cooldown below.
-# - SECURITY updates are unaffected by schedule, grouping limits and cooldown:
-#   GitHub raises them as soon as an advisory has a fix. Majors ignored below
-#   still surface as security PRs when a CVE is only fixed in a major.
+# - SECURITY updates are unaffected by schedule and cooldown: GitHub raises
+#   them as soon as an advisory has a fix, grouped into one PR per directory
+#   (npm-security below). Majors ignored below still surface as security PRs
+#   when a CVE is only fixed in a major. This needs "Dependabot security
+#   updates" switched ON in Settings > Code security; it was off until Oct 2026,
+#   which is how 168 alerts piled up unnoticed.
+# - Fixes that need an `overrides` entry use a floor, never an exact pin:
+#   "pkg@<1.2.3": "1.2.3". An exact pin blocks every later security fix.
 # The cooldown is itself a supply-chain control: malicious or broken releases
 # are usually yanked within days, before Dependabot would propose them.
 
@@ -18,6 +23,7 @@ updates:
       - "/backend"
       - "/backend-serverless"
       - "/blog"
+      - "/wiki"
     schedule:
       interval: "monthly"
     cooldown:
@@ -76,6 +82,11 @@ updates:
       - dependency-name: "@types/express"
         update-types: ["version-update:semver-major"]
     groups:
+      # Security fixes land as one PR per directory instead of one per advisory.
+      npm-security:
+        applies-to: security-updates
+        patterns:
+          - "*"
       npm-minor-patch:
         patterns:
           - "*"

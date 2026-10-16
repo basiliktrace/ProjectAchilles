@@ -1,0 +1,41 @@
+name: Dependency Audit
+
+# Fails on high/critical production advisories that aren't accepted in
+# .github/audit-allowlist.json (see .github/scripts/npm-audit-gate.mjs).
+# npm audit reads only package-lock.json, so no install step is needed.
+on:
+  pull_request:
+    paths:
+      - "**/package.json"
+      - "**/package-lock.json"
+      - ".github/audit-allowlist.json"
+      - ".github/scripts/npm-audit-gate.mjs"
+      - ".github/workflows/dependency-audit.yml"
+  push:
+    branches: [main]
+  # New advisories appear without any code change, and allow-list entries
+  # expire, so re-check weekly.
+  schedule:
+    - cron: "17 9 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    name: npm audit (${{ matrix.project }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        project: [backend, backend-serverless, frontend, blog, wiki]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+
+      - name: Audit production dependencies
+        run: node .github/scripts/npm-audit-gate.mjs ${{ matrix.project }}
