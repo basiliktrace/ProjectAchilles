@@ -10,6 +10,7 @@ import {
   listVersions,
   registerVersionFromUpload,
   deleteVersion,
+  BinaryPathError,
 } from '../../services/agent/update.service.js';
 import { RegisterVersionSchema, BuildVersionSchema } from '../../schemas/admin.schemas.js';
 import { EmbeddedVersionError } from '../../services/agent/binaryVersion.js';
@@ -123,6 +124,9 @@ export function createAdminUpdateRouter(_buildService: unknown): Router {
           mandatory ?? false
         );
       } catch (err) {
+        if (err instanceof BinaryPathError) {
+          throw new AppError(err.message, 400);
+        }
         if (err instanceof EmbeddedVersionError) {
           throw new AppError(err.message, 422);
         }

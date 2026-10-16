@@ -11,6 +11,12 @@ const mockMkdirSync = vi.fn();
 const mockStatSync = vi.fn();
 const mockUnlinkSync = vi.fn();
 const mockCreateReadStream = vi.fn();
+// registerVersion resolves paths with realpathSync; follow the existsSync
+// mock so each test's "file exists / is missing" setup still applies.
+const mockRealpathSync = vi.fn((p: string) => {
+  if (!mockExistsSync(p)) throw Object.assign(new Error(`ENOENT: ${p}`), { code: 'ENOENT' });
+  return p;
+});
 
 vi.mock('fs', async () => {
   const actual = await vi.importActual<typeof import('fs')>('fs');
@@ -22,6 +28,7 @@ vi.mock('fs', async () => {
     statSync: mockStatSync,
     unlinkSync: mockUnlinkSync,
     createReadStream: mockCreateReadStream,
+    realpathSync: mockRealpathSync,
   };
   return { ...actual, ...overrides, default: { ...actual, ...overrides } };
 });
@@ -54,6 +61,7 @@ const {
   listVersions,
   streamUpdate,
   deleteVersion,
+  BinaryPathError,
 } = await import('../update.service.js');
 const { EmbeddedVersionError } = await import('../binaryVersion.js');
 
@@ -78,10 +86,10 @@ describe('update.service', () => {
     it('inserts version record with correct hash and metadata', async () => {
       const binaryData = agentBinary('1.0.0', 'test-binary-content');
       mockExistsSync.mockReturnValue(true);
-      mockStatSync.mockReturnValue({ size: binaryData.length });
+      mockStatSync.mockReturnValue({ isFile: () => true, size: binaryData.length });
       mockReadFileSync.mockReturnValue(binaryData);
 
-      const result = await registerVersion('1.0.0', 'linux', 'amd64', '/path/to/binary', 'Initial release', false);
+      const result = await registerVersion('1.0.0', 'linux', 'amd64', '/mock-home/.projectachilles/binaries/to/binary', 'Initial release', false);
 
       expect(result.version).toBe('1.0.0');
       expect(result.os).toBe('linux');
@@ -95,11 +103,11 @@ describe('update.service', () => {
 
     it('rejects a binary whose embedded version differs from the registered one', async () => {
       mockExistsSync.mockReturnValue(true);
-      mockStatSync.mockReturnValue({ size: 64 });
+      mockStatSync.mockReturnValue({ isFile: () => true, size: 64 });
       mockReadFileSync.mockReturnValue(agentBinary('0.6.3'));
 
       await expect(
-        registerVersion('0.6.4', 'windows', 'amd64', '/path/agent.exe', 'notes', false),
+        registerVersion('0.6.4', 'windows', 'amd64', '/mock-home/.projectachilles/binaries/agent.exe', 'notes', false),
       ).rejects.toThrow(EmbeddedVersionError);
 
       const row = await testDb.get('SELECT * FROM agent_versions WHERE version = ?', ['0.6.4']);
@@ -108,11 +116,11 @@ describe('update.service', () => {
 
     it('rejects a binary with no version stamp', async () => {
       mockExistsSync.mockReturnValue(true);
-      mockStatSync.mockReturnValue({ size: 10 });
+      mockStatSync.mockReturnValue({ isFile: () => true, size: 10 });
       mockReadFileSync.mockReturnValue(Buffer.from('not stamped'));
 
       await expect(
-        registerVersion('0.6.4', 'linux', 'amd64', '/path/agent', 'notes', false),
+        registerVersion('0.6.4', 'linux', 'amd64', '/mock-home/.projectachilles/binaries/agent', 'notes', false),
       ).rejects.toThrow(/Cannot verify this binary's version/);
     });
 
@@ -120,17 +128,26 @@ describe('update.service', () => {
       mockExistsSync.mockReturnValue(false);
 
       await expect(
-        registerVersion('1.0.0', 'linux', 'amd64', '/nonexistent', 'notes', false),
-      ).rejects.toThrow('Binary not found: /nonexistent');
+        registerVersion('1.0.0', 'linux', 'amd64', '/mock-home/.projectachilles/binaries/nonexistent', 'notes', false),
+      ).rejects.toThrow(BinaryPathError);
+    });
+
+    it('rejects a path outside the binaries directory without echoing it', async () => {
+      mockExistsSync.mockReturnValue(true);
+
+      await expect(
+        registerVersion('1.0.0', 'linux', 'amd64', '/etc/passwd', 'notes', false),
+      ).rejects.toThrow(expect.objectContaining({ name: 'BinaryPathError', message: expect.not.stringContaining('/etc/passwd') }));
+      expect(mockReadFileSync).not.toHaveBeenCalled();
     });
 
     it('persists version to DB', async () => {
       const binaryData = agentBinary('2.0.0', 'binary');
       mockExistsSync.mockReturnValue(true);
-      mockStatSync.mockReturnValue({ size: 6 });
+      mockStatSync.mockReturnValue({ isFile: () => true, size: 6 });
       mockReadFileSync.mockReturnValue(binaryData);
 
-      await registerVersion('2.0.0', 'windows', 'amd64', '/path/bin.exe', 'v2', true, true);
+      await registerVersion('2.0.0', 'windows', 'amd64', '/mock-home/.projectachilles/binaries/bin.exe', 'v2', true, true);
 
       const row = await testDb.get('SELECT * FROM agent_versions WHERE version = ?', ['2.0.0']) as unknown as Record<string, unknown>;
       expect(row).toBeDefined();
@@ -143,16 +160,16 @@ describe('update.service', () => {
     it('replaces existing version (upsert behavior)', async () => {
       const binaryData = agentBinary('1.0.0', 'old-binary');
       mockExistsSync.mockReturnValue(true);
-      mockStatSync.mockReturnValue({ size: 10 });
+      mockStatSync.mockReturnValue({ isFile: () => true, size: 10 });
       mockReadFileSync.mockReturnValue(binaryData);
 
-      await registerVersion('1.0.0', 'linux', 'amd64', '/path/old', 'old notes', false);
+      await registerVersion('1.0.0', 'linux', 'amd64', '/mock-home/.projectachilles/binaries/old', 'old notes', false);
 
       const newBinary = agentBinary('1.0.0', 'new-binary-content');
-      mockStatSync.mockReturnValue({ size: newBinary.length });
+      mockStatSync.mockReturnValue({ isFile: () => true, size: newBinary.length });
       mockReadFileSync.mockReturnValue(newBinary);
 
-      const result = await registerVersion('1.0.0', 'linux', 'amd64', '/path/new', 'new notes', true);
+      const result = await registerVersion('1.0.0', 'linux', 'amd64', '/mock-home/.projectachilles/binaries/new', 'new notes', true);
 
       expect(result.release_notes).toBe('new notes');
       expect(result.mandatory).toBe(true);
@@ -165,13 +182,13 @@ describe('update.service', () => {
     it('computes correct SHA-256 hash', async () => {
       const binaryData = agentBinary('1.0.0', 'deterministic-content');
       mockExistsSync.mockReturnValue(true);
-      mockStatSync.mockReturnValue({ size: binaryData.length });
+      mockStatSync.mockReturnValue({ isFile: () => true, size: binaryData.length });
       mockReadFileSync.mockReturnValue(binaryData);
 
       const crypto = await import('crypto');
       const expectedHash = crypto.createHash('sha256').update(binaryData).digest('hex');
 
-      const result = await registerVersion('1.0.0', 'linux', 'amd64', '/path/bin', 'notes', false);
+      const result = await registerVersion('1.0.0', 'linux', 'amd64', '/mock-home/.projectachilles/binaries/bin', 'notes', false);
 
       expect(result.binary_sha256).toBe(expectedHash);
     });
@@ -184,7 +201,7 @@ describe('update.service', () => {
       const buffer = agentBinary('1.0.0');
       // existsSync: true for the file we just wrote, true for statSync
       mockExistsSync.mockReturnValue(true);
-      mockStatSync.mockReturnValue({ size: buffer.length });
+      mockStatSync.mockReturnValue({ isFile: () => true, size: buffer.length });
       mockReadFileSync.mockReturnValue(buffer);
 
       const result = await registerVersionFromUpload('1.0.0', 'linux', 'amd64', buffer, 'Upload notes', false);
@@ -204,7 +221,7 @@ describe('update.service', () => {
     it('creates DB record with platform and arch', async () => {
       const buffer = agentBinary('2.0.0');
       mockExistsSync.mockReturnValue(true);
-      mockStatSync.mockReturnValue({ size: 6 });
+      mockStatSync.mockReturnValue({ isFile: () => true, size: 6 });
       mockReadFileSync.mockReturnValue(buffer);
 
       await registerVersionFromUpload('2.0.0', 'windows', 'arm64', buffer, 'notes', true);
@@ -246,7 +263,7 @@ describe('update.service', () => {
     it('adds .exe extension for Windows uploads', async () => {
       const buffer = agentBinary('1.0.0');
       mockExistsSync.mockReturnValue(true);
-      mockStatSync.mockReturnValue({ size: 10 });
+      mockStatSync.mockReturnValue({ isFile: () => true, size: 10 });
       mockReadFileSync.mockReturnValue(buffer);
 
       await registerVersionFromUpload('1.0.0', 'windows', 'amd64', buffer, 'notes', false);
@@ -266,11 +283,11 @@ describe('update.service', () => {
       await testDb.run(`
         INSERT INTO agent_versions (version, os, arch, binary_path, binary_sha256, binary_size, release_notes, mandatory, signed, created_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `, ['1.0.0', 'linux', 'amd64', '/path/v1', 'aaa', 6, 'v1', 0, 0, '2026-01-01T00:00:00.000Z']);
+      `, ['1.0.0', 'linux', 'amd64', '/mock-home/.projectachilles/binaries/v1', 'aaa', 6, 'v1', 0, 0, '2026-01-01T00:00:00.000Z']);
       await testDb.run(`
         INSERT INTO agent_versions (version, os, arch, binary_path, binary_sha256, binary_size, release_notes, mandatory, signed, created_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `, ['2.0.0', 'linux', 'amd64', '/path/v2', 'bbb', 6, 'v2', 1, 0, '2026-01-02T00:00:00.000Z']);
+      `, ['2.0.0', 'linux', 'amd64', '/mock-home/.projectachilles/binaries/v2', 'bbb', 6, 'v2', 1, 0, '2026-01-02T00:00:00.000Z']);
 
       const latest = await getLatestVersion('linux', 'amd64');
 
@@ -288,11 +305,11 @@ describe('update.service', () => {
     it('filters by platform and arch correctly', async () => {
       const buf = agentBinary('1.0.0', 'binary');
       mockExistsSync.mockReturnValue(true);
-      mockStatSync.mockReturnValue({ size: 6 });
+      mockStatSync.mockReturnValue({ isFile: () => true, size: 6 });
       mockReadFileSync.mockReturnValue(buf);
 
-      await registerVersion('1.0.0', 'windows', 'amd64', '/path/win', 'win', false);
-      await registerVersion('1.0.0', 'linux', 'arm64', '/path/lin-arm', 'arm', false);
+      await registerVersion('1.0.0', 'windows', 'amd64', '/mock-home/.projectachilles/binaries/win', 'win', false);
+      await registerVersion('1.0.0', 'linux', 'arm64', '/mock-home/.projectachilles/binaries/lin-arm', 'arm', false);
 
       expect(await getLatestVersion('linux', 'amd64')).toBeNull();
       expect(await getLatestVersion('windows', 'amd64')).not.toBeNull();
@@ -305,13 +322,13 @@ describe('update.service', () => {
   describe('listVersions', () => {
     it('returns all versions sorted by created_at desc', async () => {
       mockExistsSync.mockReturnValue(true);
-      mockStatSync.mockReturnValue({ size: 6 });
+      mockStatSync.mockReturnValue({ isFile: () => true, size: 6 });
       mockReadFileSync
         .mockReturnValueOnce(agentBinary('1.0.0'))
         .mockReturnValueOnce(agentBinary('2.0.0'));
 
-      await registerVersion('1.0.0', 'linux', 'amd64', '/v1', 'v1', false);
-      await registerVersion('2.0.0', 'windows', 'amd64', '/v2', 'v2', true);
+      await registerVersion('1.0.0', 'linux', 'amd64', '/mock-home/.projectachilles/binaries/v1', 'v1', false);
+      await registerVersion('2.0.0', 'windows', 'amd64', '/mock-home/.projectachilles/binaries/v2', 'v2', true);
 
       const versions = await listVersions();
 
@@ -329,10 +346,10 @@ describe('update.service', () => {
     it('includes all metadata fields', async () => {
       const buf = agentBinary('3.0.0', 'binary');
       mockExistsSync.mockReturnValue(true);
-      mockStatSync.mockReturnValue({ size: 6 });
+      mockStatSync.mockReturnValue({ isFile: () => true, size: 6 });
       mockReadFileSync.mockReturnValue(buf);
 
-      await registerVersion('3.0.0', 'linux', 'amd64', '/v3', 'release three', false, true);
+      await registerVersion('3.0.0', 'linux', 'amd64', '/mock-home/.projectachilles/binaries/v3', 'release three', false, true);
 
       const versions = await listVersions();
 
@@ -363,10 +380,10 @@ describe('update.service', () => {
     it('sets correct headers and streams binary file', async () => {
       const buf = agentBinary('1.0.0', 'binary');
       mockExistsSync.mockReturnValue(true);
-      mockStatSync.mockReturnValue({ size: 6 });
+      mockStatSync.mockReturnValue({ isFile: () => true, size: 6 });
       mockReadFileSync.mockReturnValue(buf);
 
-      await registerVersion('1.0.0', 'linux', 'amd64', '/path/agent', 'notes', false);
+      await registerVersion('1.0.0', 'linux', 'amd64', '/mock-home/.projectachilles/binaries/agent', 'notes', false);
 
       const res = createMockResponse();
       const mockStream = { pipe: vi.fn() };
@@ -386,10 +403,10 @@ describe('update.service', () => {
     it('includes .exe extension for Windows filename', async () => {
       const buf = agentBinary('1.0.0', 'binary');
       mockExistsSync.mockReturnValue(true);
-      mockStatSync.mockReturnValue({ size: 6 });
+      mockStatSync.mockReturnValue({ isFile: () => true, size: 6 });
       mockReadFileSync.mockReturnValue(buf);
 
-      await registerVersion('1.0.0', 'windows', 'amd64', '/path/agent.exe', 'notes', false);
+      await registerVersion('1.0.0', 'windows', 'amd64', '/mock-home/.projectachilles/binaries/agent.exe', 'notes', false);
 
       const res = createMockResponse();
       const mockStream = { pipe: vi.fn() };
@@ -416,17 +433,14 @@ describe('update.service', () => {
 
     it('returns 404 when binary file missing from disk', async () => {
       const buf = agentBinary('1.0.0', 'binary');
-      // existsSync: true for registerVersion, then false for the stream check
-      let callCount = 0;
-      mockExistsSync.mockImplementation(() => {
-        callCount++;
-        // First call is from registerVersion, after that from streamUpdate
-        return callCount <= 1;
-      });
-      mockStatSync.mockReturnValue({ size: 6 });
+      // The file exists while registering, then disappears before the stream.
+      let registered = false;
+      mockExistsSync.mockImplementation(() => !registered);
+      mockStatSync.mockReturnValue({ isFile: () => true, size: 6 });
       mockReadFileSync.mockReturnValue(buf);
 
-      await registerVersion('1.0.0', 'linux', 'amd64', '/path/gone', 'notes', false);
+      await registerVersion('1.0.0', 'linux', 'amd64', '/mock-home/.projectachilles/binaries/gone', 'notes', false);
+      registered = true;
 
       const res = createMockResponse();
       await streamUpdate('linux', 'amd64', res);
@@ -440,10 +454,10 @@ describe('update.service', () => {
     it('sets Content-Length header from file stats', async () => {
       const buf = agentBinary('1.0.0', 'binary-data-12345');
       mockExistsSync.mockReturnValue(true);
-      mockStatSync.mockReturnValue({ size: buf.length });
+      mockStatSync.mockReturnValue({ isFile: () => true, size: buf.length });
       mockReadFileSync.mockReturnValue(buf);
 
-      await registerVersion('1.0.0', 'linux', 'amd64', '/path/agent', 'notes', false);
+      await registerVersion('1.0.0', 'linux', 'amd64', '/mock-home/.projectachilles/binaries/agent', 'notes', false);
 
       const res = createMockResponse();
       const mockStream = { pipe: vi.fn() };
@@ -461,15 +475,15 @@ describe('update.service', () => {
     it('removes DB record and binary file', async () => {
       const buf = agentBinary('1.0.0', 'binary');
       mockExistsSync.mockReturnValue(true);
-      mockStatSync.mockReturnValue({ size: 6 });
+      mockStatSync.mockReturnValue({ isFile: () => true, size: 6 });
       mockReadFileSync.mockReturnValue(buf);
 
-      await registerVersion('1.0.0', 'linux', 'amd64', '/path/bin', 'notes', false);
+      await registerVersion('1.0.0', 'linux', 'amd64', '/mock-home/.projectachilles/binaries/bin', 'notes', false);
 
       const result = await deleteVersion('1.0.0', 'linux', 'amd64');
 
       expect(result).toBe(true);
-      expect(mockUnlinkSync).toHaveBeenCalledWith('/path/bin');
+      expect(mockUnlinkSync).toHaveBeenCalledWith('/mock-home/.projectachilles/binaries/bin');
 
       // Verify DB record is gone
       const row = await testDb.get('SELECT * FROM agent_versions WHERE version = ?', ['1.0.0']);
@@ -479,10 +493,10 @@ describe('update.service', () => {
     it('handles missing binary file gracefully (DB-only cleanup)', async () => {
       const buf = agentBinary('1.0.0', 'binary');
       mockExistsSync.mockReturnValue(true);
-      mockStatSync.mockReturnValue({ size: 6 });
+      mockStatSync.mockReturnValue({ isFile: () => true, size: 6 });
       mockReadFileSync.mockReturnValue(buf);
 
-      await registerVersion('1.0.0', 'linux', 'amd64', '/path/bin', 'notes', false);
+      await registerVersion('1.0.0', 'linux', 'amd64', '/mock-home/.projectachilles/binaries/bin', 'notes', false);
 
       // Now make unlinkSync throw (file already deleted from disk)
       mockUnlinkSync.mockImplementation(() => {
@@ -507,11 +521,11 @@ describe('update.service', () => {
     it('removes correct platform-specific record only', async () => {
       const buf = agentBinary('1.0.0', 'binary');
       mockExistsSync.mockReturnValue(true);
-      mockStatSync.mockReturnValue({ size: 6 });
+      mockStatSync.mockReturnValue({ isFile: () => true, size: 6 });
       mockReadFileSync.mockReturnValue(buf);
 
-      await registerVersion('1.0.0', 'linux', 'amd64', '/path/linux', 'linux notes', false);
-      await registerVersion('1.0.0', 'windows', 'amd64', '/path/windows', 'windows notes', false);
+      await registerVersion('1.0.0', 'linux', 'amd64', '/mock-home/.projectachilles/binaries/linux', 'linux notes', false);
+      await registerVersion('1.0.0', 'windows', 'amd64', '/mock-home/.projectachilles/binaries/windows', 'windows notes', false);
 
       await deleteVersion('1.0.0', 'linux', 'amd64');
 
