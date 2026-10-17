@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { promisify } from 'util';
+import type { AgentOS, AgentArch } from '../../../types/agent.js';
 
 // ── Mock setup ──────────────────────────────────────────────────────
 
@@ -109,6 +110,18 @@ describe('AgentBuildService', () => {
     it('rejects invalid version string (special chars, spaces)', async () => {
       await expect(service.buildAndSign('v1.0 beta!', 'windows', 'amd64'))
         .rejects.toThrow('Invalid version string');
+    });
+
+    // os/arch become directory names under ~/.projectachilles/binaries. The
+    // route's Zod enums already restrict them; the service must not rely on that.
+    it.each([
+      ['../../etc', 'amd64'],
+      ['linux', '../x'],
+      ['plan9', 'amd64'],
+    ])('rejects unsupported platform %s/%s before touching disk', async (targetOs, arch) => {
+      await expect(service.buildAndSign('1.0.0', targetOs as AgentOS, arch as AgentArch))
+        .rejects.toThrow('Unsupported build target');
+      expect(mockExistsSync).not.toHaveBeenCalled();
     });
 
     it('throws when go.mod not found at agent source path', async () => {

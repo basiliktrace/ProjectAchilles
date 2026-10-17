@@ -27,6 +27,7 @@ const mockGitInstance = {
   log: vi.fn().mockResolvedValue({ latest: { hash: 'abc123def456' } }),
   revparse: vi.fn().mockResolvedValue('main'),
   raw: vi.fn().mockResolvedValue(''),
+  env: vi.fn().mockReturnThis(),
 };
 
 vi.mock('simple-git', () => ({

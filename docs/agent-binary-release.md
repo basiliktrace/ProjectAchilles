@@ -57,7 +57,18 @@ The backend stores a reference to the binary file on disk (not a copy). The file
 
 ### Option A: Admin API (production)
 
-Requires a Clerk JWT with admin access. Register each platform separately:
+Requires a Clerk JWT or API key with `endpoints:versions:create` (operator or admin role).
+
+**`binary_path` must be a file inside `~/.projectachilles/binaries/` on the backend host** (the home directory of the user running the backend; `/root/.projectachilles/binaries/` in the Docker images). Anything else, including a symlink or `..` path that resolves outside that directory, is rejected with **400**. Registered paths are streamed to every agent and deleted with the version, so the backend will not reference files elsewhere on the host. Copy the binary into place first, then register it:
+
+```bash
+mkdir -p ~/.projectachilles/binaries/linux-amd64
+cp agent/dist/achilles-agent-linux-amd64 ~/.projectachilles/binaries/linux-amd64/achilles-agent-0.1.0
+```
+
+If the binary is built somewhere other than the backend host, use **Upload Agent Binary** (or `POST /api/agent/admin/versions/upload`) instead; it stores the file in the right place for you.
+
+Register each platform separately:
 
 ```bash
 # Linux
@@ -68,7 +79,7 @@ curl -X POST http://localhost:3000/api/agent/admin/versions \
     "version": "0.1.0",
     "os": "linux",
     "arch": "amd64",
-    "binary_path": "/absolute/path/to/agent/dist/achilles-agent-linux-amd64",
+    "binary_path": "/root/.projectachilles/binaries/linux-amd64/achilles-agent-0.1.0",
     "release_notes": "Initial release",
     "mandatory": false
   }'
@@ -81,7 +92,7 @@ curl -X POST http://localhost:3000/api/agent/admin/versions \
     "version": "0.1.0",
     "os": "windows",
     "arch": "amd64",
-    "binary_path": "/absolute/path/to/agent/dist/achilles-agent-windows-amd64.exe",
+    "binary_path": "/root/.projectachilles/binaries/windows-amd64/achilles-agent-0.1.0.exe",
     "release_notes": "Initial release",
     "mandatory": false
   }'

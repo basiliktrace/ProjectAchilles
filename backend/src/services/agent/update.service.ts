@@ -37,6 +37,40 @@ function toAgentVersion(row: VersionRow): AgentVersion {
   };
 }
 
+/** Rejected binary path — the admin route maps this to HTTP 400. */
+export class BinaryPathError extends Error {
+  constructor() {
+    // Deliberately static: echoing the caller's path (or saying whether it
+    // exists) turned this error into a file-existence oracle for the host.
+    super('binary_path must be an existing file inside the agent binaries directory (~/.projectachilles/binaries)');
+    this.name = 'BinaryPathError';
+  }
+}
+
+/**
+ * Resolve `binaryPath` to its real location and require it to be a regular
+ * file under ~/.projectachilles/binaries. Symlinks and `..` are resolved before
+ * the containment check, so neither can point outside the root.
+ *
+ * Registered paths are later streamed to every agent and unlinked on version
+ * delete, so this is what keeps register-by-path (operator role and read-write
+ * API keys, not just admins) from becoming arbitrary file read/delete.
+ */
+function resolveBinaryInRoot(binaryPath: string): string {
+  let root: string;
+  let resolved: string;
+  try {
+    root = fs.realpathSync(path.join(os.homedir(), '.projectachilles', 'binaries'));
+    resolved = fs.realpathSync(path.resolve(binaryPath));
+  } catch {
+    throw new BinaryPathError();
+  }
+  if (!resolved.startsWith(root + path.sep) || !fs.statSync(resolved).isFile()) {
+    throw new BinaryPathError();
+  }
+  return resolved;
+}
+
 /**
  * Register a new agent binary version.
  * Computes SHA-256 hash and file size from the binary on disk.
@@ -52,12 +86,9 @@ export function registerVersion(
   /** Certificate subject the binary was signed with, for display and audit. */
   signerSubject: string | null = null,
 ): AgentVersion {
-  if (!fs.existsSync(binaryPath)) {
-    throw new Error(`Binary not found: ${binaryPath}`);
-  }
-
-  const stat = fs.statSync(binaryPath);
-  const fileBuffer = fs.readFileSync(binaryPath);
+  const resolvedPath = resolveBinaryInRoot(binaryPath);
+  const stat = fs.statSync(resolvedPath);
+  const fileBuffer = fs.readFileSync(resolvedPath);
 
   // Every registration path (register-by-path, upload, build) ends here, so
   // this is the one check that covers them all, on the final (signed) file.
@@ -72,13 +103,13 @@ export function registerVersion(
   db.prepare(`
     INSERT OR REPLACE INTO agent_versions (version, os, arch, binary_path, binary_sha256, binary_size, release_notes, mandatory, signed, binary_signature, signer_subject)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(version, os, arch, binaryPath, sha256, stat.size, releaseNotes, mandatory ? 1 : 0, signed ? 1 : 0, binarySignature, signerSubject);
+  `).run(version, os, arch, resolvedPath, sha256, stat.size, releaseNotes, mandatory ? 1 : 0, signed ? 1 : 0, binarySignature, signerSubject);
 
   return {
     version,
     os,
     arch,
-    binary_path: binaryPath,
+    binary_path: resolvedPath,
     binary_sha256: sha256,
     binary_size: stat.size,
     release_notes: releaseNotes,

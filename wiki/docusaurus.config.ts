@@ -9,6 +9,10 @@ const config: Config = {
 
   future: {
     v4: true,
+    // Since 3.10, `v4: true` also turns on Docusaurus Faster (Rspack + SWC +
+    // lightningcss), which needs @docusaurus/faster. Keep the webpack pipeline
+    // until adopting Faster is done as its own change.
+    faster: false,
   },
 
   url: 'https://docs.projectachilles.io',

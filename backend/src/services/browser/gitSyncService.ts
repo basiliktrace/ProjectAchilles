@@ -2,7 +2,46 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
-import { simpleGit, SimpleGit, CleanOptions } from 'simple-git';
+import { simpleGit, CleanOptions } from 'simple-git';
+import type { SimpleGit } from 'simple-git';
+
+/**
+ * Non-`git*` variables simple-git v4 also guards (mirrors `GitEnvKeys` in
+ * @simple-git/argv-parser). Each one can make git run an arbitrary program.
+ */
+const GUARDED_NON_GIT_ENV_KEYS = new Set(['editor', 'visual', 'pager', 'prefix', 'ssh_askpass']);
+
+/**
+ * Environment for git child processes: the ambient env minus every variable
+ * simple-git v4 guards, plus a hard GIT_TERMINAL_PROMPT=0.
+ *
+ * v4 strips guarded variables (all `git*` keys and the set above) from the
+ * child unless allow-listed, and THROWS if one is passed explicitly via
+ * `.env()` — so a plain `{ ...process.env }` would crash on any shell that
+ * sets EDITOR or PAGER. Stripping them also keeps GITHUB_TOKEN out of git's
+ * environment (the token travels in the remote URL instead).
+ *
+ * GIT_TERMINAL_PROMPT=0 is enforced here rather than inherited from
+ * scripts/start.sh so that no launch path can make a missing or expired token
+ * on a private repo hang the sync on a username prompt.
+ */
+export function gitChildEnv(source: NodeJS.ProcessEnv = process.env): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const [key, value] of Object.entries(source)) {
+    const normalized = key.toLowerCase().trim();
+    if (value === undefined || normalized.startsWith('git') || GUARDED_NON_GIT_ENV_KEYS.has(normalized)) {
+      continue;
+    }
+    env[key] = value;
+  }
+  env.GIT_TERMINAL_PROMPT = '0';
+  return env;
+}
+
+/** Every simple-git instance this service uses goes through here. */
+export function createGit(baseDir?: string): SimpleGit {
+  return simpleGit({ baseDir, allowEnvironment: ['GIT_TERMINAL_PROMPT'] }).env(gitChildEnv());
+}
 
 export interface SyncStatus {
   lastSyncTime: string | null;
@@ -33,7 +72,7 @@ export class GitSyncService {
       localPath: path.resolve(config.localPath),
     };
 
-    this.git = simpleGit();
+    this.git = createGit();
     this.syncStatus = {
       lastSyncTime: null,
       commitHash: null,
@@ -104,7 +143,7 @@ export class GitSyncService {
       ]);
 
       // Configure sparse checkout to include only the requested paths
-      const repoGit = simpleGit(this.config.localPath);
+      const repoGit = createGit(this.config.localPath);
       await repoGit.raw(['sparse-checkout', 'set', ...sparsePaths]);
 
       // Update status
@@ -137,7 +176,7 @@ export class GitSyncService {
 
     try {
       // Initialize git for the local repo
-      const repoGit = simpleGit(this.config.localPath);
+      const repoGit = createGit(this.config.localPath);
 
       // Configure auth for pull (in case remote changed)
       const authUrl = this.getAuthenticatedUrl();
@@ -183,7 +222,7 @@ export class GitSyncService {
         const sourceDir = path.join(this.config.localPath, this.config.sourceSubdir || sparsePaths[0]);
         if (!fs.existsSync(sourceDir)) {
           console.log(`  Sparse checkout missing ${this.config.sourceSubdir || sparsePaths[0]}, re-applying...`);
-          const repoGit = simpleGit(this.config.localPath);
+          const repoGit = createGit(this.config.localPath);
           await repoGit.raw(['sparse-checkout', 'set', ...sparsePaths]);
           await repoGit.checkout(this.config.branch);
         }
@@ -222,7 +261,7 @@ export class GitSyncService {
     }
 
     try {
-      const repoGit = simpleGit(this.config.localPath);
+      const repoGit = createGit(this.config.localPath);
       const log = await repoGit.log({ maxCount: 1 });
       const currentBranch = await repoGit.revparse(['--abbrev-ref', 'HEAD']);
 
