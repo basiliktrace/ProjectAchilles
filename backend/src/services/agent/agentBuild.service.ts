@@ -13,6 +13,11 @@ import { registerVersion } from './update.service.js';
 const execFileAsync = promisify(execFile);
 
 const VERSION_REGEX = /^[\w.\-]+$/;
+
+// os/arch become directory and file names under ~/.projectachilles/binaries.
+// Literal allowlists (not the route's Zod enums) so the service stands on its own.
+const BUILD_OS: readonly AgentOS[] = ['windows', 'linux', 'darwin'];
+const BUILD_ARCH: readonly AgentArch[] = ['amd64', 'arm64'];
 const BUILD_TIMEOUT = 300_000; // 5 minutes
 
 class BuildError extends Error {
@@ -109,6 +114,9 @@ export class AgentBuildService {
     arch: AgentArch,
   ): Promise<AgentVersion> {
     // 1. Validate inputs
+    if (!BUILD_OS.includes(targetOs) || !BUILD_ARCH.includes(arch)) {
+      throw new Error('Unsupported build target');
+    }
     if (!VERSION_REGEX.test(version)) {
       throw new Error('Invalid version string — use alphanumeric, dots, hyphens, underscores');
     }

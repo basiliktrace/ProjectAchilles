@@ -9,6 +9,7 @@ import {
   listVersions,
   registerVersionFromUpload,
   deleteVersion,
+  BinaryPathError,
 } from '../../services/agent/update.service.js';
 import { validate } from '../../middleware/validation.js';
 import { SigningError } from '../../services/agent/binarySigning.service.js';
@@ -127,6 +128,9 @@ export function createAdminUpdateRouter(buildService: AgentBuildService | null):
           mandatory ?? false
         );
       } catch (err) {
+        if (err instanceof BinaryPathError) {
+          throw new AppError(err.message, 400);
+        }
         if (err instanceof EmbeddedVersionError) {
           throw new AppError(err.message, 422);
         }
