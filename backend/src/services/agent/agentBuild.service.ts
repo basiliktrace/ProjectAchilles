@@ -136,7 +136,13 @@ export class AgentBuildService {
 
     const ext = targetOs === 'windows' ? '.exe' : '';
     const filename = `achilles-agent-${version}${ext}`;
-    const outputPath = path.join(binDir, filename);
+    // VERSION_REGEX already rules out separators; the containment check states
+    // the invariant where the path is built, so every path derived from
+    // outputPath below (tmp, signed) is provably inside binDir.
+    const outputPath = path.resolve(binDir, filename);
+    if (!outputPath.startsWith(binDir + path.sep)) {
+      throw new Error('Invalid version string — use alphanumeric, dots, hyphens, underscores');
+    }
 
     // Use a temp path during build to avoid partial files
     const tmpPath = outputPath + '.tmp';
