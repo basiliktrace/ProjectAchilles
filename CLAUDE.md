@@ -246,6 +246,11 @@ Frontend tests mock all Clerk hooks globally via `frontend/src/__tests__/setup.t
 - Use `@/` alias for `frontend/src` paths
 - Group imports: external → internal
 
+### Dependency Overrides & Lockfiles
+- **Overrides are floors, never exact pins**: `"pkg@<1.2.3": "1.2.3"`, not `"pkg": "1.2.3"`. An exact pin freezes the package at that version, so every later security fix is blocked. That's how the wiki ended up stuck on vulnerable `brace-expansion`/`js-yaml`/`undici`, and serverless on `tar` 7.5.19. Exception: npm 10 doesn't apply the `pkg@<range` form to nested copies whose parent range is already satisfied; there, use `"pkg": "^x.y.z"` (still a floor within the major).
+- **Regenerate lockfiles with Node 22's npm (10.x)** in `node:22-slim`, because that's what CI and the Dockerfiles run `npm ci` with. npm 10.9.9 crashes in `npm audit fix` / `npm update` on some trees (`edgesOut` null in `#loadPeerSet`). Compute the fix with `npx npm@11 audit fix`, then re-sync with npm 10 (`npm install --package-lock-only`) and prove it with npm 10 `npm ci`.
+- `npm audit fix --force` "fixes" here are often **downgrades** (e.g. `@vercel/node@3`, older Docusaurus). Don't use `--force`; add a targeted override instead.
+
 ### API Proxying
 Vite proxies `/api` → `http://localhost:$VITE_BACKEND_PORT` (default 3000)
 
@@ -267,9 +272,10 @@ Scopes: `frontend`, `backend`, `backend-serverless`, `agent`, `analytics`, `brow
 ## CI/CD
 
 GitHub Actions (`.github/workflows/ci.yml`) runs on push/PR to main:
-- `test-backend`: npm ci → build → test
-- `test-frontend`: npm ci → build → test
+- `Test backend`, `Test frontend`, `Test backend-serverless`: npm ci → build → test
 - Node 22
+
+`.github/workflows/dependency-audit.yml` runs `npm audit --omit=dev` for all five npm roots (backend, backend-serverless, frontend, blog, wiki) on lockfile changes, on pushes to main, and weekly. It fails on high/critical advisories unless they're accepted in `.github/audit-allowlist.json`. Every entry needs a `reason` and an `expires` date (about 3 months out); an expired entry fails the job, so "no fix available" gets re-checked. Only allow-list advisories with no fixed release; otherwise upgrade.
 
 ## Deployment
 
