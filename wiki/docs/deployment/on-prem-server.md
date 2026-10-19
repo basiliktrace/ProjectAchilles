@@ -127,25 +127,48 @@ Root Certification Authorities; macOS: Keychain → System → Always Trust).
 
 ### Agents
 
-The Go agent supports a custom CA via its config
-(`/opt/f0/achilles-agent.yaml` on Linux/macOS, `C:\F0\achilles-agent.yaml` on
-Windows):
+The agent's enroll handshake verifies the server certificate against the
+endpoint's **system trust store**. It has no option to skip verification:
+`--allow-insecure` is not consulted during `--enroll`, and `ca_cert` doesn't
+exist until enrollment writes the config. So the root CA must be trusted at the
+OS level **before** enrolling:
+
+1. Copy `root-ca.crt` to the endpoint and install it system-wide:
 
 ```bash
-# 1. Copy root-ca.crt to the endpoint (e.g. /opt/f0/root-ca.crt).
-# 2. Enroll, accepting the self-signed cert for this initial call only:
-sudo ./achilles-agent --enroll <TOKEN> --server https://achilles.corp.example.com \
-  --install --allow-insecure
+# Debian/Ubuntu
+sudo cp root-ca.crt /usr/local/share/ca-certificates/achilles-root-ca.crt
+sudo update-ca-certificates
 
-# 3. Point the agent at the CA and reload (no restart):
-sudo sed -i 's#^skip_tls_verify:.*#skip_tls_verify: false#' /opt/f0/achilles-agent.yaml
-echo 'ca_cert: /opt/f0/root-ca.crt' | sudo tee -a /opt/f0/achilles-agent.yaml
-sudo ./achilles-agent --reload
+# Fedora/RHEL
+sudo cp root-ca.crt /etc/pki/ca-trust/source/anchors/achilles-root-ca.crt
+sudo update-ca-trust
+
+# macOS
+sudo security add-trusted-cert -d -r trustRoot \
+  -k /Library/Keychains/System.keychain root-ca.crt
 ```
 
-After this the agent verifies the server against your internal root CA on every
-heartbeat. If endpoints already trust the internal CA at the OS level, skip
-`ca_cert` entirely — the agent uses the system trust store.
+```powershell
+# Windows (PowerShell, admin): Local Machine > Trusted Root Certification Authorities
+certutil -addstore -f Root root-ca.crt
+```
+
+2. Enroll over `https://`:
+
+```bash
+sudo ./achilles-agent --enroll <TOKEN> --server https://achilles.corp.example.com --install
+```
+
+Both the enroll handshake and the installed service then verify the server
+against your internal root CA. No `ca_cert` or `--allow-insecure` is needed.
+
+> Managed fleets that already distribute the internal CA (e.g. via GPO) can skip
+> step 1. If you can't modify a Linux endpoint's trust store, set
+> `SSL_CERT_FILE=/path/root-ca.crt` for the enroll command, then add
+> `ca_cert: /path/root-ca.crt` to the agent config (`/opt/f0/achilles-agent.yaml`)
+> and run `sudo ./achilles-agent --reload`. The enroll client reads
+> `SSL_CERT_FILE`; the running service reads `ca_cert`.
 
 ## Verify
 
@@ -160,7 +183,8 @@ Then open `https://achilles.corp.example.com/` from a client on the network.
 | Symptom | Check |
 |---------|-------|
 | Browser cert warning (`internal`/`byo`) | Root CA not installed in the client trust store. |
-| Agent: `x509: certificate signed by unknown authority` | `ca_cert` path wrong, or the CA file wasn't copied to the endpoint. |
+| Agent: `x509: certificate signed by unknown authority` | The root CA isn't in the endpoint's system trust store (required for `--enroll`; see Step 3), or `ca_cert` points to a wrong path. |
+| Agent: `uses plaintext HTTP to a remote host` | Expected: the agent never enrolls over `http://` to a non-loopback host, and `--allow-insecure` doesn't change that. Use the `https://` URL and make sure `AGENT_SERVER_URL` in `backend/.env` is that `https://` URL. |
 | `acme-dns` cert never issues | Wrong `CADDY_DNS_MODULE`/provider or token lacks zone-edit permission: `logs -f caddy`. |
 | Can't reach the host | Internal DNS resolves `ACHILLES_DOMAIN`? Firewall allows 443 from your subnet? |
 
