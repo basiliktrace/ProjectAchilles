@@ -37,6 +37,24 @@ jobs:
           prompt: '/code-review:code-review ${{ github.repository }}/pull/${{ github.event.pull_request.number }} --comment'
           claude_args: |
             --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr list:*),Bash(gh issue view:*),Bash(gh issue list:*),Bash(gh search:*)"
+
+      # Full output stays hidden (public repo); list only which tool calls were denied
+      - name: Report denied tool calls
+        continue-on-error: true # Reporting only; never fail the review over it
+        if: always() && steps.claude-review.outputs.execution_file != ''
+        env:
+          EXECUTION_FILE: ${{ steps.claude-review.outputs.execution_file }}
+        # Bash denials show only the first two words of the command; VAR=value words are masked
+        run: |
+          denials=$(jq -r '
+            .[] | select(.type == "result") | .permission_denials[]? |
+            if .tool_name == "Bash" then
+              "Bash: " + ((.tool_input.command // "") | split(" ") | map(select(. != "")) | .[0:2]
+                | map(if test("=") then "<env>" else . end) | join(" "))
+            else .tool_name end
+          ' "$EXECUTION_FILE" | sort | uniq -c | sort -rn)
+          { echo "### Denied tool calls"; echo '```'; echo "${denials:-none}"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          echo "${denials:-No denied tool calls}"
           # See https://github.com/anthropics/claude-code-action/blob/main/docs/usage.md
           # or https://code.claude.com/docs/en/cli-reference for available options
 
