@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { isLowSample, seriesDelta, postureCaption, pickCurrentScore, scoreTone } from '../posture';
+import { isLowSample, seriesDelta, postureCaption, pickCurrentScore, scoreTone, postureWindowLabel } from '../posture';
 
 describe('posture', () => {
   it('isLowSample', () => {
@@ -36,5 +36,18 @@ describe('posture', () => {
     expect(scoreTone(85, 100)).toBe('accent');
     expect(scoreTone(80, 100)).toBe('accent');
     expect(scoreTone(60, 100)).toBe('warning');
+  });
+  it('postureWindowLabel mirrors the backend window rule', () => {
+    expect(postureWindowLabel({ preset: '7d' })).toBe('7d');
+    expect(postureWindowLabel({ preset: '90d' })).toBe('90d');
+    expect(postureWindowLabel({ preset: 'all' })).toBe('last 365d');
+    expect(postureWindowLabel({ preset: '400d' })).toBe('last 365d');
+    expect(postureWindowLabel({ preset: '365d' })).toBe('365d');
+    expect(postureWindowLabel({ preset: '48h' })).toBe('2d');
+    expect(postureWindowLabel({ preset: '2w' })).toBe('14d');
+    expect(
+      postureWindowLabel({ preset: 'custom', from: '2026-10-01T00:00:00.000Z', to: '2026-10-11T12:00:00.000Z' }),
+    ).toBe('11d');
+    expect(postureWindowLabel({ preset: 'custom', from: '2024-01-01T00:00:00Z', to: '2026-01-01T00:00:00Z' })).toBe('last 365d');
   });
 });

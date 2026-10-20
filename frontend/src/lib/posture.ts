@@ -49,3 +49,27 @@ export function scoreTone(
   if (score >= 60) return 'warning';
   return 'danger';
 }
+
+const DAY_MS = 86_400_000;
+const MAX_FRESHNESS_DAYS = 365;
+const PRESET_UNIT_MS: Record<string, number> = { h: 3_600_000, d: DAY_MS, w: 7 * DAY_MS };
+
+/**
+ * Window label for the posture caption. Mirrors the backend's
+ * `resolvePostureWindow`: presets -> '<n>d', anything over 365 days (e.g.
+ * "All time", which sends from=2000-01-01) -> 'last 365d', custom -> '<ceil(days)>d'.
+ */
+export function postureWindowLabel(dateRange: { preset: string; from?: string; to?: string }): string {
+  let ms: number;
+  if (dateRange.preset === 'custom' && dateRange.from && dateRange.to) {
+    ms = Math.max(0, Date.parse(dateRange.to) - Date.parse(dateRange.from));
+  } else if (dateRange.preset === 'all') {
+    ms = Number.POSITIVE_INFINITY;
+  } else {
+    const m = dateRange.preset.match(/^(\d+)([dhw])$/);
+    ms = m ? parseInt(m[1], 10) * PRESET_UNIT_MS[m[2]] : 90 * DAY_MS; // unknown preset sends now-90d
+  }
+  if (Number.isNaN(ms)) ms = 0;
+  if (ms > MAX_FRESHNESS_DAYS * DAY_MS) return `last ${MAX_FRESHNESS_DAYS}d`;
+  return `${Math.ceil(ms / DAY_MS)}d`;
+}

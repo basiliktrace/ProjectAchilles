@@ -144,8 +144,11 @@ wide right column carrying the shapes you read.
 **Posture row — right column**
 
 - **Trend Overview** — Defense Score, Actual Score, error rate, and (when
-  configured) Secure Score on one 30-day-rolling axis. Actual Score renders as a
-  neutral dashed reference line rather than a fourth green series.
+  configured) Secure Score and ZTA Score. The Defense Score line is the
+  latest-result score as of each UTC day, over the same window as the ring, and
+  the header shows the most recent value of each series. Actual Score renders as
+  a neutral dashed reference line (shown only when risk acceptances are active)
+  rather than a fourth green series.
 
 **Lower rows** — Test activity, Top Remediation Controls (ranked by Secure Score
 impact), Test Coverage and Defense Score by Host as flat bar lists, and the

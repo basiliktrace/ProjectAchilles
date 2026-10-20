@@ -23,7 +23,8 @@ import CrowdStrikeTab from './components/CrowdStrikeTab';
 import SecureScoreCard from './components/SecureScoreCard';
 import ZtaScoreCard from './components/ZtaScoreCard';
 import TopControlsCard from './components/TopControlsCard';
-import { useAnalyticsFilters, getWindowDaysForDateRange, serializeToUrlParams } from '@/hooks/useAnalyticsFilters';
+import { useAnalyticsFilters, serializeToUrlParams } from '@/hooks/useAnalyticsFilters';
+import { pickCurrentScore, postureWindowLabel, seriesDelta } from '@/lib/posture';
 import { useAnalyticsAuth } from '@/hooks/useAnalyticsAuth';
 import { useDefenderConfig } from '@/hooks/useDefenderConfig';
 import { useCrowdStrikeConfig } from '@/hooks/useCrowdStrikeConfig';
@@ -57,6 +58,8 @@ interface DefenseScoreData {
   realScore?: number;
   rawScore?: number;
   riskAcceptedCount?: number;
+  /** Test x endpoint pairs behind the tile score (basis=latest). */
+  pairCount?: number;
 }
 
 export default function AnalyticsDashboardPage() {
@@ -283,10 +286,8 @@ export default function AnalyticsDashboardPage() {
   const loadDashboardData = useCallback(async () => {
     setLoadingDashboard(true);
     const params = filterState.getApiParams();
-    const scoreParams = { ...params, scoringMode };
-
-    // Calculate window size based on current date range filter
-    const windowDays = getWindowDaysForDateRange(filterState.filters.dateRange);
+    // Score-bearing endpoints report the latest result per test x endpoint pair.
+    const scoreParams = { ...params, scoringMode, basis: 'latest' as const };
 
     try {
       const [
@@ -307,16 +308,16 @@ export default function AnalyticsDashboardPage() {
         analyticsApi.getDefenseScore(scoreParams),
         analyticsApi.getUniqueHostnames(params),
         analyticsApi.getUniqueTests(params),
-        analyticsApi.getDefenseScoreTrend({ ...scoreParams, interval: 'day', windowDays }),
+        analyticsApi.getDefenseScoreTrend({ ...scoreParams, interval: 'day' }),
         analyticsApi.getResultsByErrorType(params),
-        analyticsApi.getTestCoverage(params),
-        analyticsApi.getTechniqueDistribution(params),
+        analyticsApi.getTestCoverage(scoreParams),
+        analyticsApi.getTechniqueDistribution(scoreParams),
         analyticsApi.getHostTestMatrix(params),
         analyticsApi.getDefenseScoreByCategorySubcategory(scoreParams),
         analyticsApi.getPaginatedExecutions({ ...params, pageSize: 3, sortField: 'routing.event_time', sortOrder: 'desc' }),
         analyticsApi.getDefenseScoreByHostname(scoreParams),
         analyticsApi.getErrorRate(params),
-        analyticsApi.getErrorRateTrend({ ...params, interval: 'day', windowDays }),
+        analyticsApi.getErrorRateTrend({ ...params, interval: 'day' }),
       ]);
 
       setDefenseScore({
@@ -327,6 +328,7 @@ export default function AnalyticsDashboardPage() {
         realScore: score.realScore,
         rawScore: score.rawScore,
         riskAcceptedCount: score.riskAcceptedCount,
+        pairCount: score.pairCount,
       });
       setUniqueHostnames(hostnameCount);
       setUniqueTestCount(testCount);
@@ -646,9 +648,12 @@ export default function AnalyticsDashboardPage() {
   };
 
   // Active-range label for the Defense ledger, e.g. "90d window"
-  const rangePreset = filterState.filters.dateRange.preset;
-  const windowLabel =
-    rangePreset === 'custom' ? 'custom window' : rangePreset === 'all' ? 'all time' : `${rangePreset} window`;
+  const windowLabel = postureWindowLabel(filterState.filters.dateRange);
+  // Ring + pair count follow the trend's last point so the tile and the line never disagree.
+  const currentPosture = pickCurrentScore(
+    defenseScore ? { score: defenseScore.overall, pairCount: defenseScore.pairCount } : null,
+    trendData.length > 0 ? trendData : null,
+  );
 
   return (
     <>
@@ -778,7 +783,9 @@ export default function AnalyticsDashboardPage() {
             <div className="grid items-stretch gap-4 md:grid-cols-3 max-lg:[&>*]:min-w-0">
               <div className="flex min-w-0 flex-col gap-4">
                 <HeroMetricsCard
-                  defenseScore={defenseScore?.overall ?? null}
+                  defenseScore={currentPosture.score}
+                  pairCount={currentPosture.pairCount}
+                  delta={seriesDelta(trendData)}
                   uniqueEndpoints={uniqueHostnames}
                   executedTests={uniqueTestCount}
                   totalResults={defenseScore?.total ?? null}
@@ -802,12 +809,10 @@ export default function AnalyticsDashboardPage() {
                   <TrendChart
                     data={trendData}
                     errorRateData={errorRateTrendData}
-                    errorRateOverall={errorRate}
                     secureScoreTrendData={secureScoreTrendData}
                     ztaScoreTrendData={ztaScoreTrendData}
                     loading={loadingDashboard}
                     title="Trend Overview"
-                    windowDays={getWindowDaysForDateRange(filterState.filters.dateRange)}
                   />
                 </div>
               </div>
@@ -836,6 +841,8 @@ export default function AnalyticsDashboardPage() {
                   data={testCoverageData}
                   loading={loadingDashboard}
                   title="Test Coverage"
+                  description="Protected vs unprotected hosts"
+                  unit="hosts"
                 />
                 <DefenseScoreByHostChart
                   data={defenseScoreByHost}
@@ -856,6 +863,8 @@ export default function AnalyticsDashboardPage() {
                   data={testCoverageData}
                   loading={loadingDashboard}
                   title="Test Coverage"
+                  description="Protected vs unprotected hosts"
+                  unit="hosts"
                 />
                 <DefenseScoreByHostChart
                   data={defenseScoreByHost}

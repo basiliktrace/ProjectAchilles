@@ -12,6 +12,8 @@ interface StackedBarChartProps {
   loading?: boolean;
   title?: string;
   description?: string;
+  /** Noun for the per-row counts in the tooltip ('hosts' for test coverage). */
+  unit?: string;
   maxVisibleItems?: number;
 }
 
@@ -26,7 +28,8 @@ function StackedBarChart({
   data,
   loading,
   title = 'Test Coverage',
-  description = 'Protected vs unprotected executions',
+  description = 'Protected vs unprotected pairs',
+  unit = 'pairs',
   maxVisibleItems = 8,
 }: StackedBarChartProps) {
   const rows = useMemo(() => {
@@ -75,7 +78,7 @@ function StackedBarChart({
               <div
                 key={row.label}
                 className="flex flex-col gap-1"
-                title={`${row.protected.toLocaleString()} protected · ${row.unprotected.toLocaleString()} unprotected`}
+                title={`${row.protected.toLocaleString()} protected · ${row.unprotected.toLocaleString()} unprotected ${unit}`}
               >
                 <div className="flex items-baseline justify-between gap-3">
                   <span className="truncate font-mono text-[11px] text-foreground">{row.label}</span>

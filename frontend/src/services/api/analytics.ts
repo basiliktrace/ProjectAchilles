@@ -38,7 +38,8 @@ export interface TrendDataPoint {
   score: number | null;
   total: number;
   protected: number;
-  realScore?: number;
+  /** Pre-risk-acceptance "Actual" score; present only when exclusions are active. */
+  realScore?: number | null;
   realTotal?: number;
   realProtected?: number;
 }

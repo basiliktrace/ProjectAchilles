@@ -129,4 +129,52 @@ describe('HeroMetricsCard (Defense ledger)', () => {
       expect(screen.getAllByText('—').length).toBeGreaterThan(0);
     });
   });
+
+  describe('latest-result posture', () => {
+    it('shows "8,678 pairs" in the footer (PAIRS replaces RESULTS) and in the caption', () => {
+      render(
+        <HeroMetricsCard
+          defenseScore={72.4}
+          pairCount={8678}
+          delta={-2.5}
+          totalResults={17055}
+          windowLabel="90d"
+          uniqueEndpoints={42}
+          executedTests={123}
+        />,
+      );
+      expect(screen.getByText('Pairs')).toBeInTheDocument();
+      expect(screen.queryByText('Results')).toBeNull();
+      expect(screen.getByText('8,678')).toBeInTheDocument();
+      expect(screen.queryByText('17k')).toBeNull();
+      expect(screen.getByText('8,678 pairs · −2.5 pts over 90d')).toBeInTheDocument();
+    });
+
+    it('low sample renders the ring muted with "n=3 · not enough data"', () => {
+      const { container } = render(
+        <HeroMetricsCard defenseScore={100} pairCount={3} uniqueEndpoints={1} executedTests={3} windowLabel="7d" />,
+      );
+      expect(screen.getByText('n=3 · not enough data')).toBeInTheDocument();
+      const ring = container.querySelector('svg')?.parentElement;
+      expect(ring?.className).toContain('text-muted');
+      expect(ring?.className).not.toContain('text-accent');
+    });
+
+    it('renders "last 365d" for the all-time window', () => {
+      render(
+        <HeroMetricsCard defenseScore={80} pairCount={50} windowLabel="last 365d" uniqueEndpoints={1} executedTests={3} />,
+      );
+      expect(screen.getByText('last 365d')).toBeInTheDocument();
+    });
+
+    it('puts the posture help text on the score', () => {
+      render(<HeroMetricsCard defenseScore={80} pairCount={50} uniqueEndpoints={1} executedTests={3} />);
+      expect(screen.getByTitle(/most recent result in the selected window/)).toBeInTheDocument();
+    });
+
+    it('keeps the Results footer when no pairCount is provided', () => {
+      render(<HeroMetricsCard defenseScore={80} totalResults={500} uniqueEndpoints={1} executedTests={3} />);
+      expect(screen.getByText('Results')).toBeInTheDocument();
+    });
+  });
 });

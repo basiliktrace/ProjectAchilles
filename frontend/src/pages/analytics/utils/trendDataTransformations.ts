@@ -52,7 +52,7 @@ export function applyForwardFill(data: TrendDataPoint[]): ForwardFilledTrendData
 
     if (hasMeaningfulData) {
       lastKnownScore = point.score;
-      if (point.realScore !== undefined) lastKnownRealScore = point.realScore;
+      if (point.realScore != null) lastKnownRealScore = point.realScore;
       return { ...point, isCarriedForward: false };
     }
 

@@ -56,7 +56,7 @@ function TechniqueDistributionCard({
                 key={row.technique}
                 onClick={() => onTechniqueClick?.(row.technique)}
                 className="flex w-full items-center gap-2.5 rounded px-1 py-0.5 text-left transition-colors hover:bg-raised"
-                title={`${row.technique}: ${row.protected} protected / ${row.unprotected} unprotected`}
+                title={`${row.technique}: ${row.protected} protected / ${row.unprotected} unprotected pairs`}
               >
                 <Badge variant="default" className="w-[76px] shrink-0 justify-center font-mono">
                   {row.technique}
