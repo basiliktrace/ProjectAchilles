@@ -20,8 +20,8 @@ export interface AnalyticsSettings {
 
 // Defense score response
 export interface DefenseScoreResponse {
-  /** Combined score: (protected + detected) / total × 100. */
-  score: number;
+  /** Combined score: (protected + detected) / total × 100. null = nothing to score (basis=latest with no pairs). */
+  score: number | null;
   /** Documents where is_protected:true. */
   protectedCount: number;
   /** Documents where defender_detected:true AND is_protected:false. Mutually exclusive with protectedCount. */
@@ -30,22 +30,27 @@ export interface DefenseScoreResponse {
   unprotectedCount: number;
   totalExecutions: number;
   /** EDR-only (strict) score: protected / total × 100, computed on the same exclusion-filtered base as `score`. */
-  realScore?: number;
+  realScore?: number | null;
   realProtectedCount?: number;
   realUnprotectedCount?: number;
   realTotalExecutions?: number;
   /** Combined score computed against the unfiltered (pre-risk-acceptance) base — i.e. what `score` would be if no acceptances were active. Equals `score` when `riskAcceptedCount === 0`. */
-  rawScore?: number;
+  rawScore?: number | null;
   riskAcceptedCount?: number;
+  /** Which definition produced the numbers. Absent on legacy (executions) responses. */
+  basis?: 'latest' | 'executions';
+  /** basis=latest: number of test × endpoint pairs scored (also in totalExecutions). */
+  pairCount?: number;
 }
 
 // Trend data point
 export interface TrendDataPoint {
   timestamp: string;
-  score: number;
+  /** null = no data in the window (render as a gap, never as 0) */
+  score: number | null;
   total: number;
   protected: number;
-  realScore?: number;
+  realScore?: number | null;
   realTotal?: number;
   realProtected?: number;
 }
@@ -215,6 +220,11 @@ export interface ExtendedAnalyticsQueryParams extends AnalyticsQueryParams {
    * Dashboard's Defense Score leaves it off.
    */
   excludeCyberHygiene?: boolean;
+  /**
+   * Score definition. 'executions' (default) = every conclusive execution in
+   * the range; 'latest' = latest conclusive result per test × endpoint pair.
+   */
+  basis?: 'latest' | 'executions';
 }
 
 // Combined query params for paginated executions
@@ -328,7 +338,7 @@ export interface ErrorRateResponse {
 // Error rate trend data point (rolling window)
 export interface ErrorRateTrendDataPoint {
   timestamp: string;
-  errorRate: number;      // percentage 0-100
+  errorRate: number | null; // percentage 0-100; null = no test activity in the window
   errorCount: number;     // rolling window error count
   conclusiveCount: number; // rolling window conclusive count
   total: number;          // errorCount + conclusiveCount

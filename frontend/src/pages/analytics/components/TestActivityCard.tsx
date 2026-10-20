@@ -1,11 +1,13 @@
 import { memo } from 'react';
 import { CheckCircle2, XCircle } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import type { TrendDataPoint, EnrichedTestExecution } from '@/services/api/analytics';
+import type { EnrichedTestExecution } from '@/services/api/analytics';
 
 interface TestActivityCardProps {
-  trendData: TrendDataPoint[];
+  /** Recent executions, newest first. */
   recentTests: EnrichedTestExecution[];
+  /** Total executions in the window (pagination total, not a pair count). */
+  executionCount?: number | null;
   loading?: boolean;
   title?: string;
   className?: string;
@@ -39,8 +41,8 @@ function getRelativeTime(timestamp: string): string {
 }
 
 function TestActivityCard({
-  trendData,
   recentTests,
+  executionCount,
   loading,
   title = 'Test activity',
   className,
@@ -49,19 +51,16 @@ function TestActivityCard({
     return <div className="h-72 animate-pulse rounded-lg border border-border bg-raised" aria-hidden="true" />;
   }
 
-  const totalTests = trendData.reduce((sum, d) => sum + (d.total ?? 0), 0);
-  const validData = trendData.filter((d) => d.total > 0);
-  const lastActivity =
-    validData.length > 0
-      ? validData.reduce((latest, current) =>
-          parseTimestamp(current.timestamp) > parseTimestamp(latest.timestamp) ? current : latest,
-        )
-      : null;
-  const lastDate = lastActivity ? parseTimestamp(lastActivity.timestamp) : null;
+  // Most recent execution by timestamp (do not rely on list order).
+  const latest = recentTests.reduce<Date | null>((best, t) => {
+    const d = parseTimestamp(t.timestamp);
+    if (!isValidDate(d)) return best;
+    return best === null || d > best ? d : best;
+  }, null);
 
   const description =
-    lastDate && isValidDate(lastDate)
-      ? `${totalTests.toLocaleString()} tests · last run ${lastDate.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}`
+    latest && executionCount != null
+      ? `${executionCount.toLocaleString()} tests · last run ${latest.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}`
       : 'Latest executions in window';
 
   return (

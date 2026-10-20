@@ -10,9 +10,13 @@ The Defense Score is the primary metric for measuring your security posture.
 
 ## What Is the Defense Score?
 
-The Defense Score is an aggregate percentage representing how many of your executed security tests were detected (or blocked) by your defenses. A score of 85% means 85% of test executions resulted in a "Protected" outcome.
+The Defense Score is an aggregate percentage representing how many of your security tests were detected (or blocked) by your defenses. The Dashboard and Analytics headline, trend line, and the four breakdowns (category, host, technique, test coverage) use the **latest-result** score: a score of 85% means 85% of test × endpoint pairs were Protected on their most recent conclusive result. See [Latest-result score](#latest-result-score).
 
-## Score Calculation
+An **executions-based** score also exists: the share of individual executions that were Protected. It is what the API returns by default (`basis=executions`) and what the PDF execution report, score-drop alerts, and the Executions 7d tile use.
+
+## Score Calculation (executions basis)
+
+The formula below is the executions-based calculation; the latest-result score applies it to each pair's most recent result only.
 
 ```
 Defense Score = (Protected Executions / Total Executions) × 100
@@ -28,6 +32,24 @@ See **[Exit Codes & Outcomes](./exit-codes-and-outcomes)** for the canonical
 reference covering every exit code, correlation flag, stage label, and SB
 report outcome.
 
+## Latest-result score
+
+The dashboard headline uses the **latest-result** basis:
+
+> Share of test × endpoint pairs whose most recent result in the selected window was blocked or detected.
+
+A *pair* is one test on one endpoint (within one organization). Only the most recent conclusive result for each pair counts, so a test that failed last month but is blocked today shows as protected, and running a test many times does not weight it more heavily. Error and inconclusive results are skipped when finding the latest one.
+
+**Freshness window.** The selected date range is the freshness window: a pair whose last conclusive result is older than the range is not counted. The window is capped at 365 days, so All time reads as "last 365d".
+
+**Caption.** Under the score the dashboard shows `<n> pairs · ±d.d pts over <range>`: how many pairs were scored and how far the score moved across the range.
+
+**Not enough data.** With fewer than 10 pairs the score is shown muted, in a neutral colour instead of red/amber/green, with the caption `n=<n> · not enough data` beneath it, because a handful of pairs swings the percentage too much to be meaningful.
+
+**Trend.** The trend line is the same calculation as of each day. Day labels are UTC, ranges over 90 days use weekly points, and the last point always equals the headline score. A window with no pairs is drawn as a gap, not 0%.
+
+The execution-count formula above still applies where noted: the PDF execution report, score-drop alerts, the Executions 7d tile, and the test-vs-alert timeline cards stay on executions. Breakdowns by test, technique, severity, category, and organization also count executions. API users select the basis with `basis=latest|executions`; see the [Analytics API](../../api-reference/analytics#score-basis).
+
 ## Breakdowns
 
 The Defense Score can be broken down by:
@@ -39,16 +61,19 @@ The Defense Score can be broken down by:
 
 ## Trend Analysis
 
-The trend chart shows the Defense Score over time with a configurable rolling window:
-- **7 days** — Short-term operational view
-- **30 days** — Monthly trend
-- **90 days** — Quarterly trend
+The trend line shows the score as of each UTC day, using the same freshness window as the headline tile. Its last point equals the tile, ranges over 90 days use weekly points, and a gap means no pairs fell in the window (not 0%).
 
-A downward trend indicates deteriorating security posture and may trigger [threshold alerts](../integrations/alerting).
+A downward trend indicates deteriorating security posture and may trigger [threshold alerts](../integrations/alerting), which are evaluated on executions.
 
-## Dual Defense Score
+Via the API, the rolling `windowDays` option (1-90 days) applies only to the executions basis; under `basis=latest` it is ignored.
 
-The dashboard overlays the real-time score with a trend line, making it easy to see both the current state and the trajectory.
+## Actual, EDR-only, and Risk-accepted Scores
+
+The dashboard ledger reconciles the headline with an *Actual* score, an *EDR-only* score, and the effect of risk acceptances, so you can see both the current state and what is excluded:
+
+- **Actual** is the raw score before risk acceptance: the same calculation with no exclusions applied. It shows a value only while acceptances exclude something (otherwise it would equal the headline, so the row shows —).
+- **EDR-only** is the strict, blocked-only score: it counts only results the endpoint control blocked (`is_protected`), not Defender or CrowdStrike detections.
+- **Risk-accepted** is how many test × endpoint pairs the active acceptances exclude.
 
 ## Time window
 
@@ -114,17 +139,20 @@ wide right column carrying the shapes you read.
 **Posture row — left column**
 
 - **Defense Score ledger** — a ring gauge beside four reconciling lines:
-  *Actual* (raw protected share), *EDR-only*, *Risk-accepted* (how many results
-  are excluded), and *Inconclusive*. A footer strip carries endpoints, tests,
-  and result counts. The ledger replaced the old hero card, which showed one
+  *Actual* (raw protected share), *EDR-only*, *Risk-accepted* (how many test × endpoint
+  pairs are excluded), and *Inconclusive*. A footer strip carries endpoints, tests,
+  and the pair count behind the score. The ledger replaced the old hero card, which showed one
   big number and left the reconciliation implicit.
 - **Secure Score** — Microsoft Defender's score and raw points, when configured
 
 **Posture row — right column**
 
 - **Trend Overview** — Defense Score, Actual Score, error rate, and (when
-  configured) Secure Score on one 30-day-rolling axis. Actual Score renders as a
-  neutral dashed reference line rather than a fourth green series.
+  configured) Secure Score and ZTA Score. The Defense Score line is the
+  latest-result score as of each UTC day, over the same window as the ring, and
+  the header shows the most recent value of each series. Actual Score renders as
+  a neutral dashed reference line (shown only when risk acceptances are active)
+  rather than a fourth green series.
 
 **Lower rows** — Test activity, Top Remediation Controls (ranked by Secure Score
 impact), Test Coverage and Defense Score by Host as flat bar lists, and the

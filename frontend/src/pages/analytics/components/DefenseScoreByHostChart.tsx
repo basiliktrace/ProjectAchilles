@@ -70,7 +70,7 @@ function DefenseScoreByHostChart({
               <div
                 key={item.hostname}
                 className="flex items-center gap-2.5"
-                title={`${item.protected.toLocaleString()} protected · ${item.unprotected.toLocaleString()} unprotected · ${item.total.toLocaleString()} executions`}
+                title={`${item.protected.toLocaleString()} protected · ${item.unprotected.toLocaleString()} unprotected · ${item.total.toLocaleString()} pairs`}
               >
                 <span className="w-[130px] shrink-0 truncate font-mono text-[11px] text-muted">
                   {item.hostname}

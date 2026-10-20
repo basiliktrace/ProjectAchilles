@@ -47,7 +47,7 @@ function CategoryBreakdownChart({ data, loading, title = 'Score by category' }: 
     <Card>
       <CardHeader>
         <CardTitle>{title}</CardTitle>
-        <CardDescription>Defense score per test category</CardDescription>
+        <CardDescription>Defense score per test category, by test × endpoint pairs</CardDescription>
       </CardHeader>
       <CardContent>
         {data.length === 0 ? (

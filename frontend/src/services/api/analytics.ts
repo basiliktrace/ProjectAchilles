@@ -14,27 +14,33 @@ export interface AnalyticsSettings {
 }
 
 export interface DefenseScore {
-  score: number;
+  /** null when no scored data exists (basis=latest with no pairs). */
+  score: number | null;
+  basis?: 'latest' | 'executions';
+  /** Distinct test x endpoint pairs behind the score (basis=latest). */
+  pairCount?: number;
   protectedCount: number;
   /** Documents where defender_detected:true AND is_protected:false. Populated by the dual-query introduced in Wave 5. */
   detectedCount?: number;
   unprotectedCount: number;
   totalExecutions: number;
-  realScore?: number;
+  /** EDR-only (strict) score; null when there is nothing to score (basis=latest with no pairs). */
+  realScore?: number | null;
   realProtectedCount?: number;
   realUnprotectedCount?: number;
   realTotalExecutions?: number;
-  /** Combined score against the unfiltered (pre-risk-acceptance) base. Equals `score` when riskAcceptedCount === 0. */
-  rawScore?: number;
+  /** Combined score against the unfiltered (pre-risk-acceptance) base. Equals `score` when riskAcceptedCount === 0; null when there is nothing to score. */
+  rawScore?: number | null;
   riskAcceptedCount?: number;
 }
 
 export interface TrendDataPoint {
   timestamp: string;
-  score: number;
+  score: number | null;
   total: number;
   protected: number;
-  realScore?: number;
+  /** Pre-risk-acceptance "Actual" score; present only when exclusions are active. */
+  realScore?: number | null;
   realTotal?: number;
   realProtected?: number;
 }
@@ -267,7 +273,7 @@ export interface ErrorRateResponse {
 
 export interface ErrorRateTrendDataPoint {
   timestamp: string;
-  errorRate: number;      // percentage 0-100
+  errorRate: number | null; // percentage 0-100; null = no data
   errorCount: number;     // rolling window error count
   conclusiveCount: number; // rolling window conclusive count
   total: number;          // errorCount + conclusiveCount
@@ -416,6 +422,7 @@ export const analyticsApi = {
     from?: string;
     to?: string;
     scoringMode?: 'all-stages' | 'any-stage';
+    basis?: 'latest' | 'executions';
   }): Promise<DefenseScore> {
     const response = await apiClient.get('/analytics/defense-score', { params });
     return response.data;
@@ -430,6 +437,7 @@ export const analyticsApi = {
     scoringMode?: 'all-stages' | 'any-stage';
     /** Attack-simulation-only scoping — drops cyber-hygiene + skipped stages. */
     excludeCyberHygiene?: boolean;
+    basis?: 'latest' | 'executions';
   }): Promise<TrendDataPoint[]> {
     const response = await apiClient.get('/analytics/defense-score/trend', { params });
     return response.data;
@@ -497,6 +505,7 @@ export const analyticsApi = {
     to?: string;
     tests?: string;
     techniques?: string;
+    basis?: 'latest' | 'executions';
   }): Promise<TestCoverageItem[]> {
     const response = await apiClient.get('/analytics/test-coverage', { params });
     return response.data;
@@ -508,6 +517,7 @@ export const analyticsApi = {
     to?: string;
     tests?: string;
     techniques?: string;
+    basis?: 'latest' | 'executions';
   }): Promise<TechniqueDistributionItem[]> {
     const response = await apiClient.get('/analytics/technique-distribution', { params });
     return response.data;
@@ -610,6 +620,7 @@ export const analyticsApi = {
     from?: string;
     to?: string;
     scoringMode?: 'all-stages' | 'any-stage';
+    basis?: 'latest' | 'executions';
   }): Promise<CategorySubcategoryBreakdownItem[]> {
     const response = await apiClient.get('/analytics/defense-score/by-category-subcategory', { params });
     return response.data;
@@ -626,6 +637,7 @@ export const analyticsApi = {
     to?: string;
     limit?: number;
     scoringMode?: 'all-stages' | 'any-stage';
+    basis?: 'latest' | 'executions';
   }): Promise<DefenseScoreByHostItem[]> {
     const response = await apiClient.get('/analytics/defense-score/by-hostname', { params });
     return response.data;

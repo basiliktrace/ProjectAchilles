@@ -7,7 +7,6 @@ import {
   YAxis,
   CartesianGrid
 } from 'recharts';
-import { format } from 'date-fns';
 import type { TrendDataPoint, ErrorRateTrendDataPoint } from '../../../services/api/analytics';
 import type { SecureScoreTrendPoint } from '@/services/api/defender';
 import type { ZtaScoreTrendPoint } from '@/services/api/crowdstrike';
@@ -25,30 +24,24 @@ import {
   CardTitle
 } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
+import { formatUtcDay, utcDayKey } from '@/lib/utcDate';
 
-// Helper to parse timestamp - handles both epoch ms strings and ISO strings
-function parseTimestamp(timestamp: string): Date {
-  if (/^\d+$/.test(timestamp)) {
-    return new Date(parseInt(timestamp, 10));
+/** Last non-null value of a series, or null when there is none. */
+function lastNonNull<T>(items: T[], pick: (item: T) => number | null | undefined): number | null {
+  for (let i = items.length - 1; i >= 0; i--) {
+    const v = pick(items[i]);
+    if (v != null && !Number.isNaN(v)) return v;
   }
-  return new Date(timestamp);
-}
-
-// Normalize timestamp to a YYYY-MM-DD key for merging
-function toDateKey(timestamp: string): string {
-  const d = parseTimestamp(timestamp);
-  return format(d, 'yyyy-MM-dd');
+  return null;
 }
 
 interface TrendChartProps {
   data: TrendDataPoint[];
   errorRateData?: ErrorRateTrendDataPoint[];
-  errorRateOverall?: number | null;
   secureScoreTrendData?: SecureScoreTrendPoint[];
   ztaScoreTrendData?: ZtaScoreTrendPoint[];
   loading?: boolean;
   title?: string;
-  windowDays?: number;
 }
 
 const chartConfig = {
@@ -74,11 +67,12 @@ const chartConfig = {
   },
 } satisfies ChartConfig;
 
-function TrendChart({ data, errorRateData, errorRateOverall, secureScoreTrendData, ztaScoreTrendData, loading, title = 'Trend Overview', windowDays }: TrendChartProps) {
+function TrendChart({ data, errorRateData, secureScoreTrendData, ztaScoreTrendData, loading, title = 'Trend Overview' }: TrendChartProps) {
   const hasErrorRate = errorRateData && errorRateData.length > 0;
   const hasSecureScore = secureScoreTrendData && secureScoreTrendData.length > 0;
   const hasZtaScore = ztaScoreTrendData && ztaScoreTrendData.length > 0;
-  const hasRealScore = data.some(d => d.realScore !== undefined && d.realScore !== d.score);
+  // The Actual (pre-risk-acceptance) line only adds information where it differs from the score.
+  const hasRealScore = data.some(d => d.realScore != null && d.realScore !== d.score);
   const hasExtraData = hasErrorRate || hasSecureScore || hasZtaScore || hasRealScore;
 
   if (loading) {
@@ -113,7 +107,7 @@ function TrendChart({ data, errorRateData, errorRateOverall, secureScoreTrendDat
   const errorRateByDate = new Map<string, ErrorRateTrendDataPoint>();
   if (hasErrorRate) {
     for (const point of errorRateData) {
-      errorRateByDate.set(toDateKey(point.timestamp), point);
+      errorRateByDate.set(utcDayKey(point.timestamp), point);
     }
   }
 
@@ -121,7 +115,7 @@ function TrendChart({ data, errorRateData, errorRateOverall, secureScoreTrendDat
   const secureScoreByDate = new Map<string, SecureScoreTrendPoint>();
   if (hasSecureScore) {
     for (const point of secureScoreTrendData) {
-      secureScoreByDate.set(toDateKey(point.date), point);
+      secureScoreByDate.set(utcDayKey(point.date), point);
     }
   }
 
@@ -129,14 +123,13 @@ function TrendChart({ data, errorRateData, errorRateOverall, secureScoreTrendDat
   const ztaScoreByDate = new Map<string, ZtaScoreTrendPoint>();
   if (hasZtaScore) {
     for (const point of ztaScoreTrendData) {
-      ztaScoreByDate.set(toDateKey(point.date), point);
+      ztaScoreByDate.set(utcDayKey(point.date), point);
     }
   }
 
   // Merge datasets: defense score is the primary axis, error rate + secure score joined by date
   const chartData = data.map(point => {
-    const date = parseTimestamp(point.timestamp);
-    const dateKey = toDateKey(point.timestamp);
+    const dateKey = utcDayKey(point.timestamp);
     const errPoint = errorRateByDate.get(dateKey);
     const ssPoint = secureScoreByDate.get(dateKey);
     const ztaPoint = ztaScoreByDate.get(dateKey);
@@ -153,31 +146,22 @@ function TrendChart({ data, errorRateData, errorRateOverall, secureScoreTrendDat
       secureScoreMax: ssPoint?.maxScore ?? 0,
       ztaScore: ztaPoint?.overallScore ?? null,
       ztaDeviceCount: ztaPoint?.deviceCount ?? 0,
-      date: format(date, 'MMM d'),
-      fullDate: format(date, 'MMM d, yyyy'),
+      date: formatUtcDay(point.timestamp, 'short'),
+      fullDate: formatUtcDay(point.timestamp, 'long'),
     };
   });
 
-  // Calculate averages for description
-  const avgScore = chartData.length > 0
-    ? (chartData.reduce((sum, d) => sum + d.score, 0) / chartData.length).toFixed(1)
-    : '0';
-
-  const avgRealScore = hasRealScore
-    ? (chartData.filter(d => d.realScore != null).reduce((sum, d) => sum + (d.realScore ?? 0), 0) / chartData.filter(d => d.realScore != null).length).toFixed(1)
-    : null;
-
-  const avgErrorRate = hasErrorRate && errorRateOverall != null
-    ? errorRateOverall.toFixed(1)
-    : null;
-
-  const avgSecureScore = hasSecureScore
-    ? (secureScoreTrendData.reduce((sum, d) => sum + d.percentage, 0) / secureScoreTrendData.length).toFixed(1)
-    : null;
-
-  const avgZtaScore = hasZtaScore
-    ? (ztaScoreTrendData.reduce((sum, d) => sum + d.overallScore, 0) / ztaScoreTrendData.length).toFixed(1)
-    : null;
+  // Header shows the CURRENT (last) value of each series; null parts are omitted.
+  // Defense (and its Actual variant) use the last point itself, like the ring
+  // (pickCurrentScore): when nothing is fresh at the end of the range the
+  // header shows no Defense value rather than an older one.
+  const fmt = (v: number | null | undefined) => (v == null ? null : v.toFixed(1));
+  const lastPoint = chartData.at(-1);
+  const lastDefense = fmt(lastPoint?.score);
+  const lastRealScore = hasRealScore ? fmt(lastPoint?.realScore) : null;
+  const lastErrorRate = hasErrorRate ? fmt(lastNonNull(errorRateData, d => d.errorRate)) : null;
+  const lastSecureScore = hasSecureScore ? fmt(lastNonNull(secureScoreTrendData, d => d.percentage)) : null;
+  const lastZtaScore = hasZtaScore ? fmt(lastNonNull(ztaScoreTrendData, d => d.overallScore)) : null;
 
   // Show only 5-7 ticks max to prevent overflow
   const tickCount = Math.min(7, chartData.length);
@@ -188,33 +172,30 @@ function TrendChart({ data, errorRateData, errorRateOverall, secureScoreTrendDat
       <CardHeader className="flex-shrink-0 pb-0">
         <CardTitle className="text-sm font-medium">{title}</CardTitle>
         <CardDescription className="flex items-center gap-2 text-sm flex-wrap">
-          <span>Defense: {avgScore}%</span>
-          {avgRealScore !== null && (
+          {lastDefense !== null && <span>Defense: {lastDefense}%</span>}
+          {lastRealScore !== null && (
             <>
               <span className="text-muted-foreground">|</span>
-              <span>Actual: {avgRealScore}%</span>
+              <span>Actual: {lastRealScore}%</span>
             </>
           )}
-          {avgSecureScore !== null && (
+          {lastSecureScore !== null && (
             <>
               <span className="text-muted-foreground">|</span>
-              <span>Secure Score: {avgSecureScore}%</span>
+              <span>Secure Score: {lastSecureScore}%</span>
             </>
           )}
-          {avgZtaScore !== null && (
+          {lastZtaScore !== null && (
             <>
               <span className="text-muted-foreground">|</span>
-              <span>ZTA Score: {avgZtaScore}%</span>
+              <span>ZTA Score: {lastZtaScore}%</span>
             </>
           )}
-          {avgErrorRate !== null && (
+          {lastErrorRate !== null && (
             <>
               <span className="text-muted-foreground">|</span>
-              <span>Error rate: {avgErrorRate}%</span>
+              <span>Error rate: {lastErrorRate}%</span>
             </>
-          )}
-          {windowDays && (
-            <span className="text-muted-foreground">({windowDays}-day rolling)</span>
           )}
           <TrendingUp className="h-4 w-4 text-muted-foreground" />
         </CardDescription>
@@ -300,7 +281,7 @@ function TrendChart({ data, errorRateData, errorRateOverall, secureScoreTrendDat
                         </div>
                         {name === 'score' && payload.total > 0 && (
                           <span className="text-xs text-muted-foreground ml-[18px]">
-                            {payload.protected}/{payload.total} protected
+                            {payload.protected}/{payload.total} pairs protected
                           </span>
                         )}
                         {name === 'errorRate' && payload.errorTotal > 0 && (
@@ -310,7 +291,7 @@ function TrendChart({ data, errorRateData, errorRateOverall, secureScoreTrendDat
                         )}
                         {name === 'realScore' && payload.realTotal > 0 && (
                           <span className="text-xs text-muted-foreground ml-[18px]">
-                            {payload.realProtected}/{payload.realTotal} protected
+                            {payload.realProtected}/{payload.realTotal} pairs protected
                           </span>
                         )}
                         {name === 'secureScore' && payload.secureScoreMax > 0 && (
@@ -336,6 +317,7 @@ function TrendChart({ data, errorRateData, errorRateOverall, secureScoreTrendDat
               stroke="var(--color-score)"
               strokeWidth={2}
               fill="url(#fillScore)"
+              connectNulls={false}
             />
             {/* Actual score is a neutral dashed REFERENCE line (no fill) —
                 it hugs the defense series, so a filled area of its own only
@@ -350,7 +332,6 @@ function TrendChart({ data, errorRateData, errorRateOverall, secureScoreTrendDat
                 strokeOpacity={0.75}
                 strokeDasharray="6 3"
                 fill="none"
-                connectNulls
               />
             )}
             {hasSecureScore && (
@@ -383,7 +364,6 @@ function TrendChart({ data, errorRateData, errorRateOverall, secureScoreTrendDat
                 stroke="var(--color-errorRate)"
                 strokeWidth={2}
                 fill="url(#fillErrorRate)"
-                connectNulls
               />
             )}
           </AreaChart>

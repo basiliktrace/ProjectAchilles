@@ -32,11 +32,29 @@ Most endpoints accept the same filter vocabulary. Pass any combination:
 | `errorCodes` | string | Comma-separated exit codes. |
 | `bundleNames` | string | Comma-separated bundle test names. |
 | `result` | string | One of: `all`, `protected`, `unprotected`, `inconclusive`. |
+| `basis` | string | `executions` (default) or `latest`. Selects how the Defense Score endpoints count; see [Score basis](#score-basis). Anything else returns `400 Invalid basis`. |
 | `scoringMode` | string | `all-stages` (default — bundle protected only if every stage protected) or `any-stage` (bundle protected if any stage protected). |
 
 :::warning Default time window is 7 days
 If you don't pass `from`/`to`, every endpoint applies a **`now-7d`** date filter. The dashboard UI defaults to **Last 30 days** — so the same query that fills the UI may return zero rows when called from the API without explicit dates. Always pass `from` (and optionally `to`) when scripting against the API.
 :::
+
+## Score basis
+
+`basis` chooses what the Defense Score counts.
+
+- **`executions`** (default) -- every execution in the window counts once.
+- **`latest`** -- the share of **test × endpoint pairs** whose most recent conclusive result in the window was blocked or detected. A pair is keyed by organization + test UUID + hostname. In `any-stage` scoring mode, a non-cyber-hygiene bundle on a host is one pair, protected if any stage of its latest run is.
+
+Under `latest`:
+
+- The date range sets the freshness window. It is capped at 365 days (All time becomes "last 365d").
+- Outcome filters (`result`, `errorCodes`, `errorNames`) select the pairs whose latest result matches. `result=protected|unprotected` follows the pair's verdict, the same rule the score counts: a Defender- or CrowdStrike-detected `101` is protected, and an `any-stage` bundle pair matches exactly one of the two. `errorCodes` and `errorNames` match any code or name in the latest result, so a bundle pair whose latest run mixes `101` and `126` matches both `errorCodes=101` and `errorCodes=126`.
+- The server keeps each fetched pair set for up to 30 seconds and reuses it across requests with the same filters (outcome filters aside), so a relative range such as `now-7d` can be up to 30 seconds stale.
+- Under `latest`, `from`/`to` accept `now`, `now-<n><unit>` (units `d`, `h`, `w`, `m` or `M`, where `m`/`M` = 30 days) and ISO dates. ES date math such as `now/d` is rejected, as is an unparseable or reversed range, with `400 Invalid date range`.
+- `result=inconclusive` yields no pairs under `latest`, because only conclusive results are scored.
+- These endpoints accept `basis=latest`: `/defense-score`, `/defense-score/trend`, `/defense-score/by-category-subcategory`, `/defense-score/by-hostname`, `/technique-distribution`, `/test-coverage`. Their counts become pairs. For `test-coverage`, pairs are grouped by test name; each pair is one host × test, so each count is a number of hosts.
+- These endpoints are executions-only and ignore `basis=latest`: `by-test`, `by-technique`, `by-severity`, `by-category`, `by-org`, `threat-actor-coverage`.
 
 ## Endpoints
 
@@ -65,6 +83,20 @@ Returns the aggregate defense score and breakdown counts for the filtered window
 
 See the [guide](./programmatic-access.md#6-defense-score--what-the-fields-mean) for when to use each score variant.
 
+**With `basis=latest`** the response adds two fields and changes the meaning of the counts:
+
+```jsonc
+{
+  "basis": "latest",
+  "pairCount": 212,          // test × endpoint pairs in the window
+  "totalExecutions": 212,    // equals pairCount
+  "score": 71.23,            // null when there are no pairs
+  "realScore": 68.40,        // strict score: blocked only
+  "rawScore": 70.75          // score before risk acceptances
+  // protectedCount, detectedCount, unprotectedCount, riskAcceptedCount count pairs
+}
+```
+
 ### Defense Score Trend
 
 ```
@@ -78,7 +110,13 @@ Returns the score over time for trend visualization.
 | Param | Type | Description |
 |-------|------|-------------|
 | `interval` | string | Histogram bucket size (e.g. `day`, `hour`). |
-| `windowDays` | number | Rolling window size, 1–90 days, applied per bucket. |
+| `windowDays` | number | Rolling window size, 1–90 days, applied per bucket. An explicit value is honoured and clamped to [1, 90]. Ignored under `basis=latest`. |
+
+Trend lines extend to now. A rolling window with no data returns `score: null` rather than `0`, so charts show a gap.
+
+With `basis=latest` each point is the same latest-result calculation as of that UTC day (weekly points for ranges over 90 days). The last point always equals the `/defense-score` tile for the same range, and points can have `score: null` when the window holds no pairs.
+
+`realScore` / `realTotal` / `realProtected` on trend points keep their existing meaning on both bases: the raw, pre-risk-acceptance series, present only when risk-acceptance exclusions exist. This differs from `realScore` on `/defense-score` under `latest`, which is the strict, blocked-only score.
 
 ### Defense Score by Test / Technique / Org / Severity / Category / Hostname
 
@@ -176,11 +214,11 @@ GET /api/analytics/technique-distribution — protected/unprotected per MITRE te
 GET /api/analytics/test-coverage          — protected/unprotected per test
 GET /api/analytics/threat-actor-coverage  — coverage broken down by threat actor
 GET /api/analytics/error-rate             — error count and rate over the window
-GET /api/analytics/error-rate/trend       — error rate over time
+GET /api/analytics/error-rate/trend       — error rate over time (rolling window defaults to the range length, capped at 365 days; explicit `windowDays` is clamped to 1–90; empty windows return `errorRate: null`)
 GET /api/analytics/results-by-error-type  — breakdown by error code/name
 ```
 
-All accept the shared filter parameters.
+All accept the shared filter parameters. `technique-distribution` and `test-coverage` also accept `basis=latest`.
 
 ### Counts and Catalogs
 

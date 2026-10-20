@@ -6,11 +6,19 @@ import { SettingsService } from '../services/analytics/settings.js';
 import { ElasticsearchService } from '../services/analytics/elasticsearch.js';
 import { createResultsIndex, listResultsIndices } from '../services/analytics/index-management.service.js';
 import { resetClient as resetResultsClient } from '../services/agent/results.service.js';
+import { resolvePostureWindow } from '../services/analytics/posture.js';
 import { validate } from '../middleware/validation.js';
 import { AnalyticsSettingsSchema, AnalyticsTestSchema, CreateIndexSchema, ArchiveByGroupKeysSchema, ArchiveByDateSchema } from '../schemas/analytics.schemas.js';
 import type { AnalyticsQueryParams, ExtendedAnalyticsQueryParams, PaginatedExecutionsParams } from '../types/analytics.js';
 
 const router = Router();
+
+// Score definition: absent → 'executions' (API-key clients keep today's meaning).
+function parseBasis(value: unknown): 'latest' | 'executions' | undefined {
+  if (value === undefined) return undefined;
+  if (value === 'latest' || value === 'executions') return value;
+  throw new AppError('Invalid basis', 400);
+}
 
 // Extract extended filter params from Express query object.
 // Dashboard endpoints pass these through so filter bar affects all metrics.
@@ -31,6 +39,7 @@ function extractFilterParams(query: Record<string, any>): AnalyticsQueryParams &
     bundleNames: query.bundleNames as string,
     result: query.result as 'all' | 'protected' | 'unprotected' | 'inconclusive',
     scoringMode: query.scoringMode as 'all-stages' | 'any-stage' | undefined,
+    basis: parseBasis(query.basis),
   };
 }
 
@@ -189,18 +198,29 @@ router.post('/settings/test', requirePermission('analytics:settings:read'), vali
 router.use(requirePermission('analytics:dashboards:read'));
 
 // GET /api/analytics/defense-score - Overall defense score
+// basis=latest → latest-result posture (share of test × endpoint pairs whose
+// latest conclusive result in the window is protected).
 router.get('/defense-score', asyncHandler(async (req, res) => {
+  const filterParams = extractFilterParams(req.query);
   const es = await getEsService();
-  const result = await es.getDefenseScore(extractFilterParams(req.query));
+  const result = filterParams.basis === 'latest'
+    ? await es.getDefenseScoreLatest(filterParams)
+    : await es.getDefenseScore(filterParams);
   res.json(result);
 }));
 
 // GET /api/analytics/defense-score/trend - Score over time
-// Supports rolling window aggregation via windowDays param (1-90 days)
+// Supports rolling window aggregation via windowDays param (1-90 days).
+// basis=latest: each point is the tile's calculation as of that day; windowDays is ignored.
 router.get('/defense-score/trend', asyncHandler(async (req, res) => {
+  const filterParams = extractFilterParams(req.query);
   const es = await getEsService();
   const { interval, windowDays } = req.query;
-  const filterParams = extractFilterParams(req.query);
+
+  if (filterParams.basis === 'latest') {
+    res.json(await es.getDefenseScoreTrendLatest(filterParams));
+    return;
+  }
 
   // Parse and clamp windowDays to 1-90 range
   const parsedWindowDays = windowDays ? parseInt(windowDays as string, 10) : undefined;
@@ -290,14 +310,20 @@ router.get('/results-by-error-type', asyncHandler(async (req, res) => {
 // GET /api/analytics/test-coverage - Protected vs unprotected per test
 router.get('/test-coverage', asyncHandler(async (req, res) => {
   const es = await getEsService();
-  const result = await es.getTestCoverage(extractFilterParams(req.query));
+  const filterParams = extractFilterParams(req.query);
+  const result = filterParams.basis === 'latest'
+    ? await es.getTestCoverageLatest(filterParams)
+    : await es.getTestCoverage(filterParams);
   res.json(result);
 }));
 
 // GET /api/analytics/technique-distribution - Protected vs unprotected per technique
 router.get('/technique-distribution', asyncHandler(async (req, res) => {
   const es = await getEsService();
-  const result = await es.getTechniqueDistribution(extractFilterParams(req.query));
+  const filterParams = extractFilterParams(req.query);
+  const result = filterParams.basis === 'latest'
+    ? await es.getTechniqueDistributionLatest(filterParams)
+    : await es.getTechniqueDistribution(filterParams);
   res.json(result);
 }));
 
@@ -516,7 +542,10 @@ router.get('/defense-score/by-category', asyncHandler(async (req, res) => {
 // GET /api/analytics/defense-score/by-category-subcategory - Score breakdown by category with subcategories
 router.get('/defense-score/by-category-subcategory', asyncHandler(async (req, res) => {
   const es = await getEsService();
-  const result = await es.getDefenseScoreByCategoryWithSubcategories(extractFilterParams(req.query));
+  const filterParams = extractFilterParams(req.query);
+  const result = filterParams.basis === 'latest'
+    ? await es.getDefenseScoreByCategoryWithSubcategoriesLatest(filterParams)
+    : await es.getDefenseScoreByCategoryWithSubcategories(filterParams);
   res.json(result);
 }));
 
@@ -531,10 +560,13 @@ router.get('/threat-actor-coverage', asyncHandler(async (req, res) => {
 router.get('/defense-score/by-hostname', asyncHandler(async (req, res) => {
   const es = await getEsService();
   const { limit } = req.query;
-  const result = await es.getDefenseScoreByHostname({
+  const filterParams = {
     ...extractFilterParams(req.query),
     limit: limit ? parseInt(limit as string) : 50,
-  });
+  };
+  const result = filterParams.basis === 'latest'
+    ? await es.getDefenseScoreByHostnameLatest(filterParams)
+    : await es.getDefenseScoreByHostname(filterParams);
   res.json(result);
 }));
 
@@ -544,15 +576,21 @@ router.get('/error-rate/trend', asyncHandler(async (req, res) => {
   const { interval, windowDays } = req.query;
   const filterParams = extractFilterParams(req.query);
 
+  // Explicit windowDays keeps the 1-90 clamp; otherwise the window is the
+  // range length (so the trend is not a 7-day rolling average of a longer range).
   const parsedWindowDays = windowDays ? parseInt(windowDays as string, 10) : undefined;
-  const clampedWindowDays = parsedWindowDays
-    ? Math.max(1, Math.min(90, parsedWindowDays))
-    : undefined;
+  let effectiveWindowDays: number;
+  if (parsedWindowDays) {
+    effectiveWindowDays = Math.max(1, Math.min(90, parsedWindowDays));
+  } else {
+    const { freshnessMs } = resolvePostureWindow(filterParams.from, filterParams.to, Date.now());
+    effectiveWindowDays = Math.max(1, Math.min(365, Math.round(freshnessMs / 86_400_000)));
+  }
 
   const result = await es.getErrorRateTrendRolling({
     ...filterParams,
     interval: (interval as string) || 'day',
-    windowDays: clampedWindowDays || 7,
+    windowDays: effectiveWindowDays,
   });
 
   res.json(result);

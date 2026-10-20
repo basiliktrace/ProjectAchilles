@@ -10,44 +10,6 @@ export interface DateRangeValue {
 }
 
 /**
- * Get the appropriate rolling window size for a given date range.
- *
- * Window size mapping:
- * - 7 days or less: 7-day window (full coverage)
- * - 8-30 days: 7-day rolling window
- * - 31-90 days: 30-day rolling window
- * - Custom ranges: min(days, 30) capped at 7 minimum
- */
-export function getWindowDaysForDateRange(dateRange: DateRangeValue): number {
-  const windowMap: Record<string, number> = {
-    '7d': 7,
-    '14d': 7,
-    '30d': 7,
-    '90d': 30,
-    'all': 30,
-  };
-
-  // Use mapped value for presets
-  if (dateRange.preset && windowMap[dateRange.preset] !== undefined) {
-    return windowMap[dateRange.preset];
-  }
-
-  // Handle custom date ranges
-  if (dateRange.preset === 'custom' && dateRange.from && dateRange.to) {
-    const fromDate = new Date(dateRange.from);
-    const toDate = new Date(dateRange.to);
-    const diffMs = toDate.getTime() - fromDate.getTime();
-    const diffDays = Math.ceil(diffMs / (1000 * 60 * 60 * 24));
-
-    // Cap at 30, minimum of 7
-    return Math.max(7, Math.min(diffDays, 30));
-  }
-
-  // Default for unknown presets
-  return 7;
-}
-
-/**
  * Lower bound sent for the "All time" preset. With no dates at all the
  * backend falls back to the last 7 days, so "All time" must send one.
  * Must equal ALL_TIME_FROM in backend/src/services/reports/reportWindow.ts.
