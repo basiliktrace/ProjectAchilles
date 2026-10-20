@@ -292,7 +292,11 @@ export class FalconClient {
   // ---------------------------------------------------------------------------
 
   /**
-   * Page through device AIDs via GET /zero-trust-assessment/queries/devices/v1.
+   * Page through assessed device AIDs via
+   * GET /zero-trust-assessment/queries/assessments/v1 (getAssessmentsByScoreV1,
+   * the only ZTA query route). `filter` is required, so `score:>=0` matches
+   * every assessed host; `limit` max is 1000. Resources are {aid, score}
+   * objects — mapped down to AIDs here.
    * Scope: `Zero Trust Assessment: read` (requires Falcon Insight licensing —
    * a 403 means "not licensed", not a broken credential).
    */
@@ -300,18 +304,18 @@ export class FalconClient {
     limit?: number;
     after?: string;
   }): Promise<{ resources: string[]; after?: string; total?: number }> {
-    const params: Record<string, string> = {};
+    const params: Record<string, string> = { filter: 'score:>=0' };
     if (options?.limit !== undefined) params.limit = String(options.limit);
     if (options?.after) params.after = options.after;
 
-    const data = await this.falconRequest<CrowdStrikeEnvelope<string>>(
+    const data = await this.falconRequest<CrowdStrikeEnvelope<{ aid: string; score?: number }>>(
       'GET',
-      '/zero-trust-assessment/queries/devices/v1',
+      '/zero-trust-assessment/queries/assessments/v1',
       { params },
     );
 
     return {
-      resources: data.resources ?? [],
+      resources: (data.resources ?? []).map((r) => r.aid).filter(Boolean),
       after: data.meta?.pagination?.after,
       total: data.meta?.pagination?.total,
     };

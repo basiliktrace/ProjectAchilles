@@ -34,8 +34,8 @@ const CROWDSTRIKE_ALERT_SYNC_VERSION = 2; // v2: + prevention_action / pattern_d
 
 /** Max alerts per /alerts/combined/alerts/v1 page (API ceiling is 1000). */
 const ALERT_PAGE_LIMIT = 1000;
-/** Max device AIDs per ZTA query page. */
-const ZTA_DEVICE_PAGE_LIMIT = 5000;
+/** Max device AIDs per ZTA query page (getAssessmentsByScoreV1 caps limit at 1000). */
+const ZTA_DEVICE_PAGE_LIMIT = 1000;
 
 /**
  * Never record an empty error message. Elasticsearch `ResponseError`s from
@@ -374,13 +374,13 @@ export class CrowdStrikeSyncService {
       this.syncStatus.ztaStatus = 'ok';
       this.persistSyncTimestamps();
     } catch (err) {
-      // Not licensed / not provisioned — non-fatal by design. CrowdStrike
-      // returns 403 when the API client lacks the ZTA scope, and 404
-      // (generic "Not Found" with a trace-id) when ZTA isn't provisioned
-      // for the CID at all (no Falcon Insight subscription). Both mean the
-      // same thing to us: record not_licensed and skip quietly.
-      if (err instanceof FalconApiError && (err.statusCode === 403 || err.statusCode === 404)) {
-        console.log('[CrowdStrike] ZTA not licensed/unavailable — skipping score sync');
+      // Not licensed — non-fatal by design. CrowdStrike returns 403 when the
+      // API client lacks the ZTA scope or the CID has no Falcon Insight.
+      // A 404 is NOT mapped here: the gateway's generic "Not Found ...
+      // trace-id" is what an unknown route returns, and treating it as
+      // not_licensed once hid a wrong endpoint path. It surfaces as an error.
+      if (err instanceof FalconApiError && err.statusCode === 403) {
+        console.log(`[CrowdStrike] ZTA not licensed (HTTP 403) — skipping score sync. Body: ${err.bodySnippet}`);
         this.syncStatus.ztaStatus = 'not_licensed';
         this.persistSyncTimestamps();
         this.recordOutcome('zta', []);

@@ -60,14 +60,14 @@ describe('FalconClient', () => {
       await client.getAlertsCombined({ limit: 1 });
 
       // Second request should reuse token
-      mockFalconResponse(['aid-1']);
+      mockFalconResponse([{ aid: 'aid-1', score: 80 }]);
       await client.getZtaDeviceIds({ limit: 1 });
 
       // token + alerts + zta (no second token call)
       expect(mockFetch).toHaveBeenCalledTimes(3);
       expect(mockFetch.mock.calls[0][0]).toContain('/oauth2/token');
       expect(mockFetch.mock.calls[1][0]).toContain('/alerts/combined/alerts/v1');
-      expect(mockFetch.mock.calls[2][0]).toContain('/zero-trust-assessment/queries/devices/v1');
+      expect(mockFetch.mock.calls[2][0]).toContain('/zero-trust-assessment/queries/assessments/v1');
     });
 
     it('throws on token acquisition failure', async () => {
@@ -424,14 +424,17 @@ describe('FalconClient', () => {
       mockFetch.mockReset();
     });
 
-    it('getZtaDeviceIds GETs the queries endpoint with limit/after params', async () => {
+    it('getZtaDeviceIds GETs the score query endpoint with filter/limit/after and maps resources to AIDs', async () => {
+      // getAssessmentsByScoreV1 — the only ZTA query route. `filter` is
+      // required and resources are {aid, score} objects, not bare AIDs.
       mockTokenResponse();
-      mockFalconResponse(['aid-1', 'aid-2'], { after: 'zta-next', total: 100 });
+      mockFalconResponse([{ aid: 'aid-1', score: 80 }, { aid: 'aid-2', score: 60 }], { after: 'zta-next', total: 100 });
 
       const result = await client.getZtaDeviceIds({ limit: 500, after: 'zta-prev' });
 
       const url = mockFetch.mock.calls[1][0] as string;
-      expect(url).toContain('/zero-trust-assessment/queries/devices/v1');
+      expect(url).toContain('/zero-trust-assessment/queries/assessments/v1');
+      expect(new URL(url).searchParams.get('filter')).toBe('score:>=0');
       expect(url).toContain('limit=500');
       expect(url).toContain('after=zta-prev');
       expect(result.resources).toEqual(['aid-1', 'aid-2']);
