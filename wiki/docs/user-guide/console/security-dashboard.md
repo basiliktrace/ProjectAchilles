@@ -16,9 +16,12 @@ dashboards in 2.1.
 ## Time range
 
 The header carries a **7d / 30d / 90d** selector plus a git sync chip and a
-manual refresh. The range drives every windowed card on the page — Defense
-Score, trend overview, and execution counts — and defaults to **90d**, matching
-the Analytics section's default window.
+manual refresh. The range drives the Defense Score and the trend overview, and
+defaults to **90d**, matching the Analytics section's default window. For the
+Defense Score the range is a **freshness window**: a test × endpoint pair counts
+only if its most recent result falls inside it. The trend line shows the same
+calculation as of each UTC day and always ends at the tile's value. See
+[Defense Score](../analytics/defense-score.md#latest-result-score).
 
 :::tip
 90 days is the default because most fleets run scheduled bundles weekly or
@@ -44,17 +47,18 @@ No banner means nothing crossed a threshold.
 
 ## KPI strip
 
-Six cards, each reading from a different source so a single outage degrades one
-card rather than the page:
+Up to seven cards, each reading from a different source so a single outage
+degrades one card rather than the page:
 
 | KPI | Meaning |
 |-----|---------|
-| **Defense Score** | Protected share of results in the window; renders in danger colour below 60% |
+| **Defense Score** | Share of test × endpoint pairs whose most recent result in the range was blocked or detected. Renders in danger colour below 60%. The caption reads `<n> pairs · ±d.d pts over <range>`. With fewer than 10 pairs, the score is muted and the caption reads `n=<n> · not enough data`. |
 | **Secure Score** | Microsoft Defender Secure Score, when the integration is configured |
+| **ZTA Score** | CrowdStrike Zero Trust Assessment score, when the integration is configured and licensed |
 | **Total tests** | Tests in the library, with a critical/high count |
 | **Avg score** | Mean test score across scored tests |
 | **Agents online** | Online / enrolled, with an offline count |
-| **Executions** | Executions in the window and the protected percentage |
+| **Executions 7d** | Executions in the last 7 days (whatever the range) and the share protected. This is a volume figure, so it counts every execution, not pairs. |
 
 ## Cards
 

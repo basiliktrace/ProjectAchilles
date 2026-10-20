@@ -95,11 +95,27 @@ TO=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
 ## 6. Defense Score — what the fields mean
 
+### Pick a basis first
+
+`/analytics/defense-score` and its trend and breakdowns take a `basis` query parameter:
+
+| `basis` | What it counts | Matches |
+|---|---|---|
+| `executions` (default when omitted) | Every conclusive execution in the window | The PDF execution report, score-drop alerts, and the scripts you already have |
+| `latest` | Each test × endpoint pair **once**, by its most recent conclusive result in the window | The Dashboard and Analytics headline, line and breakdowns |
+
+To reproduce the number an analyst sees in the UI, add `&basis=latest`.
+- **Field meanings under `latest`:** the fields below keep their meaning, but they count pairs. `totalExecutions` equals the new `pairCount`, `riskAcceptedCount` is a pair count, and `score` is `null` when no pair has a result in the window.
+- **Accepted dates under `latest`:** `now`, `now-<n><d|h|w|m>` and ISO dates. ES date math such as `now/d` returns 400.
+- See [the analytics API reference](./analytics.md) for the full contract.
+
+### The three score variants
+
 The defense-score response carries three score variants. Each answers a different question:
 
 | Field | Numerator | Risk-acceptance | Use it for |
 |---|---|---|---|
-| `score` | EDR-protected **OR** Defender-detected | Excluded | Day-to-day dashboard headline |
+| `score` | EDR-protected **OR** Defender-detected | Excluded | The headline number (the UI's headline uses `basis=latest`) |
 | `realScore` | EDR-protected **only** | Excluded | Alerting on real EDR coverage regressions |
 | `rawScore` | EDR-protected **OR** Defender-detected | **Not** excluded | Auditing for risk-acceptance creep |
 
@@ -213,7 +229,11 @@ curl -s -H "Authorization: Bearer $PA_KEY" "$BACKEND/agent/admin/agents" \
 
 ### Recipe — CI gate that fails on Defense Score regression
 
-Fail a build if `realScore` dropped more than a configured threshold versus the prior 7 days:
+Fail a build if `realScore` dropped more than a configured threshold versus the prior 7 days.
+
+As written, the recipe uses the default executions basis: every run in each week counts. To gate on current posture, the same number the Dashboard shows, append `&basis=latest` to both URLs.
+- **Window caveat:** under `latest` each window only counts pairs whose most recent result falls inside it. If your tests run less often than weekly, widen both windows (e.g. 30 days) so that pairs aren't missing from one side.
+- **Null scores:** `realScore` can be `null` under `latest` when a window has no pairs. Treat that as "no data", not as a drop.
 
 ```bash
 #!/usr/bin/env bash
