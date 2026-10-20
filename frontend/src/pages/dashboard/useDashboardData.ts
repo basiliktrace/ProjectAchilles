@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { format } from 'date-fns';
 import {
   analyticsApi,
   type DefenseScore,
@@ -23,12 +22,13 @@ import type { AgentMetrics, AgentTask, FleetHealthMetrics } from '@/types/agent'
 import { browserApi, type SyncStatus } from '@/services/api/browser';
 import type { TestMetadata } from '@/types/test';
 import { useAnalyticsAuth } from '@/hooks/useAnalyticsAuth';
-import { getWindowDaysForDateRange } from '@/hooks/useAnalyticsFilters';
 import { useDefenderConfig } from '@/hooks/useDefenderConfig';
 import { useCrowdStrikeConfig } from '@/hooks/useCrowdStrikeConfig';
 import { useOutdatedAgentCount } from '@/hooks/useOutdatedAgentCount';
 import { useScoringMode } from '@/hooks/useScoringMode';
 import { usePolling } from '@/hooks/usePolling';
+import { formatUtcDay, utcDayKey } from '@/lib/utcDate';
+import { pickCurrentScore, seriesDelta } from '@/lib/posture';
 import { computeTestStats, type TestStats } from './computeTestStats';
 import { deriveAttentionItems } from './deriveAttentionItems';
 import type { AttentionItem } from './components/AttentionBanner';
@@ -57,10 +57,6 @@ function settle<T>(result: PromiseSettledResult<T>): T | null {
   return result.status === 'fulfilled' ? result.value : null;
 }
 
-function toDate(ts: string): Date {
-  return /^\d+$/.test(ts) ? new Date(Number(ts)) : new Date(ts);
-}
-
 function relativeTime(iso: string): string {
   const diffMs = Date.now() - new Date(iso).getTime();
   const minutes = Math.floor(diffMs / 60_000);
@@ -69,6 +65,44 @@ function relativeTime(iso: string): string {
   const hours = Math.floor(minutes / 60);
   if (hours < 24) return `${hours}h ago`;
   return `${Math.floor(hours / 24)}d ago`;
+}
+
+/** Join secure/zta/error series onto the defense days by UTC day key. */
+export function buildTrendPoints(
+  defense: TrendDataPoint[] | null,
+  error: ErrorRateTrendDataPoint[] | null,
+  secure: SecureScoreTrendPoint[] | null,
+  zta: ZtaScoreTrendPoint[] | null,
+): TrendPoint[] {
+  if (!defense?.length) return [];
+  const errByDay = new Map((error ?? []).map((p) => [utcDayKey(p.timestamp), p.errorRate]));
+  const secureByDay = new Map((secure ?? []).map((p) => [utcDayKey(p.date), p.percentage]));
+  const ztaByDay = new Map((zta ?? []).map((p) => [utcDayKey(p.date), p.overallScore]));
+  return defense.map((p) => {
+    const day = utcDayKey(p.timestamp);
+    return {
+      date: formatUtcDay(p.timestamp),
+      defense: p.score,
+      secure: secureByDay.get(day) ?? null,
+      zta: ztaByDay.get(day) ?? null,
+      errorRate: errByDay.get(day) ?? null,
+    };
+  });
+}
+
+/** Describe the CURRENT value of each series; null parts are omitted. */
+export function buildTrendDescription(parts: {
+  defense: number | null;
+  secure: number | null;
+  zta: number | null;
+  errorRate: number | null;
+}): string {
+  const out: string[] = [];
+  if (parts.defense != null) out.push(`Defense ${parts.defense.toFixed(1)}%`);
+  if (parts.secure != null) out.push(`Secure ${parts.secure.toFixed(1)}%`);
+  if (parts.zta != null) out.push(`ZTA ${parts.zta.toFixed(1)}%`);
+  if (parts.errorRate != null) out.push(`Error rate ${parts.errorRate.toFixed(1)}%`);
+  return out.join(' · ');
 }
 
 export interface DashboardData {
@@ -83,6 +117,12 @@ export interface DashboardData {
   // KPIs + cards
   /** Defense score over the selected range. */
   defenseScore: DefenseScore | null;
+  /** Current score: the trend's last point (matches the line), else the tile. */
+  defenseCurrentScore: number | null;
+  /** Test x endpoint pairs behind the current Defense Score. */
+  defensePairCount: number | null;
+  /** Last minus first scored point of the defense trend. */
+  defenseDelta: number | null;
   defense7: DefenseScore | null;
   errorRate: ErrorRateResponse | null;
   secureScore: SecureScoreSummary | null;
@@ -148,17 +188,15 @@ export function useDashboardData(range: DashboardRange = DEFAULT_DASHBOARD_RANGE
   }, []);
 
   // Analytics slice — Elasticsearch queries, reloaded on mount/sync/range change.
-  // The rolling window follows the same range→window mapping Analytics uses.
   const loadAnalyticsData = useCallback(async () => {
     if (!analyticsConfigured) return;
     const from = `now-${range}`;
-    const windowDays = getWindowDaysForDateRange({ preset: range });
     const [dRange, d7, er, dTrend, eTrend] = await Promise.allSettled([
-      analyticsApi.getDefenseScore({ from, scoringMode }),
+      analyticsApi.getDefenseScore({ from, scoringMode, basis: 'latest' }),
       analyticsApi.getDefenseScore({ from: 'now-7d', scoringMode }),
       analyticsApi.getErrorRate({ from }),
-      analyticsApi.getDefenseScoreTrend({ from, interval: 'day', windowDays, scoringMode }),
-      analyticsApi.getErrorRateTrend({ from, interval: 'day', windowDays }),
+      analyticsApi.getDefenseScoreTrend({ from, interval: 'day', scoringMode, basis: 'latest' }),
+      analyticsApi.getErrorRateTrend({ from, interval: 'day' }),
     ]);
     setDefenseScore(settle(dRange));
     setDefense7(settle(d7));
@@ -220,39 +258,23 @@ export function useDashboardData(range: DashboardRange = DEFAULT_DASHBOARD_RANGE
 
   const testStats = useMemo(() => (tests ? computeTestStats(tests) : null), [tests]);
 
-  // Left-join error-rate + secure-score + zta-score trends onto the defense-score days
-  const trend = useMemo<TrendPoint[]>(() => {
-    if (!defenseTrend?.length) return [];
-    const errByDay = new Map(
-      (errorTrend ?? []).map((p) => [format(toDate(p.timestamp), 'yyyy-MM-dd'), p.errorRate]),
-    );
-    const secureByDay = new Map(
-      (secureTrend ?? []).map((p) => [format(new Date(p.date), 'yyyy-MM-dd'), p.percentage]),
-    );
-    const ztaByDay = new Map(
-      (ztaTrend ?? []).map((p) => [format(new Date(p.date), 'yyyy-MM-dd'), p.overallScore]),
-    );
-    return defenseTrend.map((p) => {
-      const day = format(toDate(p.timestamp), 'yyyy-MM-dd');
-      return {
-        date: format(toDate(p.timestamp), 'MMM d'),
-        defense: p.score,
-        secure: secureByDay.get(day) ?? null,
-        zta: ztaByDay.get(day) ?? null,
-        errorRate: errByDay.get(day) ?? null,
-      };
-    });
-  }, [defenseTrend, errorTrend, secureTrend, ztaTrend]);
+  const trend = useMemo<TrendPoint[]>(
+    () => buildTrendPoints(defenseTrend, errorTrend, secureTrend, ztaTrend),
+    [defenseTrend, errorTrend, secureTrend, ztaTrend],
+  );
+
+  const current = useMemo(() => pickCurrentScore(defenseScore, defenseTrend), [defenseScore, defenseTrend]);
+  const defenseDelta = useMemo(() => seriesDelta(defenseTrend ?? []), [defenseTrend]);
 
   const trendDescription = useMemo(() => {
-    const parts: string[] = [];
-    if (defenseScore?.score != null) parts.push(`Defense ${defenseScore.score.toFixed(1)}%`);
-    if (secureScore) parts.push(`Secure ${secureScore.percentage.toFixed(1)}%`);
-    if (ztaScore) parts.push(`ZTA ${ztaScore.overallScore.toFixed(1)}%`);
-    if (errorRate) parts.push(`Error rate ${errorRate.errorRate.toFixed(1)}%`);
-    parts.push(`(${getWindowDaysForDateRange({ preset: range })}-day rolling)`);
-    return parts.join(' · ');
-  }, [defenseScore, secureScore, ztaScore, errorRate, range]);
+    const lastError = [...(errorTrend ?? [])].reverse().find((p) => p.errorRate != null)?.errorRate;
+    return buildTrendDescription({
+      defense: current.score,
+      secure: secureScore ? secureScore.percentage : null,
+      zta: ztaScore ? ztaScore.overallScore : null,
+      errorRate: lastError ?? errorRate?.errorRate ?? null,
+    });
+  }, [current, secureScore, ztaScore, errorTrend, errorRate]);
 
   const controls = useMemo<RemediationControl[]>(() => {
     if (!rawControls) return [];
@@ -305,6 +327,9 @@ export function useDashboardData(range: DashboardRange = DEFAULT_DASHBOARD_RANGE
     lastSyncedAgo: syncStatus?.lastSyncTime ? relativeTime(syncStatus.lastSyncTime) : undefined,
     attentionItems,
     defenseScore,
+    defenseCurrentScore: current.score,
+    defensePairCount: current.pairCount,
+    defenseDelta,
     defense7,
     errorRate,
     secureScore,

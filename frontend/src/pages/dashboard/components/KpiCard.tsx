@@ -9,11 +9,13 @@ export interface KpiCardProps {
   icon: LucideIcon;
   to: string;
   /** danger colors the value + icon (e.g. defense score below threshold). */
-  tone?: 'default' | 'accent' | 'danger';
+  tone?: 'default' | 'accent' | 'danger' | 'muted';
   loading?: boolean;
+  /** Native tooltip help text. */
+  title?: string;
 }
 
-export function KpiCard({ label, value, sub, icon: Icon, to, tone = 'default', loading }: KpiCardProps) {
+export function KpiCard({ label, value, sub, icon: Icon, to, tone = 'default', loading, title }: KpiCardProps) {
   if (loading) {
     return <div className="h-24 animate-pulse rounded-lg border border-border bg-raised" aria-hidden="true" />;
   }
@@ -21,6 +23,7 @@ export function KpiCard({ label, value, sub, icon: Icon, to, tone = 'default', l
   return (
     <Link
       to={to}
+      title={title}
       className="flex flex-col rounded-lg border border-border bg-surface p-4 transition-transform hover:-translate-y-0.5"
     >
       <div className="flex items-start justify-between gap-2">
@@ -35,6 +38,7 @@ export function KpiCard({ label, value, sub, icon: Icon, to, tone = 'default', l
           'mt-2 text-2xl font-semibold tracking-tight',
           tone === 'danger' && 'text-danger',
           tone === 'accent' && 'text-accent',
+          tone === 'muted' && 'text-muted',
         )}
       >
         {value}

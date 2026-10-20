@@ -1,6 +1,7 @@
 import { Activity, Bird, FlaskConical, Server, ShieldAlert, ShieldCheck, Star } from 'lucide-react';
 import { useSearchParams } from 'react-router-dom';
 import { cn } from '@/lib/utils';
+import { isLowSample, POSTURE_HELP, postureCaption } from '@/lib/posture';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { useHasPermission } from '@/hooks/useAppRole';
 import { AttentionBanner } from './components/AttentionBanner';
@@ -42,19 +43,23 @@ export default function DashboardPage() {
     );
   };
 
+  const defenseCurrent = { score: data.defenseCurrentScore, pairCount: data.defensePairCount };
+
   const kpis: KpiCardProps[] = [
     {
       label: `Defense score (${range})`,
-      value: data.defenseScore?.score != null ? `${data.defenseScore.score.toFixed(1)}%` : '—',
+      value: defenseCurrent.score != null ? `${defenseCurrent.score.toFixed(1)}%` : '—',
       sub: data.analyticsConfigured
-        ? data.errorRate
-          ? `${data.errorRate.errorRate.toFixed(1)}% inconclusive`
-          : undefined
+        ? postureCaption(defenseCurrent.pairCount, data.defenseDelta, range)
         : 'not configured',
+      title: POSTURE_HELP,
       icon: ShieldAlert,
       to: '/analytics',
-      tone:
-        data.defenseScore?.score != null && data.defenseScore.score < DEFENSE_DANGER_THRESHOLD ? 'danger' : 'default',
+      tone: isLowSample(defenseCurrent.pairCount)
+        ? 'muted'
+        : defenseCurrent.score != null && defenseCurrent.score < DEFENSE_DANGER_THRESHOLD
+          ? 'danger'
+          : 'default',
     },
     {
       label: 'Secure score',

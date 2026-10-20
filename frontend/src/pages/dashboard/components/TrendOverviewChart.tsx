@@ -94,7 +94,7 @@ export function TrendOverviewChart({ data, description, hasSecureScore, hasZtaSc
                 stroke="var(--chart-protected)"
                 strokeWidth={2}
                 fill="url(#trend-defense-fill)"
-                connectNulls
+                connectNulls={false}
               />
               {hasSecureScore && (
                 <Area
@@ -127,7 +127,7 @@ export function TrendOverviewChart({ data, description, hasSecureScore, hasZtaSc
                 stroke="var(--chart-bypassed)"
                 strokeWidth={2}
                 fill="none"
-                connectNulls
+                connectNulls={false}
               />
             </AreaChart>
           </ResponsiveContainer>
