@@ -413,6 +413,8 @@ describe('CrowdStrikeSyncService', () => {
 
       expect(mockGetZtaDeviceIds).toHaveBeenCalledTimes(2);
       expect(mockGetZtaDeviceIds.mock.calls[1][0].after).toBe('zta-page-2');
+      // getAssessmentsByScoreV1 rejects limit > 1000
+      expect(mockGetZtaDeviceIds.mock.calls[0][0].limit).toBeLessThanOrEqual(1000);
       expect(mockGetZtaAssessments).toHaveBeenCalledWith(['aid-1', 'aid-2']);
     });
 
@@ -441,20 +443,17 @@ describe('CrowdStrikeSyncService', () => {
       expect(service.getSyncStatus().ztaStatus).toBe('not_licensed');
     });
 
-    it('404 from the ZTA API is non-fatal and records zta_status=not_licensed', async () => {
-      // Observed on a tenant without Falcon Insight: CrowdStrike answers
-      // the ZTA endpoints with a generic 404 ("Not Found ... trace-id")
-      // when the feature isn't provisioned for the CID at all.
+    it('404 from the ZTA API surfaces as a sync error, not as not_licensed', async () => {
+      // CrowdStrike's gateway answers an unknown route with a generic 404
+      // ("Not Found ... trace-id"). Masking that as not_licensed hid a wrong
+      // endpoint path for weeks; only 403 (missing scope) means not licensed.
       mockGetZtaDeviceIds.mockRejectedValue(new MockFalconApiError('not found', 404, '{"errors":[{"code":404}]}'));
 
       const result = await service.syncZtaScores();
 
       expect(result.synced).toBe(0);
-      expect(result.errors).toHaveLength(0); // non-fatal by design
-      expect(mockSaveCrowdStrikeSyncTimestamps).toHaveBeenCalledWith(
-        expect.objectContaining({ zta_status: 'not_licensed' }),
-      );
-      expect(service.getSyncStatus().ztaStatus).toBe('not_licensed');
+      expect(result.errors).toHaveLength(1);
+      expect(service.getSyncStatus().ztaStatus).not.toBe('not_licensed');
     });
 
     it('records zta_status=ok on success', async () => {

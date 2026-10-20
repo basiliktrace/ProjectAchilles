@@ -18,7 +18,7 @@ Pillars 1 and 2 are read-only. Pillar 3 is the first write pillar. Enabling it r
 |---|---|---|
 | `Alerts: read` | Alert sync | `POST /alerts/combined/alerts/v1` (FQL filter, `created_timestamp` sort, after-token pagination) |
 | `Alerts: write` | Auto-resolve | `PATCH /alerts/entities/alerts/v3` (`update_status='closed'`, `append_comment`) |
-| `Zero Trust Assessment: read` | ZTA posture score (requires **Falcon Insight** licensing) | `GET /zero-trust-assessment/queries/devices/v1` + `GET /zero-trust-assessment/entities/assessments/v1` |
+| `Zero Trust Assessment: read` | ZTA posture score (requires **Falcon Insight** licensing) | `GET /zero-trust-assessment/queries/assessments/v1?filter=score:>=0` + `GET /zero-trust-assessment/entities/assessments/v1` |
 
 Scopes are granted on the API client in the Falcon console → **Support** → **API Clients and Keys**. The legacy `/detects/*` endpoints were decommissioned on 2025-09-30 and are not used.
 
