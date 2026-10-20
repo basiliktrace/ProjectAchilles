@@ -50,7 +50,7 @@ import type {
 type TabType = 'dashboard' | 'executions' | 'risk-acceptances' | 'defender' | 'crowdstrike';
 
 interface DefenseScoreData {
-  overall: number;
+  overall: number | null;
   delta: number | null;
   total: number;
   protected: number;

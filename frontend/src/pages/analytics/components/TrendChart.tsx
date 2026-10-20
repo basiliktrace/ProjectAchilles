@@ -159,8 +159,9 @@ function TrendChart({ data, errorRateData, errorRateOverall, secureScoreTrendDat
   });
 
   // Calculate averages for description
-  const avgScore = chartData.length > 0
-    ? (chartData.reduce((sum, d) => sum + d.score, 0) / chartData.length).toFixed(1)
+  const scoredPoints = chartData.filter(d => d.score != null);
+  const avgScore = scoredPoints.length > 0
+    ? (scoredPoints.reduce((sum, d) => sum + (d.score ?? 0), 0) / scoredPoints.length).toFixed(1)
     : '0';
 
   const avgRealScore = hasRealScore

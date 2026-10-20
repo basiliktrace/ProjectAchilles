@@ -45,7 +45,7 @@ export default function DashboardPage() {
   const kpis: KpiCardProps[] = [
     {
       label: `Defense score (${range})`,
-      value: data.defenseScore ? `${data.defenseScore.score.toFixed(1)}%` : '—',
+      value: data.defenseScore?.score != null ? `${data.defenseScore.score.toFixed(1)}%` : '—',
       sub: data.analyticsConfigured
         ? data.errorRate
           ? `${data.errorRate.errorRate.toFixed(1)}% inconclusive`
@@ -54,7 +54,7 @@ export default function DashboardPage() {
       icon: ShieldAlert,
       to: '/analytics',
       tone:
-        data.defenseScore && data.defenseScore.score < DEFENSE_DANGER_THRESHOLD ? 'danger' : 'default',
+        data.defenseScore?.score != null && data.defenseScore.score < DEFENSE_DANGER_THRESHOLD ? 'danger' : 'default',
     },
     {
       label: 'Secure score',
@@ -106,7 +106,7 @@ export default function DashboardPage() {
       label: 'Executions 7d',
       value: data.defense7 ? String(data.defense7.totalExecutions) : '—',
       sub: data.analyticsConfigured
-        ? data.defense7
+        ? data.defense7?.score != null
           ? `${data.defense7.score.toFixed(0)}% protected`
           : undefined
         : 'not configured',

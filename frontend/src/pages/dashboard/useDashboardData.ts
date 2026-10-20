@@ -246,7 +246,7 @@ export function useDashboardData(range: DashboardRange = DEFAULT_DASHBOARD_RANGE
 
   const trendDescription = useMemo(() => {
     const parts: string[] = [];
-    if (defenseScore) parts.push(`Defense ${defenseScore.score.toFixed(1)}%`);
+    if (defenseScore?.score != null) parts.push(`Defense ${defenseScore.score.toFixed(1)}%`);
     if (secureScore) parts.push(`Secure ${secureScore.percentage.toFixed(1)}%`);
     if (ztaScore) parts.push(`ZTA ${ztaScore.overallScore.toFixed(1)}%`);
     if (errorRate) parts.push(`Error rate ${errorRate.errorRate.toFixed(1)}%`);
