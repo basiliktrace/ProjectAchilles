@@ -1,35 +1,18 @@
 import { useState, useCallback, useMemo, useEffect } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import type { ExtendedFilterParams } from '@/services/api/analytics';
+import {
+  DEFAULT_TIME_RANGE,
+  getDateRangeFilter,
+  readStoredTimeRange,
+  storeTimeRange,
+  timeRangeFromParams,
+  timeRangeToParams,
+  type DateRangeValue,
+} from '@/lib/timeRange';
 
-// Re-export DateRangeValue interface matching DateRangePicker
-export interface DateRangeValue {
-  preset: string;
-  from?: string;
-  to?: string;
-}
-
-/**
- * Lower bound sent for the "All time" preset. With no dates at all the
- * backend falls back to the last 7 days, so "All time" must send one.
- * Must equal ALL_TIME_FROM in backend/src/services/reports/reportWindow.ts.
- */
-export const ALL_TIME_FROM = '2000-01-01T00:00:00.000Z';
-
-/** Convert a date range value to the API's from/to (ES date math or ISO). */
-export function getDateRangeFilter(value: DateRangeValue): { from?: string; to?: string } {
-  if (value.preset === 'custom' && value.from && value.to) {
-    return { from: value.from, to: value.to };
-  }
-  if (value.preset === 'all') {
-    return { from: ALL_TIME_FROM };
-  }
-  const match = value.preset.match(/^(\d+)([dhw])$/);
-  if (!match) {
-    return { from: 'now-90d' };
-  }
-  return { from: `now-${value.preset}` };
-}
+export type { DateRangeValue };
+export { ALL_TIME_FROM, getDateRangeFilter } from '@/lib/timeRange';
 
 export interface AnalyticsFilterState {
   // Basic filters (always visible)
@@ -81,7 +64,7 @@ export interface UseAnalyticsFiltersReturn {
 
 const defaultFilters: AnalyticsFilterState = {
   org: null,
-  dateRange: { preset: '90d' },
+  dateRange: DEFAULT_TIME_RANGE,
   result: 'all',
   hostnames: [],
   tests: [],
@@ -102,14 +85,8 @@ export function parseUrlParams(searchParams: URLSearchParams): Partial<Analytics
   const org = searchParams.get('org');
   if (org) result.org = org;
 
-  const datePreset = searchParams.get('date');
-  const dateFrom = searchParams.get('from');
-  const dateTo = searchParams.get('to');
-  if (datePreset) {
-    result.dateRange = { preset: datePreset };
-  } else if (dateFrom && dateTo) {
-    result.dateRange = { preset: 'custom', from: dateFrom, to: dateTo };
-  }
+  const dateRange = timeRangeFromParams(searchParams);
+  if (dateRange) result.dateRange = dateRange;
 
   const resultParam = searchParams.get('result');
   if (resultParam === 'protected' || resultParam === 'unprotected' || resultParam === 'inconclusive') {
@@ -155,13 +132,8 @@ export function serializeToUrlParams(filters: AnalyticsFilterState): Record<stri
 
   if (filters.org) params.org = filters.org;
 
-  if (filters.dateRange.preset === 'custom' && filters.dateRange.from && filters.dateRange.to) {
-    params.from = filters.dateRange.from;
-    params.to = filters.dateRange.to;
-  } else if (filters.dateRange.preset && filters.dateRange.preset !== '90d') {
-    // '90d' is the default and stays out of the URL; every other preset serializes
-    params.date = filters.dateRange.preset;
-  }
+  // The default range stays out of the URL; every other range serializes
+  Object.assign(params, timeRangeToParams(filters.dateRange));
 
   if (filters.result !== 'all') params.result = filters.result;
   if (filters.hostnames.length > 0) params.hostnames = filters.hostnames.join(',');
@@ -206,13 +178,18 @@ export function toApiParams(filters: AnalyticsFilterState): ExtendedFilterParams
 export function useAnalyticsFilters(syncWithUrl = true): UseAnalyticsFiltersReturn {
   const [searchParams, setSearchParams] = useSearchParams();
 
-  // Initialize state from URL params or defaults
+  // Initialize from URL params; the date range falls back to the one
+  // remembered from the Dashboard or an earlier visit, then the default.
   const [filters, setFilters] = useState<AnalyticsFilterState>(() => {
-    if (syncWithUrl) {
-      return { ...defaultFilters, ...parseUrlParams(searchParams) };
-    }
-    return defaultFilters;
+    const remembered = readStoredTimeRange();
+    const base = remembered ? { ...defaultFilters, dateRange: remembered } : defaultFilters;
+    return syncWithUrl ? { ...base, ...parseUrlParams(searchParams) } : base;
   });
+
+  // Share the date range with the Dashboard for the rest of the tab session
+  useEffect(() => {
+    storeTimeRange(filters.dateRange);
+  }, [filters.dateRange]);
 
   const [isExpanded, setIsExpanded] = useState(false);
 

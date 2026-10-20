@@ -77,13 +77,16 @@ The dashboard ledger reconciles the headline with an *Actual* score, an *EDR-onl
 
 ## Time window
 
-Analytics defaults to a **90-day** window. Most fleets run scheduled bundles
-weekly or monthly, so a 30-day default showed empty charts for healthy
-programmes. Change it from the range selector in the page header; the choice is
-carried in the URL, so a filtered view is shareable.
+Analytics and the Security Dashboard share one time range, defaulting to
+**30 days**. Change it on either page and the other page opens on the same
+window: last 24 hours, 7, 30 or 90 days, all time, or a custom range (set from
+the Analytics date picker; the Dashboard then shows a **Custom** chip).
 
-The Security Dashboard has its own independent **7d / 30d / 90d** selector,
-also defaulting to 90 days.
+The choice is remembered for the browser tab until it is closed, so it survives
+reloads and moving between pages. It is also carried in the URL, so a filtered
+view is shareable; a range in a link wins over the remembered one. If your
+fleet runs bundles monthly, pick 90d: a 30-day window can look sparse between
+runs.
 
 ## Dashboard Layout
 

@@ -84,7 +84,7 @@ export function postureWindowLabel(dateRange: { preset: string; from?: string; t
     ms = Number.POSITIVE_INFINITY;
   } else {
     const m = dateRange.preset.match(/^(\d+)([dhw])$/);
-    ms = m ? parseInt(m[1], 10) * PRESET_UNIT_MS[m[2]] : 90 * DAY_MS; // unknown preset sends now-90d
+    ms = m ? parseInt(m[1], 10) * PRESET_UNIT_MS[m[2]] : 30 * DAY_MS; // unknown preset sends now-30d
   }
   if (Number.isNaN(ms)) ms = 0;
   if (ms > MAX_FRESHNESS_DAYS * DAY_MS) return `last ${MAX_FRESHNESS_DAYS}d`;

@@ -1,7 +1,7 @@
 ---
 sidebar_position: 2
 title: "Security Dashboard"
-description: "The unified ProjectAchilles dashboard — attention banner, KPI strip, trend overview, ATT&CK coverage, fleet health, and the 7d/30d/90d range selector."
+description: "The unified ProjectAchilles dashboard — attention banner, KPI strip, trend overview, ATT&CK coverage, fleet health, and the shared time range selector."
 ---
 
 # Security Dashboard
@@ -15,18 +15,20 @@ dashboards in 2.1.
 
 ## Time range
 
-The header carries a **7d / 30d / 90d** selector plus a git sync chip and a
-manual refresh. The range drives the Defense Score and the trend overview, and
-defaults to **90d**, matching the Analytics section's default window. For the
+The header carries a **24h / 7d / 30d / 90d / All** selector plus a git sync
+chip and a manual refresh. The range drives the Defense Score and the trend
+overview, and defaults to **30d**. It is shared with the Analytics section:
+changing it on one page changes it on the other, and the choice is remembered
+for the browser tab. A custom range picked in Analytics shows here as a
+**Custom** chip. For the
 Defense Score the range is a **freshness window**: a test × endpoint pair counts
 only if its most recent result falls inside it. The trend line shows the same
 calculation as of each UTC day and always ends at the tile's value. See
 [Defense Score](../analytics/defense-score.md#latest-result-score).
 
 :::tip
-90 days is the default because most fleets run scheduled bundles weekly or
-monthly. A 7-day window on a monthly schedule shows an empty chart even though
-the programme is healthy.
+Match the range to your schedule. A 7-day window on a monthly schedule shows an
+empty chart even though the programme is healthy; pick 90d for monthly bundles.
 :::
 
 ## Attention banner
