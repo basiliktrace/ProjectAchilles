@@ -37,6 +37,14 @@ const mockGetDefenseScore = vi.fn();
 const mockGetDefenseScoreTrend = vi.fn();
 const mockGetDefenseScoreLatest = vi.fn();
 const mockGetDefenseScoreTrendLatest = vi.fn();
+const mockByCategoryLatest = vi.fn();
+const mockByCategory = vi.fn();
+const mockByHostnameLatest = vi.fn();
+const mockByHostname = vi.fn();
+const mockTechniqueLatest = vi.fn();
+const mockTechnique = vi.fn();
+const mockCoverageLatest = vi.fn();
+const mockCoverage = vi.fn();
 vi.mock('../../services/analytics/elasticsearch.js', () => ({
   ElasticsearchService: class MockElasticsearchService {
     testConnection = mockTestConnection;
@@ -46,6 +54,14 @@ vi.mock('../../services/analytics/elasticsearch.js', () => ({
     getDefenseScoreTrend = mockGetDefenseScoreTrend;
     getDefenseScoreLatest = mockGetDefenseScoreLatest;
     getDefenseScoreTrendLatest = mockGetDefenseScoreTrendLatest;
+    getDefenseScoreByCategoryWithSubcategoriesLatest = mockByCategoryLatest;
+    getDefenseScoreByCategoryWithSubcategories = mockByCategory;
+    getDefenseScoreByHostnameLatest = mockByHostnameLatest;
+    getDefenseScoreByHostname = mockByHostname;
+    getTechniqueDistributionLatest = mockTechniqueLatest;
+    getTechniqueDistribution = mockTechnique;
+    getTestCoverageLatest = mockCoverageLatest;
+    getTestCoverage = mockCoverage;
   },
 }));
 
@@ -205,6 +221,37 @@ describe('analytics routes', () => {
       await request(createApp()).get('/api/analytics/error-rate/trend?from=now-30d&windowDays=200');
       expect(mockGetErrorRateTrendRolling).toHaveBeenCalledWith(expect.objectContaining({ windowDays: 90 }));
     });
+  });
+
+  describe('breakdown basis dispatch', () => {
+    beforeEach(() => {
+      mockGetSettings.mockReturnValue({ configured: true, connectionType: 'direct', node: 'http://localhost:9200' });
+      for (const m of [mockByCategoryLatest, mockByCategory, mockByHostnameLatest, mockByHostname, mockTechniqueLatest, mockTechnique, mockCoverageLatest, mockCoverage]) {
+        m.mockResolvedValue([]);
+      }
+    });
+    const cases: [string, typeof mockCoverage, typeof mockCoverage][] = [
+      ['/defense-score/by-category-subcategory', mockByCategoryLatest, mockByCategory],
+      ['/defense-score/by-hostname', mockByHostnameLatest, mockByHostname],
+      ['/technique-distribution', mockTechniqueLatest, mockTechnique],
+      ['/test-coverage', mockCoverageLatest, mockCoverage],
+    ];
+    for (const [path, latest, executions] of cases) {
+      it(`${path}: basis=latest -> latest method, default -> executions, bogus -> 400`, async () => {
+        const l = await request(createApp()).get(`/api/analytics${path}?basis=latest&scoringMode=any-stage`);
+        expect(l.status).toBe(200);
+        expect(latest).toHaveBeenCalledWith(expect.objectContaining({ basis: 'latest', scoringMode: 'any-stage' }));
+        expect(executions).not.toHaveBeenCalled();
+
+        latest.mockClear();
+        await request(createApp()).get(`/api/analytics${path}`);
+        expect(executions).toHaveBeenCalledTimes(1);
+        expect(latest).not.toHaveBeenCalled();
+
+        const bad = await request(createApp()).get(`/api/analytics${path}?basis=bogus`);
+        expect(bad.status).toBe(400);
+      });
+    }
   });
 
   describe('basis dispatch', () => {

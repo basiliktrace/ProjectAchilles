@@ -7,6 +7,7 @@ import { attackSimulationExclusions } from './attack-simulation-filter.js';
 import { AppError } from '../../middleware/error.middleware.js';
 import {
   applyOutcomeFilters,
+  groupPairs,
   latestPairsAsOf,
   postureSeries,
   resolvePostureWindow,
@@ -902,18 +903,25 @@ export class ElasticsearchService {
    * composite test_uuid). Any-stage: standalone + cyber-hygiene docs are
    * per-doc pairs; each non-CH bundle × host is one pair whose runs are the
    * control docs sharing an exact event_time.
+   * withMetadata=false skips the per-test metadata fetch (and the bundle
+   * top_hits): testName is '' and techniques are [] — enough for the score
+   * tile and trend, which only need verdicts.
    */
-  private async fetchPairRuns(filters: any[], isAnyStage: boolean): Promise<PairRun[]> {
-    if (!isAnyStage) return this.fetchDocPairRuns(filters);
+  private async fetchPairRuns(
+    filters: any[],
+    isAnyStage: boolean,
+    opts: { withMetadata: boolean } = { withMetadata: true },
+  ): Promise<PairRun[]> {
+    if (!isAnyStage) return this.fetchDocPairRuns(filters, opts.withMetadata);
     const [docRuns, bundleRuns] = await Promise.all([
-      this.fetchDocPairRuns([...filters, this.PER_DOC_FILTER]),
-      this.fetchBundlePairRuns([...filters, this.PER_BUNDLE_FILTER]),
+      this.fetchDocPairRuns([...filters, this.PER_DOC_FILTER], opts.withMetadata),
+      this.fetchBundlePairRuns([...filters, this.PER_BUNDLE_FILTER], opts.withMetadata),
     ]);
     return docRuns.concat(bundleRuns);
   }
 
   /** Per-doc pairs: the latest doc per (oid, test_uuid, hostname, UTC day). */
-  private async fetchDocPairRuns(filters: any[]): Promise<PairRun[]> {
+  private async fetchDocPairRuns(filters: any[], withMetadata: boolean): Promise<PairRun[]> {
     const buckets = await this.paginateComposite(
       filters,
       'pairs',
@@ -945,7 +953,7 @@ export class ElasticsearchService {
     // top_metrics can't return multi-valued fields (techniques), so the
     // static per-test metadata comes from one terms + top_hits pass.
     const uuids = new Set<string>(buckets.map(b => String(b.key?.test)));
-    const meta = await this.fetchTestMetadata(filters, uuids.size);
+    const meta = withMetadata ? await this.fetchTestMetadata(filters, uuids.size) : new Map<string, never>();
 
     const runs: PairRun[] = [];
     for (const b of buckets) {
@@ -968,7 +976,7 @@ export class ElasticsearchService {
         errorCodes: codes,
         errorNames: errorNamesFor(codes, typeof m['f0rtika.error_name'] === 'string' ? [m['f0rtika.error_name']] : []),
         hostname,
-        testName: info?.testName ?? testUuid,
+        testName: withMetadata ? (info?.testName ?? testUuid) : '',
         category: info?.category,
         subcategory: info?.subcategory,
         techniques: info?.techniques ?? [],
@@ -1016,7 +1024,7 @@ export class ElasticsearchService {
   }
 
   /** Any-stage bundle pairs: one run per (oid, bundle_id, hostname, exact event_time). */
-  private async fetchBundlePairRuns(filters: any[]): Promise<PairRun[]> {
+  private async fetchBundlePairRuns(filters: any[], withMetadata: boolean): Promise<PairRun[]> {
     const buckets = await this.paginateComposite(
       filters,
       'bundle_runs',
@@ -1034,12 +1042,16 @@ export class ElasticsearchService {
         strict: { filter: { term: { 'f0rtika.is_protected': true } } },
         codes: { terms: { field: 'event.ERROR', size: 10 } },
         names: { terms: { field: 'f0rtika.error_name', size: 20 } },
-        meta: {
-          top_hits: {
-            size: 100,
-            _source: ['f0rtika.techniques', 'f0rtika.category', 'f0rtika.subcategory', 'f0rtika.bundle_name'],
-          },
-        },
+        ...(withMetadata
+          ? {
+              meta: {
+                top_hits: {
+                  size: 100,
+                  _source: ['f0rtika.techniques', 'f0rtika.category', 'f0rtika.subcategory', 'f0rtika.bundle_name'],
+                },
+              },
+            }
+          : {}),
       },
     );
 
@@ -1073,7 +1085,7 @@ export class ElasticsearchService {
         errorCodes: codes,
         errorNames: errorNamesFor(codes, storedNames),
         hostname,
-        testName: bundleName ?? bundleId,
+        testName: withMetadata ? (bundleName ?? bundleId) : '',
         category,
         subcategory,
         techniques: [...techniques],
@@ -1111,10 +1123,11 @@ export class ElasticsearchService {
    * pick. `series` widens the lower bound by one freshness window so the
    * first trend point has its full lookback.
    * rawRuns = the same without the exclusion; null when nothing is excluded.
+   * withMetadata defaults to true; score paths pass false (verdicts only).
    */
   async getLatestPosture(
     params: AnalyticsQueryParams & Partial<ExtendedAnalyticsQueryParams>,
-    opts: { series?: boolean } = {},
+    opts: { series?: boolean; withMetadata?: boolean } = {},
   ): Promise<{ window: PostureWindow; runs: PairRun[]; rawRuns: PairRun[] | null; outcome: OutcomeFilters }> {
     const window = this.resolveLatestWindow(params);
     const outcome = this.parseOutcomeFilters(params);
@@ -1137,26 +1150,27 @@ export class ElasticsearchService {
     filters.push(...this.buildFilterBarClauses(params, { excludeOutcome: true }));
 
     const isAnyStage = params.scoringMode === 'any-stage';
+    const fetchOpts = { withMetadata: opts.withMetadata ?? true };
     const exclusionFilter = await this.getRiskAcceptanceService().buildExclusionFilter(params.org);
     if (!exclusionFilter) {
-      return { window, runs: await this.fetchPairRuns(filters, isAnyStage), rawRuns: null, outcome };
+      return { window, runs: await this.fetchPairRuns(filters, isAnyStage, fetchOpts), rawRuns: null, outcome };
     }
     const [runs, rawRuns] = await Promise.all([
-      this.fetchPairRuns([...filters, exclusionFilter], isAnyStage),
-      this.fetchPairRuns(filters, isAnyStage),
+      this.fetchPairRuns([...filters, exclusionFilter], isAnyStage, fetchOpts),
+      this.fetchPairRuns(filters, isAnyStage, fetchOpts),
     ]);
     return { window, runs, rawRuns, outcome };
   }
 
   /** Outcome-filtered latest pair per key, as of window.toMs (exclusions applied). */
   async getLatestPairs(params: AnalyticsQueryParams & Partial<ExtendedAnalyticsQueryParams>): Promise<PairRun[]> {
-    const { window, runs, outcome } = await this.getLatestPosture(params);
+    const { window, runs, outcome } = await this.getLatestPosture(params, { withMetadata: true });
     return applyOutcomeFilters(latestPairsAsOf(runs, window.toMs, window.freshnessMs), outcome);
   }
 
   /** Defense Score, basis=latest. Same calculation as the trend's last point. */
   async getDefenseScoreLatest(params: AnalyticsQueryParams & Partial<ExtendedAnalyticsQueryParams>): Promise<DefenseScoreResponse> {
-    const { window, runs, rawRuns, outcome } = await this.getLatestPosture(params);
+    const { window, runs, rawRuns, outcome } = await this.getLatestPosture(params, { withMetadata: false });
     const summarize = (rs: PairRun[]) =>
       summarizePairs(applyOutcomeFilters(latestPairsAsOf(rs, window.toMs, window.freshnessMs), outcome));
     const latest = summarize(runs);
@@ -1189,7 +1203,7 @@ export class ElasticsearchService {
    * pre-risk-acceptance (raw) series — and are set only when exclusions exist.
    */
   async getDefenseScoreTrendLatest(params: AnalyticsQueryParams & Partial<ExtendedAnalyticsQueryParams>): Promise<TrendDataPoint[]> {
-    const { window, runs, rawRuns, outcome } = await this.getLatestPosture(params, { series: true });
+    const { window, runs, rawRuns, outcome } = await this.getLatestPosture(params, { series: true, withMetadata: false });
     const points = postureSeries(runs, window, outcome);
     const rawPoints = rawRuns ? postureSeries(rawRuns, window, outcome) : null;
     return points.map((p, i) => {
@@ -2497,6 +2511,80 @@ export class ElasticsearchService {
         };
       })
       .sort((a, b) => b.total - a.total);
+  }
+
+  /** Defense score by category with nested subcategories, basis=latest (pairs). */
+  async getDefenseScoreByCategoryWithSubcategoriesLatest(params: AnalyticsQueryParams & Partial<ExtendedAnalyticsQueryParams>): Promise<CategorySubcategoryBreakdownItem[]> {
+    const pairs = await this.getLatestPairs(params);
+    const round = (x: number) => Math.round(x * 100) / 100;
+    const byCategory = groupPairs(pairs, p => p.category);
+    const items: CategorySubcategoryBreakdownItem[] = [];
+    for (const [category, summary] of byCategory) {
+      if (summary.score === null) continue;
+      const inCategory = pairs.filter(p => p.category === category);
+      const subcategories: SubcategoryBreakdownItem[] = [];
+      for (const [subcategory, sub] of groupPairs(inCategory, p => p.subcategory)) {
+        if (sub.score === null) continue;
+        subcategories.push({
+          subcategory,
+          score: round(sub.score),
+          count: sub.pairCount,
+          protected: sub.protectedCount,
+          unprotected: sub.pairCount - sub.protectedCount,
+        });
+      }
+      subcategories.sort((a, b) => b.count - a.count);
+      items.push({
+        category: category as CategoryType,
+        score: round(summary.score),
+        count: summary.pairCount,
+        protected: summary.protectedCount,
+        unprotected: summary.pairCount - summary.protectedCount,
+        subcategories,
+      });
+    }
+    return items.sort((a, b) => b.score - a.score);
+  }
+
+  /** Defense score by hostname, basis=latest (counts are pairs). */
+  async getDefenseScoreByHostnameLatest(params: AnalyticsQueryParams & Partial<ExtendedAnalyticsQueryParams>): Promise<DefenseScoreByHostItem[]> {
+    const pairs = await this.getLatestPairs(params);
+    const items: DefenseScoreByHostItem[] = [];
+    for (const [hostname, s] of groupPairs(pairs, p => p.hostname || undefined)) {
+      if (s.score === null) continue;
+      items.push({
+        hostname,
+        score: Math.round(s.score * 100) / 100,
+        protected: s.protectedCount,
+        unprotected: s.pairCount - s.protectedCount,
+        total: s.pairCount,
+      });
+    }
+    return items.sort((a, b) => b.total - a.total).slice(0, params.limit || 50);
+  }
+
+  /** Technique distribution, basis=latest: a pair counts under each of its techniques. */
+  async getTechniqueDistributionLatest(params: AnalyticsQueryParams & Partial<ExtendedAnalyticsQueryParams>): Promise<TechniqueDistributionItem[]> {
+    const pairs = await this.getLatestPairs(params);
+    const items: TechniqueDistributionItem[] = [];
+    for (const [technique, s] of groupPairs(pairs, p => (p.techniques.length > 0 ? p.techniques : undefined))) {
+      items.push({ technique, protected: s.protectedCount, unprotected: s.pairCount - s.protectedCount });
+    }
+    return items
+      .sort((a, b) => (b.protected + b.unprotected) - (a.protected + a.unprotected) || a.technique.localeCompare(b.technique))
+      .slice(0, 50);
+  }
+
+  /** Test coverage, basis=latest: per test, protected/unprotected hosts (one pair = one host x test). */
+  async getTestCoverageLatest(params: AnalyticsQueryParams & Partial<ExtendedAnalyticsQueryParams>): Promise<TestCoverageItem[]> {
+    const pairs = await this.getLatestPairs(params);
+    const items: TestCoverageItem[] = [];
+    for (const [name, s] of groupPairs(pairs, p => p.testName || undefined)) {
+      items.push({ name, protected: s.protectedCount, unprotected: s.pairCount - s.protectedCount });
+    }
+    return items
+      .sort((a, b) => (b.protected + b.unprotected) - (a.protected + a.unprotected) || a.name.localeCompare(b.name))
+      .slice(0, 50);
   }
 
   // Get canonical test count (stable denominator for coverage calculations)

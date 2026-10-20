@@ -299,14 +299,20 @@ router.get('/results-by-error-type', asyncHandler(async (req, res) => {
 // GET /api/analytics/test-coverage - Protected vs unprotected per test
 router.get('/test-coverage', asyncHandler(async (req, res) => {
   const es = await getEsService();
-  const result = await es.getTestCoverage(extractFilterParams(req.query));
+  const filterParams = extractFilterParams(req.query);
+  const result = filterParams.basis === 'latest'
+    ? await es.getTestCoverageLatest(filterParams)
+    : await es.getTestCoverage(filterParams);
   res.json(result);
 }));
 
 // GET /api/analytics/technique-distribution - Protected vs unprotected per technique
 router.get('/technique-distribution', asyncHandler(async (req, res) => {
   const es = await getEsService();
-  const result = await es.getTechniqueDistribution(extractFilterParams(req.query));
+  const filterParams = extractFilterParams(req.query);
+  const result = filterParams.basis === 'latest'
+    ? await es.getTechniqueDistributionLatest(filterParams)
+    : await es.getTechniqueDistribution(filterParams);
   res.json(result);
 }));
 
@@ -525,7 +531,10 @@ router.get('/defense-score/by-category', asyncHandler(async (req, res) => {
 // GET /api/analytics/defense-score/by-category-subcategory - Score breakdown by category with subcategories
 router.get('/defense-score/by-category-subcategory', asyncHandler(async (req, res) => {
   const es = await getEsService();
-  const result = await es.getDefenseScoreByCategoryWithSubcategories(extractFilterParams(req.query));
+  const filterParams = extractFilterParams(req.query);
+  const result = filterParams.basis === 'latest'
+    ? await es.getDefenseScoreByCategoryWithSubcategoriesLatest(filterParams)
+    : await es.getDefenseScoreByCategoryWithSubcategories(filterParams);
   res.json(result);
 }));
 
@@ -540,10 +549,13 @@ router.get('/threat-actor-coverage', asyncHandler(async (req, res) => {
 router.get('/defense-score/by-hostname', asyncHandler(async (req, res) => {
   const es = await getEsService();
   const { limit } = req.query;
-  const result = await es.getDefenseScoreByHostname({
+  const filterParams = {
     ...extractFilterParams(req.query),
     limit: limit ? parseInt(limit as string) : 50,
-  });
+  };
+  const result = filterParams.basis === 'latest'
+    ? await es.getDefenseScoreByHostnameLatest(filterParams)
+    : await es.getDefenseScoreByHostname(filterParams);
   res.json(result);
 }));
 

@@ -2114,6 +2114,7 @@ describe('elasticsearch.ts', () => {
   // basis: latest — latest-result posture (pair runs → posture.ts)
   // ================================================================
   describe('basis: latest', () => {
+    type PairRunT = import('../posture.js').PairRun;
     const DAY = 86_400_000;
 
     // Shapes mirror a real ES 8.17 response: top_metrics returns booleans
@@ -2565,6 +2566,145 @@ describe('elasticsearch.ts', () => {
         );
         expect(pairs).toHaveLength(1);
         expect(pairs[0]).toMatchObject({ pairKey: 'org-a|u1|h1', testName: 'Test One', protected: true });
+      });
+    });
+
+    describe('metadata fetch is opt-in (R5)', () => {
+      const params = makeParams({ from: '2025-01-01T00:00:00Z', to: '2025-01-31T00:00:00Z' });
+
+      it('tile and trend paths issue no test_meta query and no bundle meta aggregation', async () => {
+        routeSearch({
+          pairPages: [[pairBucket({ test: 'u1', host: 'h1', ts: '2025-01-20T10:00:00Z', code: 126, isProtected: true })]],
+          bundlePages: [[bundleBucket({ bundle: 'b1', host: 'h1', ts: '2025-01-11T09:00:00Z', combined: 1, strict: 1, codes: [126], controls: [{ techniques: ['T1'] }] })]],
+          meta: { u1: { name: 'Test One' } },
+        });
+        await createService().getDefenseScoreLatest({ ...params, scoringMode: 'any-stage' });
+        await createService().getDefenseScoreTrendLatest({ ...params, scoringMode: 'any-stage' });
+        expect(searchesWith('test_meta')).toHaveLength(0);
+        const bundleCalls = searchesWith('bundle_runs');
+        expect(bundleCalls.length).toBeGreaterThan(0);
+        for (const c of bundleCalls) expect(c.aggs.bundle_runs.aggs.meta).toBeUndefined();
+      });
+
+      it('without metadata testName is empty and techniques are empty', async () => {
+        routeSearch({ pairPages: [[pairBucket({ test: 'u1', host: 'h1', ts: '2025-01-20T10:00:00Z', code: 126, isProtected: true })]] });
+        const [run] = await (createService() as any).fetchPairRuns(BASE_FILTERS, false, { withMetadata: false });
+        expect(run).toMatchObject({ testName: '', techniques: [] });
+        expect(run.category).toBeUndefined();
+        expect(searchesWith('test_meta')).toHaveLength(0);
+      });
+
+      it('getLatestPairs fetches metadata', async () => {
+        routeSearch({
+          pairPages: [[pairBucket({ test: 'u1', host: 'h1', ts: '2025-01-20T10:00:00Z', code: 126, isProtected: true })]],
+          meta: { u1: { name: 'Test One' } },
+        });
+        await createService().getLatestPairs(params);
+        expect(searchesWith('test_meta')).toHaveLength(1);
+      });
+    });
+
+    describe('latest-basis breakdowns', () => {
+      const params = makeParams({ from: '2025-01-01T00:00:00Z', to: '2025-01-31T00:00:00Z' });
+      function pair(o: Partial<PairRunT> & { pairKey: string }): PairRunT {
+        return {
+          ts: 1, protected: false, strictProtected: false, errorCodes: [101], errorNames: [],
+          hostname: 'h1', testName: 'T', techniques: [], ...o,
+        };
+      }
+      function stub(pairs: PairRunT[]) {
+        const svc = createService();
+        vi.spyOn(svc, 'getLatestPairs').mockResolvedValue(pairs);
+        return svc;
+      }
+
+      describe('byHostnameLatest', () => {
+        it('one entry per host, counts are pairs, sorted by total desc', async () => {
+          const res = await stub([
+            pair({ pairKey: 'a', hostname: 'h1', protected: true }),
+            pair({ pairKey: 'b', hostname: 'h1' }),
+            pair({ pairKey: 'c', hostname: 'h1', protected: true }),
+            pair({ pairKey: 'd', hostname: 'h2' }),
+          ]).getDefenseScoreByHostnameLatest(params);
+          expect(res).toEqual([
+            { hostname: 'h1', score: 66.67, protected: 2, unprotected: 1, total: 3 },
+            { hostname: 'h2', score: 0, protected: 0, unprotected: 1, total: 1 },
+          ]);
+        });
+        it('honours params.limit', async () => {
+          const res = await stub([
+            pair({ pairKey: 'a', hostname: 'h1' }), pair({ pairKey: 'b', hostname: 'h2' }),
+          ]).getDefenseScoreByHostnameLatest({ ...params, limit: 1 });
+          expect(res).toHaveLength(1);
+        });
+      });
+
+      describe('techniqueDistributionLatest', () => {
+        it('a pair with [T1, T2] counts under both', async () => {
+          const res = await stub([
+            pair({ pairKey: 'a', protected: true, techniques: ['T1', 'T2'] }),
+            pair({ pairKey: 'b', techniques: ['T2'] }),
+          ]).getTechniqueDistributionLatest(params);
+          expect(res).toEqual([
+            { technique: 'T2', protected: 1, unprotected: 1 },
+            { technique: 'T1', protected: 1, unprotected: 0 },
+          ]);
+        });
+        it('pairs without techniques are omitted', async () => {
+          expect(await stub([pair({ pairKey: 'a' })]).getTechniqueDistributionLatest(params)).toEqual([]);
+        });
+      });
+
+      describe('testCoverageLatest', () => {
+        it('groups by testName; any-stage bundle pair groups under bundle name', async () => {
+          const res = await stub([
+            pair({ pairKey: 'o|u1|h1', testName: 'Test One', protected: true }),
+            pair({ pairKey: 'o|u1|h2', testName: 'Test One' }),
+            pair({ pairKey: 'o|bundle:b1|h1', testName: 'Bundle One', protected: true }),
+            pair({ pairKey: 'o|bundle:b1|h2', testName: 'Bundle One', protected: true }),
+            pair({ pairKey: 'o|bundle:b1|h3', testName: 'Bundle One' }),
+          ]).getTestCoverageLatest({ ...params, scoringMode: 'any-stage' });
+          expect(res).toEqual([
+            { name: 'Bundle One', protected: 2, unprotected: 1 },
+            { name: 'Test One', protected: 1, unprotected: 1 },
+          ]);
+        });
+        it('omits pairs with an empty testName', async () => {
+          expect(await stub([pair({ pairKey: 'a', testName: '' })]).getTestCoverageLatest(params)).toEqual([]);
+        });
+      });
+
+      describe('byCategoryLatest', () => {
+        it('nested subcategories sum to the category; categories with no pairs are omitted; sorted score desc / subcategory count desc', async () => {
+          const res = await stub([
+            pair({ pairKey: 'a', category: 'intel-driven', subcategory: 'kc', protected: true }),
+            pair({ pairKey: 'b', category: 'intel-driven', subcategory: 'kc' }),
+            pair({ pairKey: 'c', category: 'intel-driven', subcategory: 'lm', protected: true }),
+            pair({ pairKey: 'd', category: 'cyber-hygiene', subcategory: 'cfg', protected: true }),
+            pair({ pairKey: 'e' }), // no category: not emitted
+          ]).getDefenseScoreByCategoryWithSubcategoriesLatest(params);
+          expect(res).toEqual([
+            {
+              category: 'cyber-hygiene', score: 100, count: 1, protected: 1, unprotected: 0,
+              subcategories: [{ subcategory: 'cfg', score: 100, count: 1, protected: 1, unprotected: 0 }],
+            },
+            {
+              category: 'intel-driven', score: 66.67, count: 3, protected: 2, unprotected: 1,
+              subcategories: [
+                { subcategory: 'kc', score: 50, count: 2, protected: 1, unprotected: 1 },
+                { subcategory: 'lm', score: 100, count: 1, protected: 1, unprotected: 0 },
+              ],
+            },
+          ]);
+          const intel = res[1];
+          expect(intel.subcategories.reduce((n, s) => n + s.count, 0)).toBe(intel.count);
+        });
+      });
+
+      it('breakdowns call getLatestPairs with the request params', async () => {
+        const svc = stub([]);
+        await svc.getTestCoverageLatest({ ...params, scoringMode: 'any-stage' });
+        expect(svc.getLatestPairs).toHaveBeenCalledWith(expect.objectContaining({ scoringMode: 'any-stage' }));
       });
     });
   });
