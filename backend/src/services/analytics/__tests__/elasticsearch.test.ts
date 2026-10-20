@@ -3290,6 +3290,22 @@ describe('elasticsearch.ts', () => {
         it('pairs without techniques are omitted', async () => {
           expect(await stub([pair({ pairKey: 'a' })]).getTechniqueDistributionLatest(params)).toEqual([]);
         });
+        it('scores each bundle stage by its own result, even in any-stage mode', async () => {
+          // In any-stage mode a bundle is one pair whose verdict is "any stage
+          // protected". Applied per technique, that marks a technique protected
+          // even when its own stage got through. The technique chart therefore
+          // always uses per-stage (per-control) pairs.
+          const svc = stub([
+            pair({ pairKey: 'o|b1::stage-1|h1', protected: true, techniques: ['T1190'] }),
+            pair({ pairKey: 'o|b1::stage-3|h1', techniques: ['T1486'] }),
+          ]);
+          const res = await svc.getTechniqueDistributionLatest({ ...params, scoringMode: 'any-stage' });
+          expect(svc.getLatestPairs).toHaveBeenCalledWith(expect.objectContaining({ scoringMode: 'all-stages' }));
+          expect(res).toEqual([
+            { technique: 'T1190', protected: 1, unprotected: 0 },
+            { technique: 'T1486', protected: 0, unprotected: 1 },
+          ]);
+        });
       });
 
       describe('testCoverageLatest', () => {
