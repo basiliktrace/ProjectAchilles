@@ -1,6 +1,6 @@
 import { registerCommand } from './registry.js';
 import * as api from '../api/analytics.js';
-import { colors, scoreColor, progressBar } from '../output/colors.js';
+import { colors, scoreColor, scoreOrDash, progressBar } from '../output/colors.js';
 
 /** Shared analytics filter flags */
 const filterFlags = {
@@ -61,7 +61,7 @@ registerCommand({
           trend as unknown as Record<string, unknown>[],
           [
             { key: 'timestamp', label: 'Date', width: 12, transform: (v) => new Date(String(v)).toLocaleDateString() },
-            { key: 'score', label: 'Score', width: 8, align: 'right', transform: (v) => scoreColor(Number(v)) },
+            { key: 'score', label: 'Score', width: 8, align: 'right', transform: (v) => scoreOrDash(v == null ? null : Number(v)) },
             { key: 'protected', label: 'Protected', width: 10, align: 'right' },
             { key: 'total', label: 'Total', width: 8, align: 'right' },
           ],

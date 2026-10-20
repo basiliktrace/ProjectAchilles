@@ -333,7 +333,8 @@ export interface DefenseScore {
 
 export interface ScoreTrendPoint {
   timestamp: string;
-  score: number;
+  /** null when the point's window holds no conclusive results (never 0). */
+  score: number | null;
   total: number;
   protected: number;
 }

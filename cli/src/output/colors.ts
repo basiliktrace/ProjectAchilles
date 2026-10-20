@@ -77,6 +77,11 @@ export function scoreColor(score: number): string {
   return colors.brightRed(pct);
 }
 
+/** scoreColor, or '—' when there is no score (an empty trend window is null, not 0). */
+export function scoreOrDash(score: number | null | undefined): string {
+  return score == null ? '—' : scoreColor(score);
+}
+
 /** Simple progress bar */
 export function progressBar(value: number, max: number, width = 20): string {
   const ratio = Math.min(value / max, 1);
