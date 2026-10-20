@@ -33,11 +33,19 @@ vi.mock('../../services/analytics/settings.js', () => ({
 const mockTestConnection = vi.fn();
 const mockGetErrorRateTrendRolling = vi.fn();
 const mockGetDefenseScoreTrendRolling = vi.fn();
+const mockGetDefenseScore = vi.fn();
+const mockGetDefenseScoreTrend = vi.fn();
+const mockGetDefenseScoreLatest = vi.fn();
+const mockGetDefenseScoreTrendLatest = vi.fn();
 vi.mock('../../services/analytics/elasticsearch.js', () => ({
   ElasticsearchService: class MockElasticsearchService {
     testConnection = mockTestConnection;
     getErrorRateTrendRolling = mockGetErrorRateTrendRolling;
     getDefenseScoreTrendRolling = mockGetDefenseScoreTrendRolling;
+    getDefenseScore = mockGetDefenseScore;
+    getDefenseScoreTrend = mockGetDefenseScoreTrend;
+    getDefenseScoreLatest = mockGetDefenseScoreLatest;
+    getDefenseScoreTrendLatest = mockGetDefenseScoreTrendLatest;
   },
 }));
 
@@ -196,6 +204,71 @@ describe('analytics routes', () => {
     it('clamps an explicit windowDays to 90', async () => {
       await request(createApp()).get('/api/analytics/error-rate/trend?from=now-30d&windowDays=200');
       expect(mockGetErrorRateTrendRolling).toHaveBeenCalledWith(expect.objectContaining({ windowDays: 90 }));
+    });
+  });
+
+  describe('basis dispatch', () => {
+    beforeEach(() => {
+      mockGetSettings.mockReturnValue({ configured: true, connectionType: 'direct', node: 'http://localhost:9200' });
+      mockGetDefenseScore.mockResolvedValue({ score: 70 });
+      mockGetDefenseScoreLatest.mockResolvedValue({ score: 60, basis: 'latest' });
+      mockGetDefenseScoreTrend.mockResolvedValue([]);
+      mockGetDefenseScoreTrendRolling.mockResolvedValue([]);
+      mockGetDefenseScoreTrendLatest.mockResolvedValue([]);
+    });
+
+    it('/defense-score with basis=bogus → 400', async () => {
+      const res = await request(createApp()).get('/api/analytics/defense-score?basis=bogus');
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe('Invalid basis');
+      expect(mockGetDefenseScore).not.toHaveBeenCalled();
+      expect(mockGetDefenseScoreLatest).not.toHaveBeenCalled();
+    });
+
+    it('/defense-score/trend with basis=bogus → 400', async () => {
+      const res = await request(createApp()).get('/api/analytics/defense-score/trend?basis=bogus');
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe('Invalid basis');
+    });
+
+    it('/defense-score without basis calls the executions method', async () => {
+      const res = await request(createApp()).get('/api/analytics/defense-score?from=now-7d');
+      expect(res.status).toBe(200);
+      expect(res.body.score).toBe(70);
+      expect(mockGetDefenseScore).toHaveBeenCalledTimes(1);
+      expect(mockGetDefenseScoreLatest).not.toHaveBeenCalled();
+    });
+
+    it('/defense-score with basis=executions calls the executions method', async () => {
+      await request(createApp()).get('/api/analytics/defense-score?basis=executions');
+      expect(mockGetDefenseScore).toHaveBeenCalledTimes(1);
+      expect(mockGetDefenseScoreLatest).not.toHaveBeenCalled();
+    });
+
+    it('/defense-score with basis=latest calls getDefenseScoreLatest with the filter params', async () => {
+      const res = await request(createApp()).get('/api/analytics/defense-score?basis=latest&from=now-30d&org=o1&scoringMode=any-stage');
+      expect(res.status).toBe(200);
+      expect(res.body.basis).toBe('latest');
+      expect(mockGetDefenseScoreLatest).toHaveBeenCalledWith(expect.objectContaining({
+        basis: 'latest', from: 'now-30d', org: 'o1', scoringMode: 'any-stage',
+      }));
+      expect(mockGetDefenseScore).not.toHaveBeenCalled();
+    });
+
+    it('/defense-score/trend without basis keeps the executions methods', async () => {
+      await request(createApp()).get('/api/analytics/defense-score/trend?from=now-30d');
+      expect(mockGetDefenseScoreTrend).toHaveBeenCalledTimes(1);
+      await request(createApp()).get('/api/analytics/defense-score/trend?from=now-30d&windowDays=7');
+      expect(mockGetDefenseScoreTrendRolling).toHaveBeenCalledWith(expect.objectContaining({ windowDays: 7 }));
+      expect(mockGetDefenseScoreTrendLatest).not.toHaveBeenCalled();
+    });
+
+    it('/defense-score/trend with basis=latest ignores windowDays', async () => {
+      await request(createApp()).get('/api/analytics/defense-score/trend?basis=latest&from=now-30d&windowDays=7');
+      expect(mockGetDefenseScoreTrendLatest).toHaveBeenCalledTimes(1);
+      expect(mockGetDefenseScoreTrendLatest.mock.calls[0][0].windowDays).toBeUndefined();
+      expect(mockGetDefenseScoreTrendRolling).not.toHaveBeenCalled();
+      expect(mockGetDefenseScoreTrend).not.toHaveBeenCalled();
     });
   });
 });

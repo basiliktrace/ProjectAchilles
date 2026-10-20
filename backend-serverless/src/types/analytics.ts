@@ -20,8 +20,8 @@ export interface AnalyticsSettings {
 
 // Defense score response
 export interface DefenseScoreResponse {
-  /** Combined score: (protected + detected) / total × 100. */
-  score: number;
+  /** Combined score: (protected + detected) / total × 100. null = nothing to score (basis=latest with no pairs). */
+  score: number | null;
   /** Documents where is_protected:true. */
   protectedCount: number;
   /** Documents where defender_detected:true AND is_protected:false. Mutually exclusive with protectedCount. */
@@ -30,13 +30,17 @@ export interface DefenseScoreResponse {
   unprotectedCount: number;
   totalExecutions: number;
   /** EDR-only (strict) score: protected / total × 100, computed on the same exclusion-filtered base as `score`. */
-  realScore?: number;
+  realScore?: number | null;
   realProtectedCount?: number;
   realUnprotectedCount?: number;
   realTotalExecutions?: number;
   /** Combined score computed against the unfiltered (pre-risk-acceptance) base — i.e. what `score` would be if no acceptances were active. Equals `score` when `riskAcceptedCount === 0`. */
-  rawScore?: number;
+  rawScore?: number | null;
   riskAcceptedCount?: number;
+  /** Which definition produced the numbers. Absent on legacy (executions) responses. */
+  basis?: 'latest' | 'executions';
+  /** basis=latest: number of test × endpoint pairs scored (also in totalExecutions). */
+  pairCount?: number;
 }
 
 // Trend data point
@@ -216,6 +220,11 @@ export interface ExtendedAnalyticsQueryParams extends AnalyticsQueryParams {
    * Dashboard's Defense Score leaves it off.
    */
   excludeCyberHygiene?: boolean;
+  /**
+   * Score definition. 'executions' (default) = every conclusive execution in
+   * the range; 'latest' = latest conclusive result per test × endpoint pair.
+   */
+  basis?: 'latest' | 'executions';
 }
 
 // Combined query params for paginated executions
