@@ -13,6 +13,13 @@ import type { AnalyticsQueryParams, ExtendedAnalyticsQueryParams, PaginatedExecu
 
 const router = Router();
 
+// Score definition: absent → 'executions' (API-key clients keep today's meaning).
+function parseBasis(value: unknown): 'latest' | 'executions' | undefined {
+  if (value === undefined) return undefined;
+  if (value === 'latest' || value === 'executions') return value;
+  throw new AppError('Invalid basis', 400);
+}
+
 // Extract extended filter params from Express query object.
 // Dashboard endpoints pass these through so filter bar affects all metrics.
 function extractFilterParams(query: Record<string, any>): AnalyticsQueryParams & Partial<ExtendedAnalyticsQueryParams> {
@@ -32,6 +39,7 @@ function extractFilterParams(query: Record<string, any>): AnalyticsQueryParams &
     bundleNames: query.bundleNames as string,
     result: query.result as 'all' | 'protected' | 'unprotected' | 'inconclusive',
     scoringMode: query.scoringMode as 'all-stages' | 'any-stage' | undefined,
+    basis: parseBasis(query.basis),
   };
 }
 
@@ -190,18 +198,29 @@ router.post('/settings/test', requirePermission('analytics:settings:read'), vali
 router.use(requirePermission('analytics:dashboards:read'));
 
 // GET /api/analytics/defense-score - Overall defense score
+// basis=latest → latest-result posture (share of test × endpoint pairs whose
+// latest conclusive result in the window is protected).
 router.get('/defense-score', asyncHandler(async (req, res) => {
+  const filterParams = extractFilterParams(req.query);
   const es = await getEsService();
-  const result = await es.getDefenseScore(extractFilterParams(req.query));
+  const result = filterParams.basis === 'latest'
+    ? await es.getDefenseScoreLatest(filterParams)
+    : await es.getDefenseScore(filterParams);
   res.json(result);
 }));
 
 // GET /api/analytics/defense-score/trend - Score over time
-// Supports rolling window aggregation via windowDays param (1-90 days)
+// Supports rolling window aggregation via windowDays param (1-90 days).
+// basis=latest: each point is the tile's calculation as of that day; windowDays is ignored.
 router.get('/defense-score/trend', asyncHandler(async (req, res) => {
+  const filterParams = extractFilterParams(req.query);
   const es = await getEsService();
   const { interval, windowDays } = req.query;
-  const filterParams = extractFilterParams(req.query);
+
+  if (filterParams.basis === 'latest') {
+    res.json(await es.getDefenseScoreTrendLatest(filterParams));
+    return;
+  }
 
   // Parse and clamp windowDays to 1-90 range
   const parsedWindowDays = windowDays ? parseInt(windowDays as string, 10) : undefined;
