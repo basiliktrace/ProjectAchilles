@@ -50,8 +50,9 @@ Under `latest`:
 
 - The date range sets the freshness window. It is capped at 365 days (All time becomes "last 365d").
 - Outcome filters (`result`, `errorCodes`, `errorNames`) select the pairs whose latest result matches.
-- Under `latest`, only `now-<n>d`-style values and ISO dates are accepted for `from`/`to` (no date math such as `now/d`). An unparseable or reversed range returns `400 Invalid date range`.
-- These endpoints accept `basis=latest`: `/defense-score`, `/defense-score/trend`, `/defense-score/by-category-subcategory`, `/defense-score/by-hostname`, `/technique-distribution`, `/test-coverage`. Their counts become pairs (hosts, for test coverage).
+- Under `latest`, `from`/`to` accept `now`, `now-<n><unit>` (units `d`, `h`, `w`, `m` or `M`, where `m`/`M` = 30 days) and ISO dates. ES date math such as `now/d` is rejected, as is an unparseable or reversed range, with `400 Invalid date range`.
+- `result=inconclusive` yields no pairs under `latest`, because only conclusive results are scored.
+- These endpoints accept `basis=latest`: `/defense-score`, `/defense-score/trend`, `/defense-score/by-category-subcategory`, `/defense-score/by-hostname`, `/technique-distribution`, `/test-coverage`. Their counts become pairs. For `test-coverage`, pairs are grouped by test name; each pair is one host × test, so each count is a number of hosts.
 - These endpoints are executions-only and ignore `basis=latest`: `by-test`, `by-technique`, `by-severity`, `by-category`, `by-org`, `threat-actor-coverage`.
 
 ## Endpoints
@@ -113,6 +114,8 @@ Returns the score over time for trend visualization.
 Trend lines extend to now. A rolling window with no data returns `score: null` rather than `0`, so charts show a gap.
 
 With `basis=latest` each point is the same latest-result calculation as of that UTC day (weekly points for ranges over 90 days). The last point always equals the `/defense-score` tile for the same range, and points can have `score: null` when the window holds no pairs.
+
+`realScore` / `realTotal` / `realProtected` on trend points keep their existing meaning on both bases: the raw, pre-risk-acceptance series, present only when risk-acceptance exclusions exist. This differs from `realScore` on `/defense-score` under `latest`, which is the strict, blocked-only score.
 
 ### Defense Score by Test / Technique / Org / Severity / Category / Hostname
 

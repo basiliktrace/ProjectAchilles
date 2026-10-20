@@ -10,9 +10,13 @@ The Defense Score is the primary metric for measuring your security posture.
 
 ## What Is the Defense Score?
 
-The Defense Score is an aggregate percentage representing how many of your executed security tests were detected (or blocked) by your defenses. A score of 85% means 85% of test executions resulted in a "Protected" outcome.
+The Defense Score is an aggregate percentage representing how many of your security tests were detected (or blocked) by your defenses. The Dashboard and Analytics headline, trend line, and the four breakdowns (category, host, technique, test coverage) use the **latest-result** score: a score of 85% means 85% of test × endpoint pairs were Protected on their most recent conclusive result. See [Latest-result score](#latest-result-score).
 
-## Score Calculation
+An **executions-based** score also exists: the share of individual executions that were Protected. It is what the API returns by default (`basis=executions`) and what the PDF execution report, score-drop alerts, and the Executions 7d tile use.
+
+## Score Calculation (executions basis)
+
+The formula below is the executions-based calculation; the latest-result score applies it to each pair's most recent result only.
 
 ```
 Defense Score = (Protected Executions / Total Executions) × 100
@@ -57,16 +61,15 @@ The Defense Score can be broken down by:
 
 ## Trend Analysis
 
-The trend chart shows the Defense Score over time with a configurable rolling window:
-- **7 days** — Short-term operational view
-- **30 days** — Monthly trend
-- **90 days** — Quarterly trend
+The trend line shows the score as of each UTC day, using the same freshness window as the headline tile. Its last point equals the tile, ranges over 90 days use weekly points, and a gap means no pairs fell in the window (not 0%).
 
-A downward trend indicates deteriorating security posture and may trigger [threshold alerts](../integrations/alerting).
+A downward trend indicates deteriorating security posture and may trigger [threshold alerts](../integrations/alerting), which are evaluated on executions.
 
-## Dual Defense Score
+Via the API, the rolling `windowDays` option (1-90 days) applies only to the executions basis; under `basis=latest` it is ignored.
 
-The dashboard overlays the real-time score with a trend line, making it easy to see both the current state and the trajectory.
+## Actual, EDR-only, and Risk-accepted Scores
+
+The dashboard ledger reconciles the headline with an *Actual* score (strict, blocked-only), an *EDR-only* score, and the effect of risk acceptances, so you can see both the current state and what is excluded.
 
 ## Time window
 
