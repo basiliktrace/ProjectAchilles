@@ -6,6 +6,7 @@ import { SettingsService } from '../services/analytics/settings.js';
 import { ElasticsearchService } from '../services/analytics/elasticsearch.js';
 import { createResultsIndex, listResultsIndices } from '../services/analytics/index-management.service.js';
 import { resetClient as resetResultsClient } from '../services/agent/results.service.js';
+import { resolvePostureWindow } from '../services/analytics/posture.js';
 import { validate } from '../middleware/validation.js';
 import { AnalyticsSettingsSchema, AnalyticsTestSchema, CreateIndexSchema, ArchiveByGroupKeysSchema, ArchiveByDateSchema } from '../schemas/analytics.schemas.js';
 import type { AnalyticsQueryParams, ExtendedAnalyticsQueryParams, PaginatedExecutionsParams } from '../types/analytics.js';
@@ -544,15 +545,21 @@ router.get('/error-rate/trend', asyncHandler(async (req, res) => {
   const { interval, windowDays } = req.query;
   const filterParams = extractFilterParams(req.query);
 
+  // Explicit windowDays keeps the 1-90 clamp; otherwise the window is the
+  // range length (so the trend is not a 7-day rolling average of a longer range).
   const parsedWindowDays = windowDays ? parseInt(windowDays as string, 10) : undefined;
-  const clampedWindowDays = parsedWindowDays
-    ? Math.max(1, Math.min(90, parsedWindowDays))
-    : undefined;
+  let effectiveWindowDays: number;
+  if (parsedWindowDays) {
+    effectiveWindowDays = Math.max(1, Math.min(90, parsedWindowDays));
+  } else {
+    const { freshnessMs } = resolvePostureWindow(filterParams.from, filterParams.to, Date.now());
+    effectiveWindowDays = Math.max(1, Math.min(365, Math.round(freshnessMs / 86_400_000)));
+  }
 
   const result = await es.getErrorRateTrendRolling({
     ...filterParams,
     interval: (interval as string) || 'day',
-    windowDays: clampedWindowDays || 7,
+    windowDays: effectiveWindowDays,
   });
 
   res.json(result);

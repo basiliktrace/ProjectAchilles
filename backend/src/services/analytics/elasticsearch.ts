@@ -452,10 +452,23 @@ export class ElasticsearchService {
     };
   }
 
+  /**
+   * extended_bounds for trend date_histograms so the series runs to the end of
+   * the range (default 'now') instead of stopping at the last bucket with data.
+   * min is omitted when there is no lower bound (the date filter then defaults to 7d).
+   */
+  private buildExtendedBounds(from?: string, to?: string): { min?: string; max: string } {
+    const bounds: { min?: string; max: string } = { max: to ?? 'now' };
+    if (from) bounds.min = from;
+    return bounds;
+  }
+
   /** Run an any-stage trend query (date_histogram with split sub-aggs). */
   private async runAnyStageTrendQuery(
     filters: any[],
     interval: string,
+    boundsFrom?: string,
+    boundsTo?: string,
   ): Promise<any> {
     return this.client.search({
       index: this.settings.indexPattern,
@@ -467,6 +480,7 @@ export class ElasticsearchService {
             field: 'routing.event_time',
             calendar_interval: interval as 'day' | 'week' | 'month' | 'hour',
             min_doc_count: 0,
+            extended_bounds: this.buildExtendedBounds(boundsFrom, boundsTo),
           },
           aggs: this.buildAnyStageSubAggs(),
         },
@@ -527,7 +541,7 @@ export class ElasticsearchService {
   }
 
   /** Run a date histogram trend query and return raw ES response. */
-  private async runTrendQuery(filters: any[], interval: string): Promise<any> {
+  private async runTrendQuery(filters: any[], interval: string, boundsFrom?: string, boundsTo?: string): Promise<any> {
     return this.client.search({
       index: this.settings.indexPattern,
       size: 0,
@@ -538,6 +552,7 @@ export class ElasticsearchService {
             field: 'routing.event_time',
             calendar_interval: interval as 'day' | 'week' | 'month' | 'hour',
             min_doc_count: 0,
+            extended_bounds: this.buildExtendedBounds(boundsFrom, boundsTo),
           },
           aggs: {
             protected: {
@@ -567,8 +582,8 @@ export class ElasticsearchService {
     const interval = params.interval || 'day';
 
     const runTrend = isAnyStage
-      ? (f: any[]) => this.runAnyStageTrendQuery(f, interval)
-      : (f: any[]) => this.runTrendQuery(f, interval);
+      ? (f: any[]) => this.runAnyStageTrendQuery(f, interval, params.from, params.to)
+      : (f: any[]) => this.runTrendQuery(f, interval, params.from, params.to);
 
     const parseBucket = isAnyStage
       ? (b: any) => this.parseAnyStageSubBucket(b)
@@ -579,10 +594,10 @@ export class ElasticsearchService {
       const buckets = (response.aggregations?.over_time as any)?.buckets || [];
       return buckets.map((bucket: any) => {
         const { total, protectedCount } = parseBucket(bucket);
-        const score = total > 0 ? (protectedCount / total) * 100 : 0;
+        const score = total > 0 ? (protectedCount / total) * 100 : null;
         return {
           timestamp: bucket.key_as_string,
-          score: Math.round(score * 100) / 100,
+          score: score === null ? null : Math.round(score * 100) / 100,
           total,
           protected: protectedCount,
         };
@@ -606,19 +621,19 @@ export class ElasticsearchService {
 
     return adjustedBuckets.map((bucket: any) => {
       const { total, protectedCount } = parseBucket(bucket);
-      const score = total > 0 ? (protectedCount / total) * 100 : 0;
+      const score = total > 0 ? (protectedCount / total) * 100 : null;
 
       const raw = rawByKey.get(bucket.key_as_string);
       const rawTotal = raw?.total ?? total;
       const rawProtected = raw?.protected ?? protectedCount;
-      const rawScore = rawTotal > 0 ? (rawProtected / rawTotal) * 100 : 0;
+      const rawScore = rawTotal > 0 ? (rawProtected / rawTotal) * 100 : null;
 
       return {
         timestamp: bucket.key_as_string,
-        score: Math.round(score * 100) / 100,
+        score: score === null ? null : Math.round(score * 100) / 100,
         total,
         protected: protectedCount,
-        realScore: Math.round(rawScore * 100) / 100,
+        realScore: rawScore === null ? null : Math.round(rawScore * 100) / 100,
         realTotal: rawTotal,
         realProtected: rawProtected,
       };
@@ -701,8 +716,8 @@ export class ElasticsearchService {
     const hasExclusion = adjustedFilters.length > rawFilters.length;
 
     const runTrend = isAnyStage
-      ? (f: any[]) => this.runAnyStageTrendQuery(f, interval)
-      : (f: any[]) => this.runTrendQuery(f, interval);
+      ? (f: any[]) => this.runAnyStageTrendQuery(f, interval, extendedFrom, params.to)
+      : (f: any[]) => this.runTrendQuery(f, interval, extendedFrom, params.to);
 
     const normalizeBuckets = isAnyStage
       ? (buckets: any[]) => buckets.map((b: any) => {
@@ -770,11 +785,11 @@ export class ElasticsearchService {
         continue;
       }
 
-      const score = windowTotal > 0 ? (windowProtected / windowTotal) * 100 : 0;
+      const score = windowTotal > 0 ? (windowProtected / windowTotal) * 100 : null;
 
       results.push({
         timestamp,
-        score: Math.round(score * 100) / 100,
+        score: score === null ? null : Math.round(score * 100) / 100,
         total: windowTotal,
         protected: windowProtected,
       });
@@ -2184,6 +2199,7 @@ export class ElasticsearchService {
             field: 'routing.event_time',
             calendar_interval: interval as 'day' | 'week' | 'month' | 'hour',
             min_doc_count: 0,
+            extended_bounds: this.buildExtendedBounds(extendedFrom, params.to),
           },
           aggs: {
             errors: {
@@ -2222,11 +2238,11 @@ export class ElasticsearchService {
       }
 
       const total = windowErrors + windowConclusive;
-      const errorRate = total > 0 ? (windowErrors / total) * 100 : 0;
+      const errorRate = total > 0 ? (windowErrors / total) * 100 : null;
 
       rollingResults.push({
         timestamp,
-        errorRate: Math.round(errorRate * 100) / 100,
+        errorRate: errorRate === null ? null : Math.round(errorRate * 100) / 100,
         errorCount: windowErrors,
         conclusiveCount: windowConclusive,
         total,
