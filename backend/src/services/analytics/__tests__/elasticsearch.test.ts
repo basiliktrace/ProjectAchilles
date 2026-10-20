@@ -395,6 +395,26 @@ describe('elasticsearch.ts', () => {
         .toEqual({ min: 'now-7d', max: 'now' });
     });
 
+    it('All time: extended_bounds.min is clamped to to − 365d (no 26-year padding)', async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date('2025-01-20T12:00:00Z'));
+      try {
+        mockSearch.mockResolvedValue(esSearchResponse({ aggs: { over_time: { buckets: [] } } }));
+        await createService().getDefenseScoreTrend(makeParams({ from: '2000-01-01T00:00:00.000Z', to: undefined }));
+        expect(mockSearch.mock.calls[0][0].aggs.over_time.date_histogram.extended_bounds)
+          .toEqual({ min: new Date(Date.parse('2025-01-20T12:00:00Z') - 365 * 86_400_000).toISOString(), max: 'now' });
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('a custom range under 365 days keeps its own extended_bounds.min', async () => {
+      mockSearch.mockResolvedValue(esSearchResponse({ aggs: { over_time: { buckets: [] } } }));
+      await createService().getDefenseScoreTrend(makeParams({ from: '2024-06-01T00:00:00Z', to: '2025-01-01T00:00:00Z' }));
+      expect(mockSearch.mock.calls[0][0].aggs.over_time.date_histogram.extended_bounds)
+        .toEqual({ min: '2024-06-01T00:00:00Z', max: '2025-01-01T00:00:00Z' });
+    });
+
     it('returns score=0 for zero-count bucket (not NaN)', async () => {
       mockSearch.mockResolvedValue(esSearchResponse({
         total: 0,
@@ -1654,6 +1674,20 @@ describe('elasticsearch.ts', () => {
         .toEqual({ min: 'now-13d', max: 'now' });
     });
 
+    it('All time: extended_bounds.min is clamped to to − 365d − windowDays', async () => {
+      mockSearch.mockResolvedValue(esSearchResponse({ aggs: { over_time: { buckets: [] } } }));
+      await createService().getErrorRateTrendRolling(makeParams({ from: '2000-01-01T00:00:00.000Z', to: undefined, windowDays: 365 }));
+      expect(mockSearch.mock.calls[0][0].aggs.over_time.date_histogram.extended_bounds)
+        .toEqual({ min: new Date(Date.parse('2025-01-20T12:00:00Z') - (365 + 365) * 86_400_000).toISOString(), max: 'now' });
+    });
+
+    it('All time with an explicit to: the clamp is relative to to', async () => {
+      mockSearch.mockResolvedValue(esSearchResponse({ aggs: { over_time: { buckets: [] } } }));
+      await createService().getErrorRateTrendRolling(makeParams({ from: '2000-01-01T00:00:00.000Z', to: '2025-01-01T00:00:00.000Z', windowDays: 7 }));
+      expect(mockSearch.mock.calls[0][0].aggs.over_time.date_histogram.extended_bounds)
+        .toEqual({ min: new Date(Date.parse('2025-01-01T00:00:00Z') - (365 + 7) * 86_400_000).toISOString(), max: '2025-01-01T00:00:00.000Z' });
+    });
+
     it('empty window gives errorRate null, not 0', async () => {
       const buckets = makeDateBuckets([
         { key: Date.parse('2025-01-19T00:00:00Z'), key_as_string: '2025-01-19', total: 0 },
@@ -2484,7 +2518,7 @@ describe('elasticsearch.ts', () => {
     interface DocRun {
       oid?: string | null; test: string; host: string; ts: string;
       isProtected?: boolean; defender?: boolean; crowdstrike?: boolean;
-      code: number; name?: string;
+      code: number | null; name?: string;
     }
     function pairBucket(r: DocRun) {
       const t = Date.parse(r.ts);
@@ -2512,7 +2546,6 @@ describe('elasticsearch.ts', () => {
       oid?: string | null; bundle: string; host: string; ts: string;
       combined: number; strict: number; codes: number[];
       controls: { techniques: string[]; category?: string; subcategory?: string }[];
-      bundleName?: string;
     }
     function bundleBucket(r: BundleRun) {
       return {
@@ -2522,19 +2555,12 @@ describe('elasticsearch.ts', () => {
         strict: { doc_count: r.strict },
         codes: { buckets: r.codes.map(c => ({ key: c, doc_count: 1 })) },
         names: { buckets: [] },
-        meta: {
-          hits: {
-            hits: r.controls.map(c => ({
-              _source: { f0rtika: { bundle_name: r.bundleName ?? 'Bundle', category: c.category, subcategory: c.subcategory, techniques: c.techniques } },
-            })),
-          },
-        },
       };
     }
     type Meta = Record<string, { name: string; category?: string; subcategory?: string; techniques?: string[] }>;
 
     /** Dispatch mockSearch by aggregation name so parallel query order doesn't matter. */
-    function routeSearch(opts: { pairPages?: unknown[][]; bundlePages?: unknown[][]; meta?: Meta; rawPairPages?: unknown[][] }) {
+    function routeSearch(opts: { pairPages?: unknown[][]; bundlePages?: unknown[][]; meta?: Meta; bundleMeta?: Meta; rawPairPages?: unknown[][] }) {
       const adjusted = [...(opts.pairPages ?? [[]])];
       const raw = opts.rawPairPages ? [...opts.rawPairPages] : null;
       const bundles = [...(opts.bundlePages ?? [[]])];
@@ -2555,6 +2581,19 @@ describe('elasticsearch.ts', () => {
                 buckets: Object.entries(opts.meta ?? {}).map(([key, m]) => ({
                   key,
                   doc: { hits: { hits: [{ _source: { f0rtika: { test_name: m.name, category: m.category, subcategory: m.subcategory, techniques: m.techniques ?? [] } } }] } },
+                })),
+              },
+            },
+          });
+        }
+        if (req.aggs?.bundle_meta) {
+          return esSearchResponse({
+            aggs: {
+              bundle_meta: {
+                buckets: Object.entries(opts.bundleMeta ?? {}).map(([key, m]) => ({
+                  key,
+                  doc: { hits: { hits: [{ _source: { f0rtika: { bundle_name: m.name, category: m.category, subcategory: m.subcategory } } }] } },
+                  techniques: { buckets: (m.techniques ?? []).map(t => ({ key: t, doc_count: 1 })) },
                 })),
               },
             },
@@ -2651,6 +2690,23 @@ describe('elasticsearch.ts', () => {
         expect(meta.aggs.test_meta.aggs.doc.top_hits.size).toBe(1);
       });
 
+      it('a null event.ERROR from top_metrics yields no error code (not 0)', async () => {
+        routeSearch({ pairPages: [[pairBucket({ test: 'u1', host: 'h1', ts: '2025-01-10T10:30:00Z', code: null })]] });
+        const [run] = await (createService() as any).fetchPairRuns(BASE_FILTERS, false, { withMetadata: false, latestOnly: false });
+        expect(run.errorCodes).toEqual([]);
+        expect(run.errorNames).toEqual([]);
+      });
+
+      it('latestOnly drops the day source: one bucket per pair', async () => {
+        routeSearch({ pairPages: [[]] });
+        await (createService() as any).fetchPairRuns(BASE_FILTERS, false, { withMetadata: true, latestOnly: true });
+        expect(searchesWith('pairs')[0].aggs.pairs.composite.sources).toEqual([
+          { oid: { terms: { field: 'routing.oid', missing_bucket: true } } },
+          { test: { terms: { field: 'f0rtika.test_uuid' } } },
+          { host: { terms: { field: 'routing.hostname' } } },
+        ]);
+      });
+
       it('standard mode scores every doc per pair (no per-doc / per-bundle split)', async () => {
         routeSearch({ pairPages: [[]] });
         await (createService() as any).fetchPairRuns(BASE_FILTERS, false);
@@ -2666,14 +2722,11 @@ describe('elasticsearch.ts', () => {
           bundlePages: [[
             bundleBucket({
               bundle: 'b1', host: 'h1', ts: '2025-01-11T09:00:00Z',
-              combined: 1, strict: 1, codes: [101, 126], bundleName: 'Bundle One',
-              controls: [
-                { techniques: ['T1'], category: 'intel-driven', subcategory: 'kc' },
-                { techniques: ['T2', 'T1'], category: 'intel-driven', subcategory: 'kc' },
-                { techniques: ['T3'], category: 'intel-driven', subcategory: 'kc' },
-              ],
+              combined: 1, strict: 1, codes: [101, 126],
+              controls: [{ techniques: [] }, { techniques: [] }, { techniques: [] }],
             }),
           ]],
+          bundleMeta: { b1: { name: 'Bundle One', category: 'intel-driven', subcategory: 'kc', techniques: ['T1', 'T2', 'T3'] } },
         });
         const runs = await (createService() as any).fetchPairRuns(BASE_FILTERS, true);
         expect(runs).toHaveLength(1);
@@ -2689,6 +2742,62 @@ describe('elasticsearch.ts', () => {
           subcategory: 'kc',
         });
         expect([...runs[0].techniques].sort()).toEqual(['T1', 'T2', 'T3']);
+      });
+
+      it('the bundle composite carries no top_hits; metadata comes once per bundle_id', async () => {
+        routeSearch({
+          pairPages: [[]],
+          bundlePages: [[
+            bundleBucket({ bundle: 'b1', host: 'h1', ts: '2025-01-11T09:00:00Z', combined: 0, strict: 0, codes: [101], controls: [{ techniques: [] }] }),
+            bundleBucket({ bundle: 'b2', host: 'h1', ts: '2025-01-12T09:00:00Z', combined: 1, strict: 1, codes: [126], controls: [{ techniques: [] }] }),
+          ]],
+          bundleMeta: {
+            b1: { name: 'Bundle One', category: 'intel-driven', subcategory: 'kc', techniques: ['T1', 'T2'] },
+            b2: { name: 'Bundle Two', category: 'intel-driven', subcategory: 'lm', techniques: ['T9'] },
+          },
+        });
+        const runs = await (createService() as any).fetchPairRuns(BASE_FILTERS, true);
+
+        const composite = searchesWith('bundle_runs')[0].aggs.bundle_runs;
+        expect(JSON.stringify(composite.aggs)).not.toContain('top_hits');
+        const metaCalls = searchesWith('bundle_meta');
+        expect(metaCalls).toHaveLength(1);
+        const meta = metaCalls[0];
+        expect(meta.query.bool.filter).toContainEqual((createService() as any).PER_BUNDLE_FILTER);
+        expect(meta.aggs.bundle_meta.terms).toEqual({ field: 'f0rtika.bundle_id', size: 2 });
+        expect(meta.aggs.bundle_meta.aggs.doc.top_hits.size).toBe(1);
+        expect(meta.aggs.bundle_meta.aggs.techniques.terms.field).toBe('f0rtika.techniques');
+
+        const byKey = Object.fromEntries(runs.map((r: any) => [r.pairKey, r]));
+        expect(byKey['org-a|bundle:b1|h1']).toMatchObject({ testName: 'Bundle One', category: 'intel-driven', subcategory: 'kc', techniques: ['T1', 'T2'] });
+        expect(byKey['org-a|bundle:b2|h1']).toMatchObject({ testName: 'Bundle Two', subcategory: 'lm', techniques: ['T9'] });
+      });
+
+      it('without metadata no bundle_meta query is issued', async () => {
+        routeSearch({
+          pairPages: [[]],
+          bundlePages: [[bundleBucket({ bundle: 'b1', host: 'h1', ts: '2025-01-11T09:00:00Z', combined: 0, strict: 0, codes: [101], controls: [{ techniques: [] }] })]],
+        });
+        const [run] = await (createService() as any).fetchPairRuns(BASE_FILTERS, true, { withMetadata: false, latestOnly: false });
+        expect(searchesWith('bundle_meta')).toHaveLength(0);
+        expect(run).toMatchObject({ testName: '', techniques: [] });
+      });
+
+      it('latestOnly keeps only the latest run per bundle pair', async () => {
+        routeSearch({
+          pairPages: [[]],
+          bundlePages: [[
+            bundleBucket({ bundle: 'b1', host: 'h1', ts: '2025-01-10T09:00:00Z', combined: 0, strict: 0, codes: [101], controls: [{ techniques: [] }] }),
+            bundleBucket({ bundle: 'b1', host: 'h1', ts: '2025-01-20T09:00:00Z', combined: 1, strict: 1, codes: [126], controls: [{ techniques: [] }] }),
+            bundleBucket({ bundle: 'b1', host: 'h2', ts: '2025-01-15T09:00:00Z', combined: 0, strict: 0, codes: [101], controls: [{ techniques: [] }] }),
+          ]],
+          bundleMeta: { b1: { name: 'Bundle One', techniques: ['T1'] } },
+        });
+        const runs = await (createService() as any).fetchPairRuns(BASE_FILTERS, true, { withMetadata: true, latestOnly: true });
+        expect(runs.map((r: any) => [r.pairKey, r.ts, r.protected])).toEqual([
+          ['org-a|bundle:b1|h1', Date.parse('2025-01-20T09:00:00Z'), true],
+          ['org-a|bundle:b1|h2', Date.parse('2025-01-15T09:00:00Z'), false],
+        ]);
       });
 
       it('combined-only bundle run is protected but not strict-protected', async () => {
@@ -2750,13 +2859,21 @@ describe('elasticsearch.ts', () => {
         expect(JSON.stringify(filters)).not.toContain('"f0rtika.error_name"');
       });
 
-      it('outcome filters apply after the latest pick', async () => {
+      it('outcome filters apply after the latest pick; result follows the combined verdict', async () => {
         routeSearch({ pairPages: standardRuns() });
-        const res = await createService().getDefenseScoreLatest({ ...params, result: 'unprotected' });
-        // Latest results: u1 protected, u2 unprotected (101), u3 unprotected-code but detected.
-        // result=unprotected keeps pairs whose latest code is 101: u2 and u3.
-        expect(res.pairCount).toBe(2);
-        expect(res.score).toBe(50);
+        const svc = createService();
+        // Latest results: u1 protected, u2 unprotected (101), u3 a 101 detected by Defender.
+        // result=unprotected keeps pairs whose combined verdict is unprotected: u2 only.
+        const unprotected = await svc.getDefenseScoreLatest({ ...params, result: 'unprotected' });
+        expect(unprotected.pairCount).toBe(1);
+        expect(unprotected.score).toBe(0);
+        // result=protected keeps u1 and the detected u3.
+        const protectedOnly = await svc.getDefenseScoreLatest({ ...params, result: 'protected' });
+        expect(protectedOnly.pairCount).toBe(2);
+        expect(protectedOnly.score).toBe(100);
+        // errorCodes stays code-based: 101 matches u2 and u3.
+        const code101 = await svc.getDefenseScoreLatest({ ...params, errorCodes: '101' });
+        expect(code101.pairCount).toBe(2);
       });
 
       it('maps the latest summary onto DefenseScoreResponse', async () => {
@@ -2803,36 +2920,51 @@ describe('elasticsearch.ts', () => {
         expect(searchesWith('pairs')).toHaveLength(2);
       });
 
-      it('tile equals last trend point', async () => {
-        routeSearch({ pairPages: standardRuns() });
-        const tile = await createService().getDefenseScoreLatest(params);
-        routeSearch({ pairPages: standardRuns() });
-        const trend = await createService().getDefenseScoreTrendLatest(params);
+      it('tile equals last trend point, from one shared snapshot (pre-from runs included)', async () => {
+        const runs = standardRuns();
+        // Pre-from runs (the series lookback): u1 had an older result, and u4
+        // was last seen before the window, so it must not count in either.
+        runs[0].push(
+          pairBucket({ test: 'u1', host: 'h1', ts: '2024-12-15T10:00:00Z', code: 101 }),
+          pairBucket({ test: 'u4', host: 'h3', ts: '2024-12-20T10:00:00Z', code: 126, isProtected: true }),
+        );
+        routeSearch({ pairPages: runs });
+        const svc = createService();
+        const [tile, trend] = await Promise.all([svc.getDefenseScoreLatest(params), svc.getDefenseScoreTrendLatest(params)]);
         const last = trend[trend.length - 1];
         expect(last.timestamp).toBe('2025-01-31T00:00:00.000Z');
         expect(tile.score).toBe(last.score);
         expect(tile.pairCount).toBe(last.total);
+        expect(tile.pairCount).toBe(3);
+        expect(searchesWith('pairs')).toHaveLength(1);
       });
 
-      it('query lower bound is window.fromMs; trend lower bound is window.fromMs − freshnessMs', async () => {
+      it('tile and trend share the series lower bound (fromMs − freshnessMs); breakdowns query from fromMs', async () => {
         const fromMs = Date.parse('2025-01-01T00:00:00Z');
         const toMs = Date.parse('2025-01-31T00:00:00Z');
         const freshnessMs = toMs - fromMs;
+        const rangeOf = (req: any) => req.query.bool.filter.find((f: any) => f.range?.['routing.event_time']).range['routing.event_time'];
 
         routeSearch({ pairPages: [[]] });
         await createService().getDefenseScoreLatest(params);
-        const tileRange = searchesWith('pairs')[0].query.bool.filter.find((f: any) => f.range?.['routing.event_time']);
-        expect(tileRange.range['routing.event_time']).toEqual({
-          gte: new Date(fromMs).toISOString(),
+        expect(rangeOf(searchesWith('pairs')[0])).toEqual({
+          gte: new Date(fromMs - freshnessMs).toISOString(),
           lte: new Date(toMs).toISOString(),
         });
 
         mockSearch.mockReset();
         routeSearch({ pairPages: [[]] });
         await createService().getDefenseScoreTrendLatest(params);
-        const trendRange = searchesWith('pairs')[0].query.bool.filter.find((f: any) => f.range?.['routing.event_time']);
-        expect(trendRange.range['routing.event_time']).toEqual({
+        expect(rangeOf(searchesWith('pairs')[0])).toEqual({
           gte: new Date(fromMs - freshnessMs).toISOString(),
+          lte: new Date(toMs).toISOString(),
+        });
+
+        mockSearch.mockReset();
+        routeSearch({ pairPages: [[]] });
+        await createService().getLatestPairs(params);
+        expect(rangeOf(searchesWith('pairs')[0])).toEqual({
+          gte: new Date(fromMs).toISOString(),
           lte: new Date(toMs).toISOString(),
         });
       });
@@ -2962,6 +3094,150 @@ describe('elasticsearch.ts', () => {
         });
         await createService().getLatestPairs(params);
         expect(searchesWith('test_meta')).toHaveLength(1);
+      });
+    });
+
+    describe('posture snapshot cache', () => {
+      const params = makeParams({ from: '2025-01-01T00:00:00Z', to: '2025-01-31T00:00:00Z' });
+      const EXCLUSION = { bool: { must_not: [{ term: { 'f0rtika.test_name': 'excluded-test' } }] } };
+      function runs() {
+        return [[
+          pairBucket({ test: 'u1', host: 'h1', ts: '2025-01-20T10:00:00Z', code: 126, isProtected: true }),
+          pairBucket({ test: 'u2', host: 'h1', ts: '2025-01-25T10:00:00Z', code: 101 }),
+        ]];
+      }
+      /** Route every pairs search to the same runs, however many times it is asked. */
+      function routeRepeat(meta?: Meta) {
+        mockSearch.mockImplementation(async (req: any) => {
+          if (req.aggs?.pairs) return esSearchResponse({ aggs: { pairs: { buckets: runs()[0] } } });
+          if (req.aggs?.bundle_runs) return esSearchResponse({ aggs: { bundle_runs: { buckets: [] } } });
+          if (req.aggs?.test_meta) {
+            return esSearchResponse({
+              aggs: {
+                test_meta: {
+                  buckets: Object.entries(meta ?? {}).map(([key, m]) => ({ key, doc: { hits: { hits: [{ _source: { f0rtika: { test_name: m.name } } }] } } })),
+                },
+              },
+            });
+          }
+          if (req.aggs?.bundle_meta) return esSearchResponse({ aggs: { bundle_meta: { buckets: [] } } });
+          throw new Error('unexpected search');
+        });
+      }
+
+      it('concurrent tile + trend produce a single set of ES searches (any-stage)', async () => {
+        routeRepeat();
+        const svc = createService();
+        const p = { ...params, scoringMode: 'any-stage' as const };
+        const [tile, trend] = await Promise.all([svc.getDefenseScoreLatest(p), svc.getDefenseScoreTrendLatest(p)]);
+        expect(searchesWith('pairs')).toHaveLength(1);
+        expect(searchesWith('bundle_runs')).toHaveLength(1);
+        expect(mockSearch).toHaveBeenCalledTimes(2);
+        expect(tile.score).toBe(trend[trend.length - 1].score);
+      });
+
+      it('a later identical request is a hit', async () => {
+        routeRepeat();
+        const svc = createService();
+        await svc.getDefenseScoreLatest(params);
+        await svc.getDefenseScoreTrendLatest(params);
+        expect(mockSearch).toHaveBeenCalledTimes(1);
+      });
+
+      it('changing the outcome filters (result / errorCodes / errorNames) is a hit', async () => {
+        routeRepeat();
+        const svc = createService();
+        const all = await svc.getDefenseScoreLatest(params);
+        const unprotected = await svc.getDefenseScoreLatest({ ...params, result: 'unprotected' });
+        const byCode = await svc.getDefenseScoreLatest({ ...params, errorCodes: '126', errorNames: 'ExecutionPrevented' });
+        expect(mockSearch).toHaveBeenCalledTimes(1);
+        expect([all.pairCount, unprotected.pairCount, byCode.pairCount]).toEqual([2, 1, 1]);
+      });
+
+      it('changing the exclusions is a miss', async () => {
+        routeRepeat();
+        const svc = createService();
+        await svc.getDefenseScoreLatest(params);
+        (svc as any).getRiskAcceptanceService().buildExclusionFilter.mockResolvedValue(EXCLUSION);
+        await svc.getDefenseScoreLatest(params);
+        // first: one adjusted fetch; second: adjusted + raw
+        expect(searchesWith('pairs')).toHaveLength(3);
+      });
+
+      it('changing a filter-bar clause, the org, the range or the scoring mode is a miss', async () => {
+        routeRepeat();
+        const svc = createService();
+        await svc.getDefenseScoreLatest(params);
+        await svc.getDefenseScoreLatest({ ...params, hostnames: 'h1' });
+        await svc.getDefenseScoreLatest({ ...params, org: 'org-b' });
+        await svc.getDefenseScoreLatest({ ...params, from: '2025-01-02T00:00:00Z' });
+        await svc.getDefenseScoreLatest({ ...params, scoringMode: 'any-stage' });
+        expect(searchesWith('pairs')).toHaveLength(5);
+      });
+
+      it('a rejection is not cached', async () => {
+        const svc = createService();
+        mockSearch.mockRejectedValueOnce(new Error('es down'));
+        await expect(svc.getDefenseScoreLatest(params)).rejects.toThrow('es down');
+        routeRepeat();
+        const res = await svc.getDefenseScoreLatest(params);
+        expect(res.pairCount).toBe(2);
+        expect(mockSearch).toHaveBeenCalledTimes(2);
+      });
+
+      it('the snapshot expires 30 s after it settles', async () => {
+        vi.useFakeTimers();
+        vi.setSystemTime(new Date('2025-02-01T00:00:00Z'));
+        try {
+          routeRepeat();
+          const svc = createService();
+          await svc.getDefenseScoreLatest(params);
+          vi.advanceTimersByTime(29_000);
+          await svc.getDefenseScoreLatest(params);
+          expect(mockSearch).toHaveBeenCalledTimes(1);
+          vi.advanceTimersByTime(1_001);
+          await svc.getDefenseScoreLatest(params);
+          expect(mockSearch).toHaveBeenCalledTimes(2);
+        } finally {
+          vi.useRealTimers();
+        }
+      });
+
+      it('invalidateRiskAcceptanceCache() also clears the posture cache', async () => {
+        routeRepeat();
+        const svc = createService();
+        await svc.getDefenseScoreLatest(params);
+        svc.invalidateRiskAcceptanceCache();
+        await svc.getDefenseScoreLatest(params);
+        expect(mockSearch).toHaveBeenCalledTimes(2);
+      });
+
+      it('getLatestPairs never fetches raw runs (withRaw: false)', async () => {
+        routeRepeat({ u1: { name: 'Test One' }, u2: { name: 'Test Two' } });
+        const svc = createService();
+        (svc as any).getRiskAcceptanceService().buildExclusionFilter.mockResolvedValue(EXCLUSION);
+        await svc.getLatestPairs(params);
+        const pairs = searchesWith('pairs');
+        expect(pairs).toHaveLength(1);
+        expect(JSON.stringify(pairs[0].query)).toContain('excluded-test');
+      });
+
+      it('the four breakdowns share one metadata snapshot, separate from the score snapshot', async () => {
+        routeRepeat({ u1: { name: 'Test One' }, u2: { name: 'Test Two' } });
+        const svc = createService();
+        await Promise.all([
+          svc.getDefenseScoreLatest(params),
+          svc.getDefenseScoreTrendLatest(params),
+          svc.getTestCoverageLatest(params),
+          svc.getTechniqueDistributionLatest(params),
+          svc.getDefenseScoreByHostnameLatest(params),
+          svc.getDefenseScoreByCategoryWithSubcategoriesLatest(params),
+        ]);
+        const pairs = searchesWith('pairs');
+        expect(pairs).toHaveLength(2); // one series snapshot + one metadata snapshot
+        expect(searchesWith('test_meta')).toHaveLength(1);
+        const daySources = pairs.map((r: any) => r.aggs.pairs.composite.sources.some((src: any) => 'day' in src));
+        expect(daySources.sort()).toEqual([false, true]);
       });
     });
 
