@@ -79,9 +79,9 @@ describe('summarizePairs', () => {
 describe('applyOutcomeFilters', () => {
   const pairs = [
     run({ pairKey: 'u', errorCodes: [101], errorNames: ['Unprotected'] }),
-    run({ pairKey: 'p105', errorCodes: [105], errorNames: ['FileQuarantinedOnExtraction'] }),
-    run({ pairKey: 'p126', errorCodes: [126], errorNames: ['ExecutionPrevented'] }),
-    run({ pairKey: 'p127', errorCodes: [127], errorNames: ['Quarantined'] }),
+    run({ pairKey: 'p105', protected: true, strictProtected: true, errorCodes: [105], errorNames: ['FileQuarantinedOnExtraction'] }),
+    run({ pairKey: 'p126', protected: true, strictProtected: true, errorCodes: [126], errorNames: ['ExecutionPrevented'] }),
+    run({ pairKey: 'p127', protected: true, strictProtected: true, errorCodes: [127], errorNames: ['Quarantined'] }),
   ];
   const keys = (ps: PairRun[]) => ps.map((p) => p.pairKey);
 
@@ -89,17 +89,34 @@ describe('applyOutcomeFilters', () => {
     expect(applyOutcomeFilters(pairs, {})).toHaveLength(4);
     expect(applyOutcomeFilters(pairs, { result: 'all' })).toHaveLength(4);
   });
-  it('result=unprotected keeps pairs with 101', () => {
+  it('result=unprotected keeps pairs whose combined verdict is unprotected', () => {
     expect(keys(applyOutcomeFilters(pairs, { result: 'unprotected' }))).toEqual(['u']);
   });
-  it('result=protected keeps pairs with 105/126/127', () => {
+  it('result=protected keeps pairs whose combined verdict is protected', () => {
     expect(keys(applyOutcomeFilters(pairs, { result: 'protected' }))).toEqual(['p105', 'p126', 'p127']);
+  });
+  it('result follows the combined verdict, not the codes: a detected 101 counts as protected', () => {
+    const detected = [run({ pairKey: 'd', protected: true, strictProtected: false, errorCodes: [101], errorNames: ['Unprotected'] })];
+    expect(keys(applyOutcomeFilters(detected, { result: 'protected' }))).toEqual(['d']);
+    expect(applyOutcomeFilters(detected, { result: 'unprotected' })).toEqual([]);
+  });
+  it('an any-stage bundle pair with mixed control codes matches exactly one of protected / unprotected', () => {
+    const bundles = [
+      run({ pairKey: 'bp', protected: true, strictProtected: true, errorCodes: [101, 126] }),
+      run({ pairKey: 'bu', protected: false, strictProtected: false, errorCodes: [101, 126] }),
+    ];
+    expect(keys(applyOutcomeFilters(bundles, { result: 'protected' }))).toEqual(['bp']);
+    expect(keys(applyOutcomeFilters(bundles, { result: 'unprotected' }))).toEqual(['bu']);
   });
   it('result=inconclusive -> []', () => {
     expect(applyOutcomeFilters(pairs, { result: 'inconclusive' })).toEqual([]);
   });
   it('errorCodes keeps only matching pairs', () => {
     expect(keys(applyOutcomeFilters(pairs, { errorCodes: [126] }))).toEqual(['p126']);
+  });
+  it('errorCodes stays code-based: matches any code of a mixed bundle run', () => {
+    const bundle = [run({ pairKey: 'b', protected: false, errorCodes: [101, 126] })];
+    expect(keys(applyOutcomeFilters(bundle, { errorCodes: [126] }))).toEqual(['b']);
   });
   it('errorNames keeps only matching pairs', () => {
     expect(keys(applyOutcomeFilters(pairs, { errorNames: ['Quarantined'] }))).toEqual(['p127']);

@@ -10,8 +10,6 @@ export const MAX_FRESHNESS_DAYS = 365;
 export const WEEKLY_STEP_THRESHOLD_DAYS = 90;
 export const CONCLUSIVE_CODES = [101, 105, 126, 127] as const;
 
-const PROTECTED_CODES: readonly number[] = [105, 126, 127];
-const UNPROTECTED_CODES: readonly number[] = [101];
 const DAY_MS = 86_400_000;
 const HOUR_MS = 3_600_000;
 
@@ -127,6 +125,14 @@ function freshOnly(latest: Map<string, PairRun>, asOfMs: number, freshnessMs: nu
   return out;
 }
 
+/**
+ * Outcome filters, applied AFTER the latest pick ("pairs whose latest result is X").
+ * `result=protected|unprotected` follows the pair's combined verdict
+ * (`p.protected`), the same rule the Defense Score counts: a Defender- or
+ * CrowdStrike-detected 101 is protected, and an any-stage bundle run with mixed
+ * control codes matches exactly one of the two. `errorCodes`/`errorNames` stay
+ * code-based: they match any code/name present in the run.
+ */
 export function applyOutcomeFilters(pairs: PairRun[], f: OutcomeFilters): PairRun[] {
   const result = f.result ?? 'all';
   if (result === 'inconclusive') return [];
@@ -135,8 +141,8 @@ export function applyOutcomeFilters(pairs: PairRun[], f: OutcomeFilters): PairRu
   if (result === 'all' && !codes && !names) return pairs;
 
   return pairs.filter((p) => {
-    if (result === 'protected' && !p.errorCodes.some((c) => PROTECTED_CODES.includes(c))) return false;
-    if (result === 'unprotected' && !p.errorCodes.some((c) => UNPROTECTED_CODES.includes(c))) return false;
+    if (result === 'protected' && !p.protected) return false;
+    if (result === 'unprotected' && p.protected) return false;
     if (codes && !p.errorCodes.some((c) => codes.includes(c))) return false;
     if (names && !p.errorNames.some((n) => names.includes(n))) return false;
     return true;

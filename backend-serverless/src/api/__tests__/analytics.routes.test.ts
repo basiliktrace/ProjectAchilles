@@ -276,6 +276,9 @@ describe('analytics routes', () => {
       const res = await request(createApp()).get('/api/analytics/defense-score/trend?basis=bogus');
       expect(res.status).toBe(400);
       expect(res.body.error).toBe('Invalid basis');
+      expect(mockGetDefenseScoreTrend).not.toHaveBeenCalled();
+      expect(mockGetDefenseScoreTrendRolling).not.toHaveBeenCalled();
+      expect(mockGetDefenseScoreTrendLatest).not.toHaveBeenCalled();
     });
 
     it('/defense-score without basis calls the executions method', async () => {
