@@ -184,14 +184,17 @@ const data = await analyticsApi.getExecutions(apiParams);
 Filters automatically sync with URL parameters while preserving other query params (like active tabs). This enables shareable dashboard URLs and browser back/forward navigation.
 :::
 
-**Date range windowing** -- The `getWindowDaysForDateRange` utility maps ranges to rolling window sizes:
+**Date range and the Defense Score** -- There is no rolling-window mapping any more (`getWindowDaysForDateRange` was removed). Score views request `basis=latest`, and the selected range is the freshness window: a test × endpoint pair counts if its most recent conclusive result falls inside it, capped at 365 days. The helpers live in `src/lib/posture.ts` and `src/lib/utcDate.ts`:
 
-| Selected range | Window size |
-|----------------|-------------|
-| 7 days or less | 7-day (full coverage) |
-| 8--30 days | 7-day rolling |
-| 31--90 days | 30-day rolling |
-| Custom | Calculated from actual span |
+| Helper | Purpose |
+|--------|---------|
+| `pickCurrentScore(tile, trend)` | Tile value and pair count, taken from the trend's last point when the trend is non-empty. The tile then always equals the line's end, even if the two requests race. |
+| `pickCurrentErrorRate(trend, summary)` | Last non-null trend error rate, falling back to the `/error-rate` summary |
+| `seriesDelta(points)` | Last non-null minus first non-null score, for the `±d.d pts over <range>` caption |
+| `postureCaption(pairCount, delta, rangeLabel)` | Caption text; `n=<n> · not enough data` below `MIN_POSTURE_PAIRS` (10) |
+| `scoreTone(score, pairCount)` | `muted` for low or empty samples; otherwise `danger` below 60, `warning` below 80, else `accent` |
+| `postureWindowLabel(dateRange)` | `<n>d`, or `last 365d` when the range exceeds the cap (e.g. All time) |
+| `utcDayKey(ts)` / `formatUtcDay(ts)` | UTC day keys and labels. Trend buckets are UTC days; never format them in local time. |
 
 ### useTestPreferences
 

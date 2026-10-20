@@ -44,12 +44,19 @@ The primary analytics engine. All query methods accept a common filter set and r
 
 #### Defense Score Analytics
 
-The defense score measures how effectively endpoint defenses detect and block security tests: `(protected_executions / conclusive_executions) * 100`.
+The defense score measures how effectively endpoint defenses detect and block security tests. The `basis` query parameter (`executions` by default, or `latest`) selects one of two calculations:
+
+- **`executions`**: `(protected_or_detected_executions / conclusive_executions) * 100` over the window. This is the API default, and the basis used by the PDF execution report, score-drop alerts and the Executions 7d tile.
+- **`latest`**: the share of test × endpoint pairs whose most recent conclusive result in the window was blocked or detected. The Dashboard and Analytics UI always request this.
+  - **Pair key:** `org | test_uuid | hostname`. In `any-stage` mode a non-cyber-hygiene bundle on a host is one pair, protected if any stage of its latest run was.
+  - **Window:** the range is the freshness window, capped at 365 days. Trend points are the same calculation as of each UTC day end (weekly beyond 90 days), and the last point is the tile.
 
 | Method | Purpose |
 |--------|---------|
-| `getDefenseScore()` | Overall protection effectiveness for a time range |
-| `getDefenseScoreTrend()` | Time-series defense score with rolling window smoothing |
+| `getDefenseScore()` | Overall protection effectiveness for a time range (executions basis) |
+| `getDefenseScoreTrend()` / `getDefenseScoreTrendRolling()` | Executions-basis trend. Histograms extend to `to ?? now`, and empty windows return `score: null`. |
+| `getDefenseScoreLatest()` / `getDefenseScoreTrendLatest()` | Latest-basis tile and trend. Both read one cached series snapshot, so the tile always equals the trend's last point. |
+| `getLatestPairs()` | Latest-basis pair set with metadata. It feeds the four `*Latest` breakdowns: category/subcategory, hostname, technique distribution and test coverage. |
 | `getDefenseScoreByTest()` | Breakdown by individual test |
 | `getDefenseScoreByTechnique()` | Breakdown by MITRE ATT&CK technique |
 | `getDefenseScoreByOrg()` | Breakdown by organization |
@@ -83,6 +90,13 @@ The defense score measures how effectively endpoint defenses detect and block se
 | `archiveByDateRange()` | Archive all executions before a given date |
 
 ### Key Features
+
+**Latest-result posture (`basis=latest`):** the rules live in a pure module, `services/analytics/posture.ts`: pair selection, freshness window, series, grouping and outcome filters. It has no imports and is kept **byte-identical** in `backend/` and `backend-serverless/`.
+- **Fetching:** `ElasticsearchService` fetches pair runs with paginated composite aggregations, converting each page as it arrives.
+- **Caching:** `services/analytics/postureCache.ts`, also byte-identical in both forks, keeps per-instance snapshots for 30 s with in-flight de-duplication. There are two snapshot shapes: the series (tile + trend) and the metadata (breakdowns). A dashboard load therefore issues ~2 pair fetches, not one per card.
+- **Cache key:** index pattern, raw `from`/`to`, scoring mode, org, the filter-bar clauses and the risk-acceptance exclusion JSON.
+- **Outcome filters:** `result`, `errorCodes` and `errorNames` are applied after the cache, to each pair's latest result. `result` follows the pair's protected verdict.
+- **Validation:** an invalid `basis`, an unparseable date range or a reversed date range returns 400.
 
 **Risk acceptance integration:** Defense scores automatically exclude risk-accepted findings via the `RiskAcceptanceService`. The service supports dual-query mode to return both:
 - **Adjusted score** -- with risk-accepted tests excluded (shown by default)

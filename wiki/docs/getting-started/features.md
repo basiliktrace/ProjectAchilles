@@ -92,8 +92,8 @@ Quantify your security posture with 30+ query endpoints powered by Elasticsearch
 
 | Feature | Description |
 |---------|-------------|
-| **Defense Score** | Aggregate score with breakdowns by test, technique, category, hostname, and severity |
-| **Trend Analysis** | Rolling-window defense score and error rate trends over time |
+| **Defense Score** | Current posture: the share of test × endpoint pairs whose most recent result in the selected window was blocked or detected. Breakdowns cover category, hostname, ATT&CK technique and test coverage. |
+| **Trend Analysis** | The same score as of each day, ending at today's value, plus the error-rate trend. Gaps mark periods with no results in the window. |
 | **MITRE ATT&CK Heatmaps** | Host-test matrix showing protection status across your fleet |
 | **Coverage Treemaps** | Hierarchical category/subcategory coverage visualization |
 | **Execution Table** | Paginated results with advanced filtering (technique, hostname, threat actor, tags) |
