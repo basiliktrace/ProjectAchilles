@@ -40,6 +40,23 @@ export function pickCurrentScore(
   return { score: null, pairCount: null };
 }
 
+/**
+ * Current error rate: the error trend's last non-null value, so the
+ * "Inconclusive" figure equals the right-hand end of the error line (the
+ * error-rate endpoint covers a different window). Falls back to the
+ * endpoint's figure when the trend has none.
+ */
+export function pickCurrentErrorRate(
+  trend: { errorRate: number | null }[] | null | undefined,
+  fallback: number | null | undefined,
+): number | null {
+  for (let i = (trend?.length ?? 0) - 1; i >= 0; i--) {
+    const v = trend![i].errorRate;
+    if (v != null) return v;
+  }
+  return fallback ?? null;
+}
+
 export function scoreTone(
   score: number | null,
   pairCount: number | null,

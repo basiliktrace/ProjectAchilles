@@ -28,7 +28,7 @@ import { useOutdatedAgentCount } from '@/hooks/useOutdatedAgentCount';
 import { useScoringMode } from '@/hooks/useScoringMode';
 import { usePolling } from '@/hooks/usePolling';
 import { formatUtcDay, utcDayKey } from '@/lib/utcDate';
-import { pickCurrentScore, seriesDelta } from '@/lib/posture';
+import { pickCurrentErrorRate, pickCurrentScore, seriesDelta } from '@/lib/posture';
 import { computeTestStats, type TestStats } from './computeTestStats';
 import { deriveAttentionItems } from './deriveAttentionItems';
 import type { AttentionItem } from './components/AttentionBanner';
@@ -267,12 +267,11 @@ export function useDashboardData(range: DashboardRange = DEFAULT_DASHBOARD_RANGE
   const defenseDelta = useMemo(() => seriesDelta(defenseTrend ?? []), [defenseTrend]);
 
   const trendDescription = useMemo(() => {
-    const lastError = [...(errorTrend ?? [])].reverse().find((p) => p.errorRate != null)?.errorRate;
     return buildTrendDescription({
       defense: current.score,
       secure: secureScore ? secureScore.percentage : null,
       zta: ztaScore ? ztaScore.overallScore : null,
-      errorRate: lastError ?? errorRate?.errorRate ?? null,
+      errorRate: pickCurrentErrorRate(errorTrend, errorRate?.errorRate),
     });
   }, [current, secureScore, ztaScore, errorTrend, errorRate]);
 

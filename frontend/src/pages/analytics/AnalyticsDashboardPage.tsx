@@ -24,7 +24,7 @@ import SecureScoreCard from './components/SecureScoreCard';
 import ZtaScoreCard from './components/ZtaScoreCard';
 import TopControlsCard from './components/TopControlsCard';
 import { useAnalyticsFilters, serializeToUrlParams } from '@/hooks/useAnalyticsFilters';
-import { pickCurrentScore, postureWindowLabel, seriesDelta } from '@/lib/posture';
+import { pickCurrentErrorRate, pickCurrentScore, postureWindowLabel, seriesDelta } from '@/lib/posture';
 import { useAnalyticsAuth } from '@/hooks/useAnalyticsAuth';
 import { useDefenderConfig } from '@/hooks/useDefenderConfig';
 import { useCrowdStrikeConfig } from '@/hooks/useCrowdStrikeConfig';
@@ -55,8 +55,8 @@ interface DefenseScoreData {
   delta: number | null;
   total: number;
   protected: number;
-  realScore?: number;
-  rawScore?: number;
+  realScore?: number | null;
+  rawScore?: number | null;
   riskAcceptedCount?: number;
   /** Test x endpoint pairs behind the tile score (basis=latest). */
   pairCount?: number;
@@ -792,7 +792,7 @@ export default function AnalyticsDashboardPage() {
                   uniqueEndpoints={uniqueHostnames}
                   executedTests={uniqueTestCount}
                   totalResults={defenseScore?.total ?? null}
-                  errorRate={errorRate}
+                  errorRate={pickCurrentErrorRate(errorRateTrendData, errorRate)}
                   realScore={defenseScore?.realScore ?? null}
                   rawScore={defenseScore?.rawScore ?? null}
                   riskAcceptedCount={defenseScore?.riskAcceptedCount}

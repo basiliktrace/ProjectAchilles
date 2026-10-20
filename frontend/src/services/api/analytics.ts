@@ -24,12 +24,13 @@ export interface DefenseScore {
   detectedCount?: number;
   unprotectedCount: number;
   totalExecutions: number;
-  realScore?: number;
+  /** EDR-only (strict) score; null when there is nothing to score (basis=latest with no pairs). */
+  realScore?: number | null;
   realProtectedCount?: number;
   realUnprotectedCount?: number;
   realTotalExecutions?: number;
-  /** Combined score against the unfiltered (pre-risk-acceptance) base. Equals `score` when riskAcceptedCount === 0. */
-  rawScore?: number;
+  /** Combined score against the unfiltered (pre-risk-acceptance) base. Equals `score` when riskAcceptedCount === 0; null when there is nothing to score. */
+  rawScore?: number | null;
   riskAcceptedCount?: number;
 }
 

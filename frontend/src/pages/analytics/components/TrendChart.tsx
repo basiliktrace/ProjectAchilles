@@ -71,7 +71,8 @@ function TrendChart({ data, errorRateData, secureScoreTrendData, ztaScoreTrendDa
   const hasErrorRate = errorRateData && errorRateData.length > 0;
   const hasSecureScore = secureScoreTrendData && secureScoreTrendData.length > 0;
   const hasZtaScore = ztaScoreTrendData && ztaScoreTrendData.length > 0;
-  const hasRealScore = data.some(d => d.realScore != null);
+  // The Actual (pre-risk-acceptance) line only adds information where it differs from the score.
+  const hasRealScore = data.some(d => d.realScore != null && d.realScore !== d.score);
   const hasExtraData = hasErrorRate || hasSecureScore || hasZtaScore || hasRealScore;
 
   if (loading) {
@@ -151,9 +152,13 @@ function TrendChart({ data, errorRateData, secureScoreTrendData, ztaScoreTrendDa
   });
 
   // Header shows the CURRENT (last) value of each series; null parts are omitted.
-  const fmt = (v: number | null) => (v == null ? null : v.toFixed(1));
-  const lastDefense = fmt(lastNonNull(chartData, d => d.score));
-  const lastRealScore = hasRealScore ? fmt(lastNonNull(chartData, d => d.realScore)) : null;
+  // Defense (and its Actual variant) use the last point itself, like the ring
+  // (pickCurrentScore): when nothing is fresh at the end of the range the
+  // header shows no Defense value rather than an older one.
+  const fmt = (v: number | null | undefined) => (v == null ? null : v.toFixed(1));
+  const lastPoint = chartData.at(-1);
+  const lastDefense = fmt(lastPoint?.score);
+  const lastRealScore = hasRealScore ? fmt(lastPoint?.realScore) : null;
   const lastErrorRate = hasErrorRate ? fmt(lastNonNull(errorRateData, d => d.errorRate)) : null;
   const lastSecureScore = hasSecureScore ? fmt(lastNonNull(secureScoreTrendData, d => d.percentage)) : null;
   const lastZtaScore = hasZtaScore ? fmt(lastNonNull(ztaScoreTrendData, d => d.overallScore)) : null;
@@ -312,6 +317,7 @@ function TrendChart({ data, errorRateData, secureScoreTrendData, ztaScoreTrendDa
               stroke="var(--color-score)"
               strokeWidth={2}
               fill="url(#fillScore)"
+              connectNulls={false}
             />
             {/* Actual score is a neutral dashed REFERENCE line (no fill) —
                 it hugs the defense series, so a filled area of its own only
@@ -326,7 +332,6 @@ function TrendChart({ data, errorRateData, secureScoreTrendData, ztaScoreTrendDa
                 strokeOpacity={0.75}
                 strokeDasharray="6 3"
                 fill="none"
-                connectNulls
               />
             )}
             {hasSecureScore && (

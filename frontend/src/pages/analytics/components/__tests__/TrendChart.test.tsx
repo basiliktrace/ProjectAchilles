@@ -49,6 +49,58 @@ describe('TrendChart', () => {
     expect(screen.getByText('Error rate: 4.0%')).toBeInTheDocument();
   });
 
+  it('Defense header follows the last point: a null last point shows no Defense value (matches the ring)', () => {
+    render(
+      <TrendChart
+        data={[pt('2026-10-18T23:59:59.999Z', 40), pt('2026-10-19T23:59:59.999Z', null)]}
+      />,
+    );
+    expect(screen.queryByText(/Defense:/)).toBeNull();
+    expect(screen.queryByText(/40\.0%/)).toBeNull();
+  });
+
+  it('Actual follows the last point too', () => {
+    render(
+      <TrendChart
+        data={[
+          pt('2026-10-18T23:59:59.999Z', 80, { realScore: 60 }),
+          pt('2026-10-19T23:59:59.999Z', null, { realScore: null }),
+        ]}
+      />,
+    );
+    expect(screen.queryByText(/Actual:/)).toBeNull();
+  });
+
+  it('hides the Actual line and header when realScore never differs from score', () => {
+    const { container } = render(
+      <TrendChart
+        data={[
+          pt('2026-10-18T23:59:59.999Z', 80, { realScore: 80 }),
+          pt('2026-10-19T23:59:59.999Z', 82, { realScore: 82 }),
+        ]}
+      />,
+    );
+    expect(screen.queryByText(/Actual/)).toBeNull();
+    expect(container.querySelectorAll('.recharts-area')).toHaveLength(1);
+  });
+
+  it('score and Actual lines break at null points instead of bridging them', () => {
+    const { container } = render(
+      <TrendChart
+        data={[
+          pt('2026-10-17T23:59:59.999Z', 60, { realScore: 50 }),
+          pt('2026-10-18T23:59:59.999Z', 62, { realScore: 52 }),
+          pt('2026-10-19T23:59:59.999Z', null, { realScore: null }),
+          pt('2026-10-20T23:59:59.999Z', 70, { realScore: 55 }),
+          pt('2026-10-21T23:59:59.999Z', 72, { realScore: 57 }),
+        ]}
+      />,
+    );
+    const curves = Array.from(container.querySelectorAll('.recharts-area-curve')).map((n) => n.getAttribute('d') ?? '');
+    expect(curves).toHaveLength(2); // score + Actual
+    for (const d of curves) expect((d.match(/M/g) ?? []).length).toBe(2);
+  });
+
   it('shows the last realScore as Actual only when present', () => {
     const { rerender } = render(
       <TrendChart

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { isLowSample, seriesDelta, postureCaption, pickCurrentScore, scoreTone, postureWindowLabel } from '../posture';
+import { isLowSample, seriesDelta, postureCaption, pickCurrentScore, pickCurrentErrorRate, scoreTone, postureWindowLabel } from '../posture';
 
 describe('posture', () => {
   it('isLowSample', () => {
@@ -49,5 +49,25 @@ describe('posture', () => {
       postureWindowLabel({ preset: 'custom', from: '2026-10-01T00:00:00.000Z', to: '2026-10-11T12:00:00.000Z' }),
     ).toBe('11d');
     expect(postureWindowLabel({ preset: 'custom', from: '2024-01-01T00:00:00Z', to: '2026-01-01T00:00:00Z' })).toBe('last 365d');
+  });
+});
+
+describe('pickCurrentErrorRate', () => {
+  const p = (errorRate: number | null) => ({ errorRate });
+
+  it("takes the error trend's last non-null value, so Inconclusive equals the line end", () => {
+    expect(pickCurrentErrorRate([p(1), p(2.5), p(null)], 9)).toBe(2.5);
+  });
+  it('falls back to the error-rate endpoint when the trend has no value', () => {
+    expect(pickCurrentErrorRate([p(null), p(null)], 9)).toBe(9);
+    expect(pickCurrentErrorRate([], 9)).toBe(9);
+    expect(pickCurrentErrorRate(null, 9)).toBe(9);
+  });
+  it('null when neither has a value', () => {
+    expect(pickCurrentErrorRate(undefined, undefined)).toBeNull();
+    expect(pickCurrentErrorRate([p(null)], null)).toBeNull();
+  });
+  it('a real 0 from the trend wins over the fallback', () => {
+    expect(pickCurrentErrorRate([p(3), p(0)], 9)).toBe(0);
   });
 });
