@@ -44,7 +44,7 @@ A *pair* is one test on one endpoint (within one organization). Only the most re
 
 **Caption.** Under the score the dashboard shows `<n> pairs · ±d.d pts over <range>`: how many pairs were scored and how far the score moved across the range.
 
-**Not enough data.** With fewer than 10 pairs the score is replaced by `n=<n> · not enough data`, because a handful of pairs swings the percentage too much to be meaningful.
+**Not enough data.** With fewer than 10 pairs the score is shown muted, in a neutral colour instead of red/amber/green, with the caption `n=<n> · not enough data` beneath it, because a handful of pairs swings the percentage too much to be meaningful.
 
 **Trend.** The trend line is the same calculation as of each day. Day labels are UTC, ranges over 90 days use weekly points, and the last point always equals the headline score. A window with no pairs is drawn as a gap, not 0%.
 
@@ -69,7 +69,11 @@ Via the API, the rolling `windowDays` option (1-90 days) applies only to the exe
 
 ## Actual, EDR-only, and Risk-accepted Scores
 
-The dashboard ledger reconciles the headline with an *Actual* score (strict, blocked-only), an *EDR-only* score, and the effect of risk acceptances, so you can see both the current state and what is excluded.
+The dashboard ledger reconciles the headline with an *Actual* score, an *EDR-only* score, and the effect of risk acceptances, so you can see both the current state and what is excluded:
+
+- **Actual** is the raw score before risk acceptance: the same calculation with no exclusions applied. It shows a value only while acceptances exclude something (otherwise it would equal the headline, so the row shows —).
+- **EDR-only** is the strict, blocked-only score: it counts only results the endpoint control blocked (`is_protected`), not Defender or CrowdStrike detections.
+- **Risk-accepted** is how many test × endpoint pairs the active acceptances exclude.
 
 ## Time window
 

@@ -49,7 +49,8 @@ If you don't pass `from`/`to`, every endpoint applies a **`now-7d`** date filter
 Under `latest`:
 
 - The date range sets the freshness window. It is capped at 365 days (All time becomes "last 365d").
-- Outcome filters (`result`, `errorCodes`, `errorNames`) select the pairs whose latest result matches.
+- Outcome filters (`result`, `errorCodes`, `errorNames`) select the pairs whose latest result matches. `result=protected|unprotected` follows the pair's verdict, the same rule the score counts: a Defender- or CrowdStrike-detected `101` is protected, and an `any-stage` bundle pair matches exactly one of the two. `errorCodes` and `errorNames` match any code or name in the latest result, so a bundle pair whose latest run mixes `101` and `126` matches both `errorCodes=101` and `errorCodes=126`.
+- The server keeps each fetched pair set for up to 30 seconds and reuses it across requests with the same filters (outcome filters aside), so a relative range such as `now-7d` can be up to 30 seconds stale.
 - Under `latest`, `from`/`to` accept `now`, `now-<n><unit>` (units `d`, `h`, `w`, `m` or `M`, where `m`/`M` = 30 days) and ISO dates. ES date math such as `now/d` is rejected, as is an unparseable or reversed range, with `400 Invalid date range`.
 - `result=inconclusive` yields no pairs under `latest`, because only conclusive results are scored.
 - These endpoints accept `basis=latest`: `/defense-score`, `/defense-score/trend`, `/defense-score/by-category-subcategory`, `/defense-score/by-hostname`, `/technique-distribution`, `/test-coverage`. Their counts become pairs. For `test-coverage`, pairs are grouped by test name; each pair is one host × test, so each count is a number of hosts.
