@@ -176,5 +176,19 @@ describe('HeroMetricsCard (Defense ledger)', () => {
       render(<HeroMetricsCard defenseScore={80} totalResults={500} uniqueEndpoints={1} executedTests={3} />);
       expect(screen.getByText('Results')).toBeInTheDocument();
     });
+
+    it('EDR-only compares against the tile score, not the trend-derived ring score', () => {
+      render(
+        <HeroMetricsCard
+          defenseScore={70}
+          tileScore={60}
+          realScore={60}
+          pairCount={50}
+          uniqueEndpoints={1}
+          executedTests={3}
+        />,
+      );
+      expect(within(ledgerRow('EDR-only')).getByText('—')).toBeInTheDocument();
+    });
   });
 });

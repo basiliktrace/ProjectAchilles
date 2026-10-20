@@ -186,6 +186,7 @@ export default function AnalyticsDashboardPage() {
   // New visualization data
   const [categoryBreakdown, setCategoryBreakdown] = useState<CategorySubcategoryBreakdownItem[]>([]);
   const [recentTests, setRecentTests] = useState<EnrichedTestExecution[]>([]);
+  const [recentTestsTotal, setRecentTestsTotal] = useState<number | null>(null);
   const [defenseScoreByHost, setDefenseScoreByHost] = useState<DefenseScoreByHostItem[]>([]);
   const [canonicalTestCount, setCanonicalTestCount] = useState<number>(0);
   const [canonicalTestCount30d, setCanonicalTestCount30d] = useState<number>(0);
@@ -339,6 +340,7 @@ export default function AnalyticsDashboardPage() {
       setHostTestMatrix(matrix);
       setCategoryBreakdown(categoryData);
       setRecentTests(recentTestsData.data);
+      setRecentTestsTotal(recentTestsData.pagination.totalItems);
       setDefenseScoreByHost(hostScores);
       setErrorRate(errorRateData.errorRate);
       setErrorRateTrendData(errorRateTrend);
@@ -785,6 +787,7 @@ export default function AnalyticsDashboardPage() {
                 <HeroMetricsCard
                   defenseScore={currentPosture.score}
                   pairCount={currentPosture.pairCount}
+                  tileScore={defenseScore?.overall ?? null}
                   delta={seriesDelta(trendData)}
                   uniqueEndpoints={uniqueHostnames}
                   executedTests={uniqueTestCount}
@@ -820,8 +823,8 @@ export default function AnalyticsDashboardPage() {
               {defenderConfigured && (
                 <>
                   <TestActivityCard
-                    trendData={trendData}
                     recentTests={recentTests}
+                    executionCount={recentTestsTotal}
                     loading={loadingDashboard}
                     title="Test activity"
                     className="h-full"
@@ -853,8 +856,8 @@ export default function AnalyticsDashboardPage() {
             ) : (
               <div className="grid items-stretch gap-4 md:grid-cols-3 max-lg:[&>*]:min-w-0">
                 <TestActivityCard
-                  trendData={trendData}
                   recentTests={recentTests}
+                  executionCount={recentTestsTotal}
                   loading={loadingDashboard}
                   title="Test activity"
                   className="h-full"

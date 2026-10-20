@@ -16,6 +16,7 @@ vi.mock('recharts', async (importOriginal) => {
 });
 
 import TrendChart from '../TrendChart';
+import type { ZtaScoreTrendPoint } from '@/services/api/crowdstrike';
 
 const pt = (timestamp: string, score: number | null, extra: Record<string, unknown> = {}) => ({
   timestamp,
@@ -73,6 +74,10 @@ describe('TrendChart', () => {
   });
 
   it('uses the last secure and ZTA values', () => {
+    const zta: ZtaScoreTrendPoint[] = [
+      { date: '2026-10-18', overallScore: 70, deviceCount: 4 },
+      { date: '2026-10-19', overallScore: 75.5, deviceCount: 4 },
+    ];
     render(
       <TrendChart
         data={[pt('2026-10-18T23:59:59.999Z', 50), pt('2026-10-19T23:59:59.999Z', 60)]}
@@ -80,10 +85,7 @@ describe('TrendChart', () => {
           { date: '2026-10-18', score: 1, maxScore: 10, percentage: 10 },
           { date: '2026-10-19', score: 3, maxScore: 10, percentage: 30 },
         ]}
-        ztaScoreTrendData={[
-          { date: '2026-10-18', overallScore: 70, deviceCount: 4 },
-          { date: '2026-10-19', overallScore: 75.5, deviceCount: 4 },
-        ] as never}
+        ztaScoreTrendData={zta}
       />,
     );
     expect(screen.getByText('Secure Score: 30.0%')).toBeInTheDocument();

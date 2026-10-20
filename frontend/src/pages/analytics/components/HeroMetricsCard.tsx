@@ -19,6 +19,8 @@ interface HeroMetricsCardProps {
   windowLabel?: string;
   /** Test x endpoint pairs behind the score (latest-result basis). Switches the footer to PAIRS. */
   pairCount?: number | null;
+  /** The score endpoint's own score; EDR-only is compared against it so both sides come from one response. Defaults to defenseScore. */
+  tileScore?: number | null;
   /** Change in score across the window, in points. */
   delta?: number | null;
   loading?: boolean;
@@ -74,6 +76,7 @@ function HeroMetricsCard({
   riskAcceptedCount,
   windowLabel,
   pairCount,
+  tileScore,
   delta,
   loading,
 }: HeroMetricsCardProps) {
@@ -99,7 +102,8 @@ function HeroMetricsCard({
   // exclusions are active; otherwise it would just repeat the headline.
   const showActual = riskAcceptedCount != null && riskAcceptedCount > 0 && rawScore != null;
   // EDR-only differs from the headline only when Defender detections boost it.
-  const showEdrOnly = defenseScore != null && realScore != null && realScore !== defenseScore;
+  const edrBase = tileScore !== undefined ? tileScore : defenseScore;
+  const showEdrOnly = edrBase != null && realScore != null && realScore !== edrBase;
 
   const hasPairs = pairCount !== undefined;
   const ringClass = hasPairs ? TONE_CLASS[scoreTone(defenseScore, pairCount)] : scoreColorClass(defenseScore);

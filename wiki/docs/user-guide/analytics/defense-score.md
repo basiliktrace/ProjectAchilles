@@ -135,9 +135,9 @@ wide right column carrying the shapes you read.
 **Posture row — left column**
 
 - **Defense Score ledger** — a ring gauge beside four reconciling lines:
-  *Actual* (raw protected share), *EDR-only*, *Risk-accepted* (how many results
-  are excluded), and *Inconclusive*. A footer strip carries endpoints, tests,
-  and result counts. The ledger replaced the old hero card, which showed one
+  *Actual* (raw protected share), *EDR-only*, *Risk-accepted* (how many test × endpoint
+  pairs are excluded), and *Inconclusive*. A footer strip carries endpoints, tests,
+  and the pair count behind the score. The ledger replaced the old hero card, which showed one
   big number and left the reconciliation implicit.
 - **Secure Score** — Microsoft Defender's score and raw points, when configured
 
