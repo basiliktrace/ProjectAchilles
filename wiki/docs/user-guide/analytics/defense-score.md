@@ -28,6 +28,24 @@ See **[Exit Codes & Outcomes](./exit-codes-and-outcomes)** for the canonical
 reference covering every exit code, correlation flag, stage label, and SB
 report outcome.
 
+## Latest-result score
+
+The dashboard headline uses the **latest-result** basis:
+
+> Share of test × endpoint pairs whose most recent result in the selected window was blocked or detected.
+
+A *pair* is one test on one endpoint (within one organization). Only the most recent conclusive result for each pair counts, so a test that failed last month but is blocked today shows as protected, and running a test many times does not weight it more heavily. Error and inconclusive results are skipped when finding the latest one.
+
+**Freshness window.** The selected date range is the freshness window: a pair whose last conclusive result is older than the range is not counted. The window is capped at 365 days, so All time reads as "last 365d".
+
+**Caption.** Under the score the dashboard shows `<n> pairs · ±d.d pts over <range>`: how many pairs were scored and how far the score moved across the range.
+
+**Not enough data.** With fewer than 10 pairs the score is replaced by `n=<n> · not enough data`, because a handful of pairs swings the percentage too much to be meaningful.
+
+**Trend.** The trend line is the same calculation as of each day. Day labels are UTC, ranges over 90 days use weekly points, and the last point always equals the headline score. A window with no pairs is drawn as a gap, not 0%.
+
+The execution-count formula above still applies where noted: the PDF execution report, score-drop alerts, the Executions 7d tile, and the test-vs-alert timeline cards stay on executions. Breakdowns by test, technique, severity, category, and organization also count executions. API users select the basis with `basis=latest|executions`; see the [Analytics API](../../api-reference/analytics#score-basis).
+
 ## Breakdowns
 
 The Defense Score can be broken down by:

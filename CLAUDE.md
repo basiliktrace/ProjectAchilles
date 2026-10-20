@@ -225,6 +225,9 @@ Some bundles (baseline, identity-endpoint) use a multi-binary architecture where
 
 These env vars are set automatically in `buildService.ts` when a `build_all.sh` is detected and the target platform is Windows. The inner cert password file uses mode `0o600` and is deleted in a `finally` block.
 
+### Defense Score basis
+Analytics endpoints take `basis=latest|executions` (default `executions`; invalid -> 400 `Invalid basis`). `latest` scores test x endpoint **pairs**: key = org + test UUID + hostname, most recent conclusive result in the window (window capped 365d). In `any-stage` mode a non-cyber-hygiene bundle on a host is one pair. Pure rules live in `services/analytics/posture.ts`, kept byte-identical in `backend/` and `backend-serverless/`. Trend under `latest` ignores `windowDays`; its last point equals the tile; empty windows are `null`, not 0. Stay on executions: by-test/technique/severity/category/org, threat-actor-coverage, the PDF report, score-drop alerts, the Executions 7d tile, and timeline cards. Docs: `wiki/docs/api-reference/analytics.md`.
+
 ### Authentication
 **Three-tier model:**
 1. **Clerk (global)**: All routes use `<RequireAuth>` wrapper; JWT injected via `useAuthenticatedApi` hook
