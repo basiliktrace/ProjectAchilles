@@ -31,9 +31,13 @@ vi.mock('../../services/analytics/settings.js', () => ({
 
 // Mock the ES service
 const mockTestConnection = vi.fn();
+const mockGetErrorRateTrendRolling = vi.fn();
+const mockGetDefenseScoreTrendRolling = vi.fn();
 vi.mock('../../services/analytics/elasticsearch.js', () => ({
   ElasticsearchService: class MockElasticsearchService {
     testConnection = mockTestConnection;
+    getErrorRateTrendRolling = mockGetErrorRateTrendRolling;
+    getDefenseScoreTrendRolling = mockGetDefenseScoreTrendRolling;
   },
 }));
 
@@ -164,6 +168,34 @@ describe('analytics routes', () => {
 
       expect(res.status).toBe(400);
       expect(res.body.error).toContain('Validation failed');
+    });
+  });
+
+  describe('GET /api/analytics/error-rate/trend', () => {
+    beforeEach(() => {
+      mockGetSettings.mockReturnValue({ configured: true, connectionType: 'direct', node: 'http://localhost:9200' });
+      mockGetErrorRateTrendRolling.mockResolvedValue([]);
+    });
+
+    it('without windowDays uses the range length', async () => {
+      const res = await request(createApp()).get('/api/analytics/error-rate/trend?from=now-30d');
+      expect(res.status).toBe(200);
+      expect(mockGetErrorRateTrendRolling).toHaveBeenCalledWith(expect.objectContaining({ windowDays: 30 }));
+    });
+
+    it('derived window is clamped to 365 days', async () => {
+      await request(createApp()).get('/api/analytics/error-rate/trend?from=now-2000d');
+      expect(mockGetErrorRateTrendRolling).toHaveBeenCalledWith(expect.objectContaining({ windowDays: 365 }));
+    });
+
+    it('honours an explicit windowDays', async () => {
+      await request(createApp()).get('/api/analytics/error-rate/trend?from=now-30d&windowDays=7');
+      expect(mockGetErrorRateTrendRolling).toHaveBeenCalledWith(expect.objectContaining({ windowDays: 7 }));
+    });
+
+    it('clamps an explicit windowDays to 90', async () => {
+      await request(createApp()).get('/api/analytics/error-rate/trend?from=now-30d&windowDays=200');
+      expect(mockGetErrorRateTrendRolling).toHaveBeenCalledWith(expect.objectContaining({ windowDays: 90 }));
     });
   });
 });

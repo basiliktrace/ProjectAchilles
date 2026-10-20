@@ -370,6 +370,14 @@ describe('elasticsearch.ts', () => {
       expect(await svc.getDefenseScoreTrend(makeParams())).toEqual([]);
     });
 
+    it('date_histogram has extended_bounds from the query from up to now', async () => {
+      mockSearch.mockResolvedValue(esSearchResponse({ aggs: { over_time: { buckets: [] } } }));
+      const svc = createService();
+      await svc.getDefenseScoreTrend(makeParams({ from: 'now-7d', to: undefined }));
+      expect(mockSearch.mock.calls[0][0].aggs.over_time.date_histogram.extended_bounds)
+        .toEqual({ min: 'now-7d', max: 'now' });
+    });
+
     it('returns score=0 for zero-count bucket (not NaN)', async () => {
       mockSearch.mockResolvedValue(esSearchResponse({
         total: 0,
@@ -377,8 +385,7 @@ describe('elasticsearch.ts', () => {
       }));
       const svc = createService();
       const result = await svc.getDefenseScoreTrend(makeParams());
-      expect(result[0].score).toBe(0);
-      expect(Number.isNaN(result[0].score)).toBe(false);
+      expect(result[0].score).toBeNull();
     });
 
     it('uses provided interval param', async () => {
@@ -467,6 +474,38 @@ describe('elasticsearch.ts', () => {
       vi.useRealTimers();
     });
 
+    it('date_histogram has extended_bounds up to now', async () => {
+      mockSearch.mockResolvedValue(esSearchResponse({ aggs: { over_time: { buckets: [] } } }));
+      const svc = createService();
+      await svc.getDefenseScoreTrendRolling(makeParams({ from: 'now-7d', to: undefined, windowDays: 7 }));
+      expect(mockSearch.mock.calls[0][0].aggs.over_time.date_histogram.extended_bounds)
+        .toEqual({ min: 'now-13d', max: 'now' });
+    });
+
+    it('any-stage path: date_histogram has extended_bounds up to now', async () => {
+      mockSearch.mockResolvedValue(esSearchResponse({ aggs: { over_time: { buckets: [] } } }));
+      const svc = createService();
+      await svc.getDefenseScoreTrendRolling(makeParams({ from: 'now-7d', to: undefined, windowDays: 7, scoringMode: 'any-stage' }));
+      expect(mockSearch.mock.calls[0][0].aggs.over_time.date_histogram.extended_bounds)
+        .toEqual({ min: 'now-13d', max: 'now' });
+    });
+
+    it('computeRollingWindow: empty window gives score null, not 0', async () => {
+      const buckets = makeDateBuckets([
+        { key: Date.parse('2025-01-18T00:00:00Z'), key_as_string: '2025-01-18', total: 0 },
+        { key: Date.parse('2025-01-19T00:00:00Z'), key_as_string: '2025-01-19', total: 0 },
+        { key: Date.parse('2025-01-20T00:00:00Z'), key_as_string: '2025-01-20', total: 0 },
+      ]);
+      mockSearch.mockResolvedValue(esSearchResponse({ aggs: { over_time: { buckets } } }));
+      const svc = createService();
+      const result = await svc.getDefenseScoreTrendRolling(makeParams({ from: 'now-2d', to: undefined, windowDays: 2 }));
+      expect(result.length).toBeGreaterThan(0);
+      for (const p of result) {
+        expect(p.score).toBeNull();
+        expect(p.total).toBe(0);
+      }
+    });
+
     it('computes rolling sum correctly over windowDays', async () => {
       // 3-day window, 4 buckets, from=2025-01-17 so all visible
       const buckets = makeDateBuckets([
@@ -538,7 +577,7 @@ describe('elasticsearch.ts', () => {
       expect(result).toEqual([]);
     });
 
-    it('returns score=0 for all-zero window', async () => {
+    it('returns score=null for all-zero window', async () => {
       const buckets = makeDateBuckets([
         { key: Date.parse('2025-01-19T00:00:00Z'), key_as_string: '2025-01-19', total: 0, protected: 0 },
         { key: Date.parse('2025-01-20T00:00:00Z'), key_as_string: '2025-01-20', total: 0, protected: 0 },
@@ -548,8 +587,7 @@ describe('elasticsearch.ts', () => {
       const svc = createService();
       const result = await svc.getDefenseScoreTrendRolling(makeParams({ from: 'now-3d', windowDays: 2 }));
       for (const point of result) {
-        expect(point.score).toBe(0);
-        expect(Number.isNaN(point.score)).toBe(false);
+        expect(point.score).toBeNull();
       }
     });
 
@@ -1580,6 +1618,26 @@ describe('elasticsearch.ts', () => {
 
     afterEach(() => {
       vi.useRealTimers();
+    });
+
+    it('date_histogram has extended_bounds up to now', async () => {
+      mockSearch.mockResolvedValue(esSearchResponse({ aggs: { over_time: { buckets: [] } } }));
+      const svc = createService();
+      await svc.getErrorRateTrendRolling(makeParams({ from: 'now-7d', to: undefined, windowDays: 7 }));
+      expect(mockSearch.mock.calls[0][0].aggs.over_time.date_histogram.extended_bounds)
+        .toEqual({ min: 'now-13d', max: 'now' });
+    });
+
+    it('empty window gives errorRate null, not 0', async () => {
+      const buckets = makeDateBuckets([
+        { key: Date.parse('2025-01-19T00:00:00Z'), key_as_string: '2025-01-19', total: 0 },
+        { key: Date.parse('2025-01-20T00:00:00Z'), key_as_string: '2025-01-20', total: 0 },
+      ]);
+      mockSearch.mockResolvedValue(esSearchResponse({ aggs: { over_time: { buckets } } }));
+      const svc = createService();
+      const result = await svc.getErrorRateTrendRolling(makeParams({ from: 'now-2d', to: undefined, windowDays: 2 }));
+      expect(result.length).toBeGreaterThan(0);
+      for (const p of result) expect(p.errorRate).toBeNull();
     });
 
     it('computes rolling error rate correctly', async () => {

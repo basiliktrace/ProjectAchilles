@@ -42,10 +42,11 @@ export interface DefenseScoreResponse {
 // Trend data point
 export interface TrendDataPoint {
   timestamp: string;
-  score: number;
+  /** null = no data in the window (render as a gap, never as 0) */
+  score: number | null;
   total: number;
   protected: number;
-  realScore?: number;
+  realScore?: number | null;
   realTotal?: number;
   realProtected?: number;
 }
@@ -328,7 +329,7 @@ export interface ErrorRateResponse {
 // Error rate trend data point (rolling window)
 export interface ErrorRateTrendDataPoint {
   timestamp: string;
-  errorRate: number;      // percentage 0-100
+  errorRate: number | null; // percentage 0-100; null = no test activity in the window
   errorCount: number;     // rolling window error count
   conclusiveCount: number; // rolling window conclusive count
   total: number;          // errorCount + conclusiveCount
