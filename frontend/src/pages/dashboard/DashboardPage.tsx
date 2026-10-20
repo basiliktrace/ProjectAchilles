@@ -1,9 +1,10 @@
 import { Activity, Bird, FlaskConical, Server, ShieldAlert, ShieldCheck, Star } from 'lucide-react';
-import { useSearchParams } from 'react-router-dom';
 import { cn } from '@/lib/utils';
-import { isLowSample, POSTURE_HELP, postureCaption } from '@/lib/posture';
+import { isLowSample, POSTURE_HELP, postureCaption, postureWindowLabel } from '@/lib/posture';
+import { isSameTimeRange, TIME_RANGE_PRESETS, timeRangeButtonLabel } from '@/lib/timeRange';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { useHasPermission } from '@/hooks/useAppRole';
+import { useSharedTimeRange } from '@/hooks/useSharedTimeRange';
 import { AttentionBanner } from './components/AttentionBanner';
 import { CategoryBreakdownCard } from './components/CategoryBreakdownCard';
 import { FleetHealthCard } from './components/FleetHealthCard';
@@ -14,43 +15,29 @@ import { SeverityDonut } from './components/SeverityDonut';
 import { SyncChip } from './components/SyncChip';
 import { TopControlsCard } from './components/TopControlsCard';
 import { TrendOverviewChart } from './components/TrendOverviewChart';
-import {
-  DASHBOARD_RANGES,
-  DEFAULT_DASHBOARD_RANGE,
-  normalizeDashboardRange,
-  useDashboardData,
-  type DashboardRange,
-} from './useDashboardData';
+import { useDashboardData } from './useDashboardData';
 
 const DEFENSE_DANGER_THRESHOLD = 60;
 
+function formatRangeDay(iso: string | undefined): string {
+  return iso ? new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '';
+}
+
 export default function DashboardPage() {
-  const [searchParams, setSearchParams] = useSearchParams();
-  const range = normalizeDashboardRange(searchParams.get('range'));
+  const [range, setRange] = useSharedTimeRange();
   const data = useDashboardData(range);
   const canSync = useHasPermission('tests:sync:execute');
-
-  const setRange = (next: DashboardRange) => {
-    setSearchParams(
-      (prev) => {
-        const params = new URLSearchParams(prev);
-        // The default stays out of the URL, matching the Analytics filter convention
-        if (next === DEFAULT_DASHBOARD_RANGE) params.delete('range');
-        else params.set('range', next);
-        return params;
-      },
-      { replace: true },
-    );
-  };
+  // '30d', '1d', 'last 365d' (All), or a custom range's length
+  const windowLabel = postureWindowLabel(range);
 
   const defenseCurrent = { score: data.defenseCurrentScore, pairCount: data.defensePairCount };
 
   const kpis: KpiCardProps[] = [
     {
-      label: `Defense score (${range})`,
+      label: `Defense score (${windowLabel})`,
       value: defenseCurrent.score != null ? `${defenseCurrent.score.toFixed(1)}%` : '—',
       sub: data.analyticsConfigured
-        ? postureCaption(defenseCurrent.pairCount, data.defenseDelta, range)
+        ? postureCaption(defenseCurrent.pairCount, data.defenseDelta, windowLabel)
         : 'not configured',
       title: POSTURE_HELP,
       icon: ShieldAlert,
@@ -161,21 +148,34 @@ export default function DashboardPage() {
         className="mb-0"
       >
         <div className="flex items-center gap-1" role="group" aria-label="Time range">
-          {DASHBOARD_RANGES.map((r) => (
-            <button
-              key={r}
-              onClick={() => setRange(r)}
-              aria-pressed={range === r}
-              className={cn(
-                'inline-flex h-7 items-center rounded-md border px-2.5 font-mono text-[11px] transition-colors',
-                range === r
-                  ? 'border-accent/25 bg-accent-dim text-accent'
-                  : 'border-border bg-raised text-muted hover:bg-overlay',
-              )}
+          {TIME_RANGE_PRESETS.map((preset) => {
+            const active = isSameTimeRange(range, { preset });
+            return (
+              <button
+                key={preset}
+                onClick={() => setRange({ preset })}
+                aria-pressed={active}
+                className={cn(
+                  'inline-flex h-7 items-center rounded-md border px-2.5 font-mono text-[11px] transition-colors',
+                  active
+                    ? 'border-accent/25 bg-accent-dim text-accent'
+                    : 'border-border bg-raised text-muted hover:bg-overlay',
+                )}
+              >
+                {timeRangeButtonLabel(preset)}
+              </button>
+            );
+          })}
+          {range.preset === 'custom' && (
+            // A custom range is set from the Analytics date picker; shown here so
+            // the Dashboard never silently uses a different window
+            <span
+              title={`${formatRangeDay(range.from)} – ${formatRangeDay(range.to)}`}
+              className="inline-flex h-7 items-center rounded-md border border-accent/25 bg-accent-dim px-2.5 font-mono text-[11px] text-accent"
             >
-              {r}
-            </button>
-          ))}
+              Custom
+            </span>
+          )}
         </div>
         <SyncChip
           branch={data.syncStatus?.branch}
@@ -204,7 +204,7 @@ export default function DashboardPage() {
             description={data.trendDescription}
             hasSecureScore={data.defenderConfigured}
             hasZtaScore={data.crowdstrikeConfigured && data.ztaScore != null}
-            rangeLabel={range}
+            rangeLabel={windowLabel.startsWith('last') ? windowLabel : `last ${windowLabel}`}
             loading={data.loading}
           />
         </div>

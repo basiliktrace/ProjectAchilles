@@ -29,6 +29,12 @@ import { useScoringMode } from '@/hooks/useScoringMode';
 import { usePolling } from '@/hooks/usePolling';
 import { formatUtcDay, utcDayKey } from '@/lib/utcDate';
 import { pickCurrentErrorRate, pickCurrentScore, seriesDelta } from '@/lib/posture';
+import {
+  DEFAULT_TIME_RANGE,
+  getDateRangeFilter,
+  timeRangeDays,
+  type DateRangeValue,
+} from '@/lib/timeRange';
 import { computeTestStats, type TestStats } from './computeTestStats';
 import { deriveAttentionItems } from './deriveAttentionItems';
 import type { AttentionItem } from './components/AttentionBanner';
@@ -39,19 +45,6 @@ import type { RecentExecution } from './components/RecentExecutionsCard';
 const TOP_CONTROLS = 5;
 const RECENT_TASKS = 6;
 const AGENT_POLL_MS = 15_000;
-
-/** Selectable dashboard time window; drives the analytics + Defender slices. */
-export type DashboardRange = '7d' | '30d' | '90d';
-export const DASHBOARD_RANGES: DashboardRange[] = ['7d', '30d', '90d'];
-export const DEFAULT_DASHBOARD_RANGE: DashboardRange = '90d';
-
-const RANGE_DAYS: Record<DashboardRange, number> = { '7d': 7, '30d': 30, '90d': 90 };
-
-export function normalizeDashboardRange(value: string | null): DashboardRange {
-  return (DASHBOARD_RANGES as string[]).includes(value ?? '')
-    ? (value as DashboardRange)
-    : DEFAULT_DASHBOARD_RANGE;
-}
 
 function settle<T>(result: PromiseSettledResult<T>): T | null {
   return result.status === 'fulfilled' ? result.value : null;
@@ -139,7 +132,10 @@ export interface DashboardData {
   crowdstrikeConfigured: boolean;
 }
 
-export function useDashboardData(range: DashboardRange = DEFAULT_DASHBOARD_RANGE): DashboardData {
+/** Time window shared with Analytics; drives the analytics + Defender + CrowdStrike slices. */
+export function useDashboardData(range: DateRangeValue = DEFAULT_TIME_RANGE): DashboardData {
+  // Primitive deps, so a new object for the same range doesn't refetch
+  const { preset, from: customFrom, to: customTo } = range;
   const { configured: analyticsConfigured, loading: analyticsAuthLoading } = useAnalyticsAuth();
   const { configured: defenderConfigured, loading: defenderConfigLoading } = useDefenderConfig();
   const { configured: crowdstrikeConfigured, loading: crowdstrikeConfigLoading } = useCrowdStrikeConfig();
@@ -190,33 +186,35 @@ export function useDashboardData(range: DashboardRange = DEFAULT_DASHBOARD_RANGE
   // Analytics slice — Elasticsearch queries, reloaded on mount/sync/range change.
   const loadAnalyticsData = useCallback(async () => {
     if (!analyticsConfigured) return;
-    const from = `now-${range}`;
+    const bounds = getDateRangeFilter({ preset, from: customFrom, to: customTo });
     const [dRange, d7, er, dTrend, eTrend] = await Promise.allSettled([
-      analyticsApi.getDefenseScore({ from, scoringMode, basis: 'latest' }),
+      analyticsApi.getDefenseScore({ ...bounds, scoringMode, basis: 'latest' }),
       analyticsApi.getDefenseScore({ from: 'now-7d', scoringMode }),
-      analyticsApi.getErrorRate({ from }),
-      analyticsApi.getDefenseScoreTrend({ from, interval: 'day', scoringMode, basis: 'latest' }),
-      analyticsApi.getErrorRateTrend({ from, interval: 'day' }),
+      analyticsApi.getErrorRate(bounds),
+      analyticsApi.getDefenseScoreTrend({ ...bounds, interval: 'day', scoringMode, basis: 'latest' }),
+      analyticsApi.getErrorRateTrend({ ...bounds, interval: 'day' }),
     ]);
     setDefenseScore(settle(dRange));
     setDefense7(settle(d7));
     setErrorRate(settle(er));
     setDefenseTrend(settle(dTrend));
     setErrorTrend(settle(eTrend));
-  }, [analyticsConfigured, scoringMode, range]);
+  }, [analyticsConfigured, scoringMode, preset, customFrom, customTo]);
+
+  const trendDays = timeRangeDays({ preset, from: customFrom, to: customTo });
 
   // Defender slice
   const loadDefenderData = useCallback(async () => {
     if (!defenderConfigured) return;
     const [score, trend, controls] = await Promise.allSettled([
       defenderApi.getSecureScore(),
-      defenderApi.getSecureScoreTrend(RANGE_DAYS[range]),
+      defenderApi.getSecureScoreTrend(trendDays),
       defenderApi.getControls({ deprecated: false }),
     ]);
     setSecureScore(settle(score));
     setSecureTrend(settle(trend));
     setRawControls(settle(controls));
-  }, [defenderConfigured, range]);
+  }, [defenderConfigured, trendDays]);
 
   // CrowdStrike slice — ZTA may be unlicensed (403); settle() nulls it out
   // and the rest of the dashboard is unaffected.
@@ -224,11 +222,11 @@ export function useDashboardData(range: DashboardRange = DEFAULT_DASHBOARD_RANGE
     if (!crowdstrikeConfigured) return;
     const [score, trend] = await Promise.allSettled([
       crowdstrikeApi.getZtaScore(),
-      crowdstrikeApi.getZtaScoreTrend(RANGE_DAYS[range]),
+      crowdstrikeApi.getZtaScoreTrend(trendDays),
     ]);
     setZtaScore(settle(score));
     setZtaTrend(settle(trend));
-  }, [crowdstrikeConfigured, range]);
+  }, [crowdstrikeConfigured, trendDays]);
 
   useEffect(() => {
     // Wait for config checks so we don't render "not configured" flashes

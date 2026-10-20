@@ -22,7 +22,7 @@ interface TrendOverviewChartProps {
   description: string;
   hasSecureScore: boolean;
   hasZtaScore?: boolean;
-  /** Selected time window label, e.g. "90d". */
+  /** Selected time window, e.g. "last 30d" or "last 365d". */
   rangeLabel: string;
   loading?: boolean;
 }
@@ -46,7 +46,7 @@ export function TrendOverviewChart({ data, description, hasSecureScore, hasZtaSc
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Trend overview — last {rangeLabel}</CardTitle>
+        <CardTitle>Trend overview — {rangeLabel}</CardTitle>
         <CardDescription>{description}</CardDescription>
       </CardHeader>
       <CardContent>

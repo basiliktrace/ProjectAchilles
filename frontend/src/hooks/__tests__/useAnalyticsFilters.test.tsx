@@ -1,5 +1,5 @@
 import React from 'react';
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import {
@@ -26,13 +26,16 @@ function wrapperWithParams(search: string) {
   );
 }
 
+// The date range is remembered in sessionStorage; start every test clean
+beforeEach(() => sessionStorage.clear());
+
 describe('useAnalyticsFilters', () => {
   describe('initialization', () => {
     it('has correct default state', () => {
       const { result } = renderHook(() => useAnalyticsFilters(), { wrapper });
 
       expect(result.current.filters.org).toBeNull();
-      expect(result.current.filters.dateRange).toEqual({ preset: '90d' });
+      expect(result.current.filters.dateRange).toEqual({ preset: '30d' });
       expect(result.current.filters.result).toBe('all');
       expect(result.current.filters.hostnames).toEqual([]);
       expect(result.current.filters.tests).toEqual([]);
@@ -183,7 +186,7 @@ describe('useAnalyticsFilters', () => {
       const { result } = renderHook(() => useAnalyticsFilters(), { wrapper });
 
       const params = result.current.getApiParams();
-      expect(params.from).toBe('now-90d');
+      expect(params.from).toBe('now-30d');
       expect(params.result).toBeUndefined(); // 'all' is omitted
       expect(params.org).toBeUndefined();
     });
@@ -240,7 +243,7 @@ describe('useAnalyticsFilters', () => {
 
       act(() => {
         result.current.setOrg('org-001');
-        result.current.setDateRange({ preset: '30d' });
+        result.current.setDateRange({ preset: '7d' });
         result.current.setResult('protected');
         result.current.setHostnames(['h1']);
       });
@@ -248,7 +251,7 @@ describe('useAnalyticsFilters', () => {
       act(() => result.current.clearAllFilters());
 
       expect(result.current.filters.org).toBeNull();
-      expect(result.current.filters.dateRange).toEqual({ preset: '90d' });
+      expect(result.current.filters.dateRange).toEqual({ preset: '30d' });
       expect(result.current.filters.result).toBe('all');
       expect(result.current.filters.hostnames).toEqual([]);
     });
@@ -286,7 +289,7 @@ describe('useAnalyticsFilters', () => {
 
       // With all defaults, getApiParams should return minimal params
       const params = result.current.getApiParams();
-      expect(params.from).toBe('now-90d');
+      expect(params.from).toBe('now-30d');
       expect(params.result).toBeUndefined();
       expect(params.hostnames).toBeUndefined();
     });
@@ -294,10 +297,43 @@ describe('useAnalyticsFilters', () => {
     it('non-default date range appears in serialized output', () => {
       const { result } = renderHook(() => useAnalyticsFilters(), { wrapper });
 
-      act(() => result.current.setDateRange({ preset: '30d' }));
+      act(() => result.current.setDateRange({ preset: '7d' }));
 
       const params = result.current.getApiParams();
-      expect(params.from).toBe('now-30d');
+      expect(params.from).toBe('now-7d');
+    });
+  });
+
+  describe('shared time range', () => {
+    it('remembers a date range change for the tab session', () => {
+      const first = renderHook(() => useAnalyticsFilters(), { wrapper });
+      act(() => first.result.current.setDateRange({ preset: '7d' }));
+      first.unmount();
+
+      // A later visit with no date in the URL opens on the remembered range
+      const second = renderHook(() => useAnalyticsFilters(), { wrapper });
+      expect(second.result.current.filters.dateRange).toEqual({ preset: '7d' });
+    });
+
+    it('opens on a range remembered from the Dashboard', () => {
+      sessionStorage.setItem('achilles.timeRange', JSON.stringify({ preset: 'all' }));
+      const { result } = renderHook(() => useAnalyticsFilters(), { wrapper });
+      expect(result.current.filters.dateRange).toEqual({ preset: 'all' });
+    });
+
+    it('lets a range in the URL win and become the remembered one', () => {
+      sessionStorage.setItem('achilles.timeRange', JSON.stringify({ preset: 'all' }));
+      const first = renderHook(() => useAnalyticsFilters(), { wrapper: wrapperWithParams('date=90d') });
+      expect(first.result.current.filters.dateRange).toEqual({ preset: '90d' });
+      first.unmount();
+
+      const second = renderHook(() => useAnalyticsFilters(), { wrapper });
+      expect(second.result.current.filters.dateRange).toEqual({ preset: '90d' });
+    });
+
+    it('ignores an unknown preset in the URL', () => {
+      const { result } = renderHook(() => useAnalyticsFilters(), { wrapper: wrapperWithParams('date=14d') });
+      expect(result.current.filters.dateRange).toEqual({ preset: '30d' });
     });
   });
 });
@@ -312,7 +348,7 @@ describe('report helpers', () => {
     expect(getDateRangeFilter({ preset: '30d' })).toEqual({ from: 'now-30d' });
     expect(getDateRangeFilter({ preset: 'custom', from: '2026-10-01T00:00:00.000Z', to: '2026-10-02T00:00:00.000Z' }))
       .toEqual({ from: '2026-10-01T00:00:00.000Z', to: '2026-10-02T00:00:00.000Z' });
-    expect(getDateRangeFilter({ preset: 'bogus' })).toEqual({ from: 'now-90d' });
+    expect(getDateRangeFilter({ preset: 'bogus' })).toEqual({ from: 'now-30d' });
   });
 
   it('round-trips filter state through URL params', () => {
@@ -323,7 +359,7 @@ describe('report helpers', () => {
   });
 
   it('defaults to the tab defaults for an empty query', () => {
-    expect(filtersFromSearchParams(new URLSearchParams('')).dateRange).toEqual({ preset: '90d' });
+    expect(filtersFromSearchParams(new URLSearchParams('')).dateRange).toEqual({ preset: '30d' });
   });
 
   it('builds the same API params the tab sends', () => {

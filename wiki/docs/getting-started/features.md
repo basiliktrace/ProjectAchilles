@@ -23,7 +23,8 @@ three separate module dashboards in 2.1.
   agents online, and executions in the window
 - **Trend overview**, **severity mix**, **ATT&CK coverage**, **category
   breakdown**, **fleet health**, and **recent executions**
-- **7d / 30d / 90d** range selector, defaulting to 90 days
+- **24h / 7d / 30d / 90d / All** range selector, defaulting to 30 days and
+  shared with Analytics
 - **Per-card degradation** — an unconfigured integration greys out its own card
   and offers a "Configure →" link; the dashboard never redirects you away
 

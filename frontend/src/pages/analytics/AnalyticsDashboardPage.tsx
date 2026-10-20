@@ -25,6 +25,7 @@ import ZtaScoreCard from './components/ZtaScoreCard';
 import TopControlsCard from './components/TopControlsCard';
 import { useAnalyticsFilters, serializeToUrlParams } from '@/hooks/useAnalyticsFilters';
 import { pickCurrentErrorRate, pickCurrentScore, postureWindowLabel, seriesDelta } from '@/lib/posture';
+import { timeRangeDays } from '@/lib/timeRange';
 import { useAnalyticsAuth } from '@/hooks/useAnalyticsAuth';
 import { useDefenderConfig } from '@/hooks/useDefenderConfig';
 import { useCrowdStrikeConfig } from '@/hooks/useCrowdStrikeConfig';
@@ -347,9 +348,7 @@ export default function AnalyticsDashboardPage() {
 
       // Conditionally load Defender summary for dashboard cards
       if (defenderConfigured) {
-        // Derive total days from date range preset for the trend API
-        const presetDaysMap: Record<string, number> = { '7d': 7, '14d': 14, '30d': 30, '90d': 90, 'all': 90 };
-        const trendDays = presetDaysMap[filterState.filters.dateRange.preset] ?? 90;
+        const trendDays = timeRangeDays(filterState.filters.dateRange);
 
         try {
           const [defScore, defTechniques, defTrend] = await Promise.all([
@@ -370,8 +369,7 @@ export default function AnalyticsDashboardPage() {
 
       // Conditionally load CrowdStrike summary for dashboard cards
       if (crowdstrikeConfigured) {
-        const presetDaysMap: Record<string, number> = { '7d': 7, '14d': 14, '30d': 30, '90d': 90, 'all': 90 };
-        const trendDays = presetDaysMap[filterState.filters.dateRange.preset] ?? 90;
+        const trendDays = timeRangeDays(filterState.filters.dateRange);
 
         try {
           const [csScore, csTechniques, csTrend] = await Promise.all([

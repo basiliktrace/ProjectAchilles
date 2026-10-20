@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { Calendar, X } from 'lucide-react';
+import { DEFAULT_TIME_RANGE, type DateRangeValue } from '@/lib/timeRange';
 
 interface DateRangeOption {
   label: string;
@@ -14,12 +15,6 @@ const DATE_RANGE_OPTIONS: DateRangeOption[] = [
   { label: 'All time', value: 'all' },
   { label: 'Custom range...', value: 'custom' },
 ];
-
-export interface DateRangeValue {
-  preset: string;
-  from?: string;  // ISO date string for custom range
-  to?: string;    // ISO date string for custom range
-}
 
 interface DateRangePickerProps {
   value: DateRangeValue;
@@ -59,7 +54,7 @@ export default function DateRangePicker({ value, onChange }: DateRangePickerProp
 
   const clearCustom = () => {
     setShowCustom(false);
-    onChange({ preset: '90d' });
+    onChange(DEFAULT_TIME_RANGE);
   };
 
   // Format dates for display
