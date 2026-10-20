@@ -2754,7 +2754,10 @@ export class ElasticsearchService {
 
   /** Technique distribution, basis=latest: a pair counts under each of its techniques. */
   async getTechniqueDistributionLatest(params: AnalyticsQueryParams & Partial<ExtendedAnalyticsQueryParams>): Promise<TechniqueDistributionItem[]> {
-    const pairs = await this.getLatestPairs(params);
+    // Always per-stage: an any-stage bundle pair carries one verdict for all
+    // of its techniques, which would mark a technique protected even when its
+    // own stage got through. Per-control pairs score each technique honestly.
+    const pairs = await this.getLatestPairs({ ...params, scoringMode: 'all-stages' });
     const items: TechniqueDistributionItem[] = [];
     for (const [technique, s] of groupPairs(pairs, p => (p.techniques.length > 0 ? p.techniques : undefined))) {
       items.push({ technique, protected: s.protectedCount, unprotected: s.pairCount - s.protectedCount });
