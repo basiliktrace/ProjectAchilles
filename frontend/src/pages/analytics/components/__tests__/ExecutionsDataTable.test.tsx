@@ -1102,6 +1102,21 @@ describe('ExecutionsDataTable — re-fired alert annotation (resolution watermar
   });
 });
 
+describe('ExecutionsDataTable — narrow-screen layout contract', () => {
+  // jsdom cannot measure layout, so this pins the classes that keep the
+  // attack-chain strip scrolling inside the panel below lg: a lone implicit
+  // `auto` grid column grows to the strip's min-content width instead
+  // (measured 562px vs 343px at 375px in headless Chromium).
+  it('gives the master-detail grid a shrinkable column below lg and keeps the lg template', () => {
+    getAlertsForTestMock.mockResolvedValue({ alerts: [], matchedTechniques: [], total: 0 });
+    renderTable(makeData([makeStage({}), makeStage({ control_id: 'T1562.001' })], { defenderDetected: false }));
+    const grid = screen.getByRole('listbox').closest('.grid');
+    expect(grid).toHaveClass('grid-cols-[minmax(0,1fr)]', 'lg:grid-cols-[minmax(0,5fr)_minmax(0,7fr)]');
+    const panel = screen.getByRole('region', { name: 'Run summary' }).parentElement;
+    expect(panel).toHaveClass('min-w-0');
+  });
+});
+
 describe('ExecutionsDataTable — execution report link', () => {
   it('opens the print report in a new tab when reportHref is provided', () => {
     getAlertsForTestMock.mockResolvedValue({ alerts: [], matchedTechniques: [], total: 0 });

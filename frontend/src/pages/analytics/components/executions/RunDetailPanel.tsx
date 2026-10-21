@@ -240,7 +240,8 @@ export function RunDetailPanel(props: RunDetailPanelProps) {
   const runComplexity = stageRun ? runField(stageRun.controls, 'complexity') : undefined;
 
   return (
-    <div className="rounded-lg border border-border bg-surface">
+    // min-w-0: a grid/flex item must be allowed to shrink below the strip's width.
+    <div className="min-w-0 rounded-lg border border-border bg-surface">
       <div role="region" aria-label="Run summary">
         {/* Header */}
         <div className="border-b border-border p-4">
