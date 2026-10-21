@@ -69,19 +69,22 @@ degrades one card rather than the page:
 **Testing cadence** — how recently and how often you are testing. It uses a
 fixed recent window and ignores the range selector.
 
-- 14 daily bars: protected, got through, and inconclusive, counted per result
-  document
+- 14 daily bars (UTC days): protected, got through, and inconclusive, counted
+  per result document. Skipped stages of a chain that was stopped early, and
+  upload confirmations, are not counted
 - A "last run Nd ago" chip, measured over all time. It turns warning at 2 to 7
   days and danger above 7 days
 - Endpoints tested in the last 7 days, out of enrolled agents
 - Tasks in the last 24 hours: done, failed, and running
-- The next scheduled run. It is hidden for roles that cannot read schedules
+- The next scheduled run. It is hidden for roles that cannot read schedules,
+  and schedules whose next run time has already passed are ignored
 
 **Threat actor readiness** — follows the shared range. For each adversary it
 shows the share of protected test × endpoint pairs (latest result, any-stage,
 like the Defense Score). The worst actors come first, up to seven. An actor
-below 80% is marked **exposed**. "Not tested in `<range>`" lists intel-driven
-library actors with no results (the first six, then "+N more").
+below 80% is marked **exposed**. "Not tested in `<range>`" ("Never tested" when
+the range is All) lists intel-driven library actors with no results (the first
+six, then "+N more").
 
 **ATT&CK outcome matrix** — twelve tactic columns, Initial Access to Impact.
 Each technique is a cell under its real ATT&CK tactic (or tactics). Colour is
@@ -106,8 +109,9 @@ executions master-detail view.
 ## Degradation, not redirects
 
 Every card fetches independently. If Elasticsearch is unconfigured, the
-analytics cards show a "Configure →" link to Settings while the library and
-fleet cards keep working. The dashboard never redirects you away — that was the
+analytics KPIs read "not configured", and the testing cadence, threat actor and
+ATT&CK cards show "Connect Elasticsearch" with a "Set up analytics →" link to
+Settings, while the library and fleet cards keep working. The dashboard never redirects you away — that was the
 main complaint about the old per-module dashboards.
 
 ## Related

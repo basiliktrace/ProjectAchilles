@@ -234,7 +234,7 @@ Accepts the shared filter parameters. Returns one entry per technique with `prot
 GET /api/analytics/chain-depth
 ```
 
-Accepts the shared filter parameters. For each multi-stage (non-cyber-hygiene) chain, it takes the latest run on each host and reports the stage where it was blocked. Response fields: `chains`, `buckets` (`[{ stage, blocked, alertedNotBlocked, bundleNames }]`), `endToEnd`, `endToEndAlerted`, `endToEndBundleNames`, and `inconclusive`. Chains whose latest run had a stage error or a pre-execution block are counted in `inconclusive` only. It assumes chains stop at the first blocked stage, with later stages ingested as Skipped.
+Accepts the shared filter parameters. For each multi-stage (non-cyber-hygiene) chain, it takes the latest run on each host and reports the stage where it was blocked. Response fields: `chains`, `buckets` (`[{ stage, blocked, alertedNotBlocked, bundleNames }]`), `endToEnd`, `endToEndAlerted`, `endToEndBundleNames`, and `inconclusive`. There are always four buckets, `stage` 1, 2, 3 and 4, where 4 means "4+" (blocked at stage 4 or later). `alertedNotBlocked` counts the bucket's chains where an EDR (Defender or CrowdStrike) detected a stage without blocking it. `endToEndAlerted` has the same alerted-not-blocked meaning for the chains that ran end to end. Chains whose latest run had a stage error or a pre-execution block are counted in `inconclusive` only. It assumes chains stop at the first blocked stage, with later stages ingested as Skipped.
 
 ### Execution Activity
 
@@ -242,7 +242,9 @@ Accepts the shared filter parameters. For each multi-stage (non-cyber-hygiene) c
 GET /api/analytics/execution-activity?days=14
 ```
 
-Takes the organization and `days` (1 to 90, default 14); it does not use the shared filters. Returns `days[]` (daily protected, got-through and inconclusive counts per result document), `lastExecutionAt` (all time), `executions7d`, `protectedPct7d` and `endpointsTested7d`. It feeds the testing cadence card.
+Takes the organization and `days` (1 to 90, default 14); it does not use the shared filters. Returns `days[]` (daily protected, got-through and inconclusive counts per result document, one entry per UTC day, zero-filled), `lastExecutionAt` (all time), `executions7d`, `protectedPct7d` and `endpointsTested7d`. It feeds the testing cadence card.
+
+Only real test results are counted: upload confirmations (exit 200) and Skipped bundle stages (exit 0 on a bundle-control document) are left out everywhere, including `lastExecutionAt`. Protected means conclusive and blocked or detected; got through means conclusive and not protected; anything else is inconclusive. The `*7d` numbers cover the last 7 UTC days including today, the same days as the last seven bars.
 
 ### Counts and Catalogs
 
