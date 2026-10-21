@@ -278,6 +278,8 @@ export interface ChainDepthResponse {
   endToEnd: number;
   endToEndAlerted: number;
   endToEndBundleNames: string[];
+  /** Latest run had an errored / pre-execution-blocked stage: in no row. */
+  inconclusive: number;
 }
 
 export interface ExecutionActivityDay {

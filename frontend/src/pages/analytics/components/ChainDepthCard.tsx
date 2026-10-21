@@ -81,7 +81,7 @@ function ChainDepthCard({ data, loading, onRowClick }: ChainDepthCardProps) {
       </Frame>
     );
   }
-  if (data.chains === 0) {
+  if (data.chains === 0 && data.inconclusive === 0) {
     return (
       <Frame>
         <CardContent className="flex h-40 items-center justify-center text-sm text-faint">
@@ -157,6 +157,11 @@ function ChainDepthCard({ data, loading, onRowClick }: ChainDepthCardProps) {
               EDR alerted earlier, didn't block
             </span>
           </div>
+          {data.inconclusive > 0 && (
+            <span>
+              {`${chainCount(data.inconclusive)} inconclusive — a stage errored or was blocked before it ran — not shown`}
+            </span>
+          )}
           <span>Follows the filter bar — pick an actor to see how far its chains get. Click a row for those runs.</span>
         </div>
       </CardContent>

@@ -346,6 +346,7 @@ export interface ChainDepthResponse {
   endToEnd: number;              // chains no stage blocked
   endToEndAlerted: number;       // of those, some stage was detected
   endToEndBundleNames: string[];
+  inconclusive: number;          // chains whose latest run had an errored / pre-execution-blocked stage; in no bucket
 }
 
 // Defense score by hostname item

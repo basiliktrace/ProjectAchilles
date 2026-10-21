@@ -154,6 +154,26 @@ function isChainRun(run: PairRun): run is ChainRun {
   return typeof (run as Partial<ChainRun>).stagesRun === 'number';
 }
 
+/** Pair key of an any-stage bundle pair: one per (oid, bundle_id, hostname). */
+function bundlePairKey(oid: unknown, bundleId: string, hostname: string): string {
+  return `${oid ?? ''}|bundle:${bundleId}|${hostname}`;
+}
+
+/**
+ * Everything that shapes a basis=latest fetch, resolved once per request so
+ * every query behind one answer uses the exact same clauses.
+ */
+interface PostureScope {
+  window: PostureWindow;
+  outcome: OutcomeFilters;
+  isAnyStage: boolean;
+  org: string | undefined;
+  clauses: any[];
+  exclusionFilter: unknown;
+  /** Cache-key fields shared by every latest-basis fetch. */
+  keyBase: Record<string, unknown>;
+}
+
 interface PostureShapeSpec extends PairFetchOptions {
   /** Widen the lower bound by one freshness window (series lookback). */
   lookback: boolean;
@@ -962,6 +982,35 @@ export class ElasticsearchService {
   private readonly PAIR_OID_SOURCE = { oid: { terms: { field: 'routing.oid', missing_bucket: true } } };
   // No missing_bucket on hostname: docs without routing.hostname form no pairs.
   private readonly PAIR_HOST_SOURCE = { host: { terms: { field: 'routing.hostname' } } };
+  /**
+   * Composite sources of one any-stage bundle run. Every control of one run
+   * shares routing.event_time (= result.completed_at), so the exact timestamp
+   * isolates a run.
+   */
+  private readonly BUNDLE_RUN_SOURCES = [
+    this.PAIR_OID_SOURCE,
+    { bundle: { terms: { field: 'f0rtika.bundle_id' } } },
+    this.PAIR_HOST_SOURCE,
+    { ts: { terms: { field: 'routing.event_time' } } },
+  ];
+
+  /**
+   * Bundle-stage codes that do NOT make a chain run inconclusive: conclusive
+   * outcomes, Skipped (0) and the upload confirmation (200). Anything else on
+   * a stage (999 error, 260 ASR blocked pre-execution, ...) means the chain
+   * neither ran end to end nor was blocked by a defense at that stage.
+   */
+  private readonly CHAIN_SETTLED_CODES = [0, 101, 105, 126, 127, 200];
+
+  /** Latest inconclusive bundle run per pair (chain depth), cached like the posture snapshots. */
+  private readonly inconclusiveCache = new TtlPromiseCache<Map<string, number>>({
+    ttlMs: POSTURE_CACHE_OPTIONS.ttlMs,
+    maxEntries: POSTURE_CACHE_OPTIONS.maxEntries,
+    maxEntryWeight: POSTURE_CACHE_OPTIONS.maxEntryWeight,
+    maxTotalWeight: POSTURE_CACHE_OPTIONS.maxTotalWeight,
+    weigh: (m) => m.size,
+  });
+
   private readonly PAIR_DAY_SOURCE = {
     day: { date_histogram: { field: 'routing.event_time', calendar_interval: 'day', time_zone: 'UTC' } },
   };
@@ -998,7 +1047,7 @@ export class ElasticsearchService {
         aggs: {
           [aggName]: {
             composite: { size: pageSize, sources, ...(after ? { after } : {}) },
-            aggs: subAggs,
+            ...(Object.keys(subAggs).length > 0 ? { aggs: subAggs } : {}),
           },
         },
       } as any);
@@ -1156,14 +1205,7 @@ export class ElasticsearchService {
       filters,
       'bundle_runs',
       this.BUNDLE_RUN_PAGE_SIZE,
-      [
-        this.PAIR_OID_SOURCE,
-        { bundle: { terms: { field: 'f0rtika.bundle_id' } } },
-        this.PAIR_HOST_SOURCE,
-        // Every control of one bundle run shares routing.event_time
-        // (= result.completed_at), so the exact timestamp isolates a run.
-        { ts: { terms: { field: 'routing.event_time' } } },
-      ],
+      this.BUNDLE_RUN_SOURCES,
       {
         combined: this.buildDetectedFilter(),
         strict: { filter: { term: { 'f0rtika.is_protected': true } } },
@@ -1194,7 +1236,7 @@ export class ElasticsearchService {
           .sort((x, y) => x - y);
         const storedNames = ((b.names?.buckets ?? []) as any[]).map(n => String(n.key));
         const run: ChainRun = {
-          pairKey: `${b.key.oid ?? ''}|bundle:${bundleId}|${hostname}`,
+          pairKey: bundlePairKey(b.key.oid, bundleId, hostname),
           ts,
           protected: (b.combined?.doc_count ?? 0) > 0,
           strictProtected: (b.strict?.doc_count ?? 0) > 0,
@@ -1328,28 +1370,109 @@ export class ElasticsearchService {
     params: AnalyticsQueryParams & Partial<ExtendedAnalyticsQueryParams>,
     shape: PostureShape,
   ): Promise<PostureSnapshot & { outcome: OutcomeFilters }> {
+    return this.latestPostureFor(await this.resolvePostureScope(params), shape);
+  }
+
+  /** Window, filter-bar clauses and risk-acceptance exclusion of a latest-basis request. */
+  private async resolvePostureScope(
+    params: AnalyticsQueryParams & Partial<ExtendedAnalyticsQueryParams>,
+  ): Promise<PostureScope> {
     const window = this.resolveLatestWindow(params); // 400 before any ES call
     const outcome = this.parseOutcomeFilters(params);
     const isAnyStage = params.scoringMode === 'any-stage';
     const clauses = this.buildFilterBarClauses(params, { excludeOutcome: true });
     const exclusionFilter: unknown = (await this.getRiskAcceptanceService().buildExclusionFilter(params.org)) ?? null;
-    const spec = POSTURE_SHAPES[shape];
-
-    const key = JSON.stringify({
-      index: this.settings.indexPattern,
-      from: params.from || null,
-      to: params.to || null,
-      scoringMode: isAnyStage ? 'any-stage' : 'all-stages',
-      org: params.org || null,
+    return {
+      window,
+      outcome,
+      isAnyStage,
+      org: params.org,
       clauses,
-      exclusion: exclusionFilter,
+      exclusionFilter,
+      keyBase: {
+        index: this.settings.indexPattern,
+        from: params.from || null,
+        to: params.to || null,
+        org: params.org || null,
+        clauses,
+        exclusion: exclusionFilter,
+      },
+    };
+  }
+
+  private async latestPostureFor(
+    scope: PostureScope,
+    shape: PostureShape,
+  ): Promise<PostureSnapshot & { outcome: OutcomeFilters }> {
+    const spec = POSTURE_SHAPES[shape];
+    const key = JSON.stringify({
+      ...scope.keyBase,
+      scoringMode: scope.isAnyStage ? 'any-stage' : 'all-stages',
       shape,
       ...spec,
     });
     const snapshot = await this.postureCache.get(key, () =>
-      this.fetchPostureSnapshot(window, params.org, clauses, exclusionFilter, isAnyStage, spec),
+      this.fetchPostureSnapshot(scope.window, scope.org, scope.clauses, scope.exclusionFilter, scope.isAnyStage, spec),
     );
-    return { ...snapshot, outcome };
+    return { ...snapshot, outcome: scope.outcome };
+  }
+
+  /**
+   * Base filters of a latest-basis fetch, in one place so the posture
+   * snapshot and the chain-depth inconclusive pass can't drift apart: test
+   * data, [lowerMs, toMs], the code clause, org, filter-bar clauses.
+   */
+  private buildPostureFilters(lowerMs: number, toMs: number, codeFilter: any, org: string | undefined, clauses: any[]): any[] {
+    const filters: any[] = [
+      this.buildTestDataFilter(),
+      {
+        range: {
+          'routing.event_time': {
+            gte: new Date(lowerMs).toISOString(),
+            lte: new Date(toMs).toISOString(),
+          },
+        },
+      },
+      codeFilter,
+    ];
+    const orgFilter = this.buildOrgFilter(org);
+    if (orgFilter) filters.push(orgFilter);
+    filters.push(...clauses);
+    return filters;
+  }
+
+  /** Latest inconclusive bundle run per any-stage pair, served from its own short cache. */
+  private getBundleInconclusiveRuns(scope: PostureScope): Promise<Map<string, number>> {
+    const key = JSON.stringify({ ...scope.keyBase, kind: 'bundle-inconclusive' });
+    return this.inconclusiveCache.get(key, () => this.fetchBundleInconclusiveRuns(scope));
+  }
+
+  /**
+   * pairKey -> newest event_time of a non-cyber-hygiene bundle run in the
+   * freshness window that has a stage which is neither conclusive nor Skipped
+   * (e.g. 999 error, 260 ASR blocked pre-execution). Same window, org,
+   * filter-bar and risk-acceptance clauses as the posture snapshot; no
+   * sub-aggregations, so pages can be PAIR_PAGE_SIZE.
+   */
+  private async fetchBundleInconclusiveRuns(scope: PostureScope): Promise<Map<string, number>> {
+    const filters = this.buildPostureFilters(
+      scope.window.fromMs,
+      scope.window.toMs,
+      { bool: { must_not: [{ terms: { 'event.ERROR': this.CHAIN_SETTLED_CODES } }] } },
+      scope.org,
+      scope.clauses,
+    );
+    filters.push({ exists: { field: 'event.ERROR' } }, this.PER_BUNDLE_FILTER);
+    if (scope.exclusionFilter) filters.push(scope.exclusionFilter);
+    const latest = new Map<string, number>();
+    await this.paginateComposite(filters, 'bundle_inconclusive', this.PAIR_PAGE_SIZE, this.BUNDLE_RUN_SOURCES, {}, (b) => {
+      const ts = parseEsTime(b.key?.ts);
+      if (!Number.isFinite(ts)) return;
+      const key = bundlePairKey(b.key.oid, String(b.key.bundle), String(b.key.host));
+      const cur = latest.get(key);
+      if (cur === undefined || ts > cur) latest.set(key, ts);
+    });
+    return latest;
   }
 
   private async fetchPostureSnapshot(
@@ -1361,21 +1484,7 @@ export class ElasticsearchService {
     spec: PostureShapeSpec,
   ): Promise<PostureSnapshot> {
     const lowerMs = spec.lookback ? window.fromMs - window.freshnessMs : window.fromMs;
-    const filters: any[] = [
-      this.buildTestDataFilter(),
-      {
-        range: {
-          'routing.event_time': {
-            gte: new Date(lowerMs).toISOString(),
-            lte: new Date(window.toMs).toISOString(),
-          },
-        },
-      },
-      this.buildConclusiveResultsFilter(),
-    ];
-    const orgFilter = this.buildOrgFilter(org);
-    if (orgFilter) filters.push(orgFilter);
-    filters.push(...clauses);
+    const filters = this.buildPostureFilters(lowerMs, window.toMs, this.buildConclusiveResultsFilter(), org, clauses);
 
     const fetchOpts: PairFetchOptions = { withMetadata: spec.withMetadata, latestOnly: spec.latestOnly };
     if (!exclusionFilter) {
@@ -2901,16 +3010,42 @@ export class ElasticsearchService {
    * A detection without a block doesn't stop a chain. Stages carry no order,
    * so alertedNotBlocked is "a detected stage other than the blocking one",
    * which, because the chain stopped at the block, is an earlier stage.
+   * A run with a stage that is neither conclusive nor Skipped (999 error, 260
+   * ASR blocked pre-execution) also stops the chain, but not because a
+   * defense blocked that stage: when such a run is the pair's latest (its
+   * time >= the latest conclusive run's), the pair is `inconclusive` and in
+   * no bucket. That also covers a newest run that errored at stage 1, which
+   * has no conclusive docs and would otherwise leave an older run standing.
+   * Inconclusive pairs are counted only when the outcome filters let
+   * inconclusive results through (no result=protected|unprotected, no
+   * errorCodes/errorNames: their codes aren't fetched).
    */
   async getChainDepth(params: AnalyticsQueryParams & Partial<ExtendedAnalyticsQueryParams>): Promise<ChainDepthResponse> {
-    const pairs = await this.getLatestPairs({ ...params, scoringMode: 'any-stage' });
+    const scope = await this.resolvePostureScope({ ...params, scoringMode: 'any-stage' });
+    const [{ window, runs, outcome }, inconclusiveRuns] = await Promise.all([
+      this.latestPostureFor(scope, 'metadata'),
+      this.getBundleInconclusiveRuns(scope),
+    ]);
+
+    const inconclusiveKeys = new Set(inconclusiveRuns.keys());
+    const settled: PairRun[] = [];
+    for (const p of latestPairsAsOf(runs, window.toMs, window.freshnessMs)) {
+      if (!isChainRun(p)) continue;
+      const erroredTs = inconclusiveRuns.get(p.pairKey);
+      if (erroredTs !== undefined && erroredTs >= p.ts) continue; // latest run is inconclusive
+      inconclusiveKeys.delete(p.pairKey);
+      settled.push(p);
+    }
+    const result = outcome.result ?? 'all';
+    const showInconclusive = (result === 'all' || result === 'inconclusive') && !outcome.errorCodes && !outcome.errorNames;
+
     const stages = [1, 2, 3, 4] as const;
     const buckets = stages.map(stage => ({ stage, blocked: 0, alertedNotBlocked: 0, names: new Set<string>() }));
     const endToEndNames = new Set<string>();
     let chains = 0;
     let endToEnd = 0;
     let endToEndAlerted = 0;
-    for (const p of pairs) {
+    for (const p of applyOutcomeFilters(settled, outcome)) {
       if (!isChainRun(p)) continue;
       chains++;
       if (p.strictProtected) {
@@ -2936,6 +3071,7 @@ export class ElasticsearchService {
       endToEnd,
       endToEndAlerted,
       endToEndBundleNames: sorted(endToEndNames),
+      inconclusive: showInconclusive ? inconclusiveKeys.size : 0,
     };
   }
 

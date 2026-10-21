@@ -2307,10 +2307,11 @@ describe('elasticsearch.ts', () => {
     type Meta = Record<string, { name: string; category?: string; subcategory?: string; techniques?: string[]; threatActor?: string }>;
 
     /** Dispatch mockSearch by aggregation name so parallel query order doesn't matter. */
-    function routeSearch(opts: { pairPages?: unknown[][]; bundlePages?: unknown[][]; meta?: Meta; bundleMeta?: Meta; rawPairPages?: unknown[][] }) {
+    function routeSearch(opts: { pairPages?: unknown[][]; bundlePages?: unknown[][]; meta?: Meta; bundleMeta?: Meta; rawPairPages?: unknown[][]; inconclusivePages?: unknown[][] }) {
       const adjusted = [...(opts.pairPages ?? [[]])];
       const raw = opts.rawPairPages ? [...opts.rawPairPages] : null;
       const bundles = [...(opts.bundlePages ?? [[]])];
+      const inconclusive = [...(opts.inconclusivePages ?? [[]])];
       mockSearch.mockImplementation(async (req: any) => {
         const page = (pages: unknown[][]) => {
           const p = (pages.shift() ?? []) as any[];
@@ -2321,6 +2322,7 @@ describe('elasticsearch.ts', () => {
           return esSearchResponse({ aggs: { pairs: page(isRaw ? raw! : adjusted) } });
         }
         if (req.aggs?.bundle_runs) return esSearchResponse({ aggs: { bundle_runs: page(bundles) } });
+        if (req.aggs?.bundle_inconclusive) return esSearchResponse({ aggs: { bundle_inconclusive: page(inconclusive) } });
         if (req.aggs?.test_meta) {
           return esSearchResponse({
             aggs: {
@@ -3070,7 +3072,7 @@ describe('elasticsearch.ts', () => {
           bundleMeta: { b1: { name: 'Chain One' } },
         });
         const res = await createService().getChainDepth(params);
-        expect(res).toEqual({ chains: 1, buckets: emptyBuckets, endToEnd: 1, endToEndAlerted: 0, endToEndBundleNames: ['Chain One'] });
+        expect(res).toEqual({ chains: 1, buckets: emptyBuckets, endToEnd: 1, endToEndAlerted: 0, endToEndBundleNames: ['Chain One'], inconclusive: 0 });
       });
 
       it('a detection-only stage does not stop the chain: end to end, alerted', async () => {
@@ -3139,7 +3141,7 @@ describe('elasticsearch.ts', () => {
           meta: { 'standalone-1': { name: 'Standalone' }, 'ch-bundle::CH-DEF-001': { name: 'Defender on', category: 'cyber-hygiene' } },
         });
         const res = await createService().getChainDepth(params);
-        expect(res).toEqual({ chains: 0, buckets: emptyBuckets, endToEnd: 0, endToEndAlerted: 0, endToEndBundleNames: [] });
+        expect(res).toEqual({ chains: 0, buckets: emptyBuckets, endToEnd: 0, endToEndAlerted: 0, endToEndBundleNames: [], inconclusive: 0 });
         // Chains come from the non-cyber-hygiene bundle composite only.
         const bundleQuery = searchesWith('bundle_runs')[0];
         expect(bundleQuery.query.bool.filter).toContainEqual((createService() as any).PER_BUNDLE_FILTER);
@@ -3168,6 +3170,119 @@ describe('elasticsearch.ts', () => {
               must_not: [{ term: { 'f0rtika.is_protected': true } }],
             },
           },
+        });
+      });
+
+      /** A run with a non-conclusive, non-skipped stage (999 error, 260 ASR pre-execution block…). */
+      function errored(r: { bundle: string; host: string; ts: string; oid?: string }) {
+        return { key: { oid: r.oid ?? 'org-a', bundle: r.bundle, host: r.host, ts: Date.parse(r.ts) }, doc_count: 1 };
+      }
+
+      describe('inconclusive chains (R8)', () => {
+        it('stage 1 = 101, stage 2 = 999 (error): inconclusive, not end to end', async () => {
+          routeSearch({
+            bundlePages: [[chain({ bundle: 'b1', host: 'h1', ts: '2025-01-20T09:00:00Z', stagesRun: 1 })]],
+            inconclusivePages: [[errored({ bundle: 'b1', host: 'h1', ts: '2025-01-20T09:00:00Z' })]],
+            bundleMeta: { b1: { name: 'Chain One' } },
+          });
+          const res = await createService().getChainDepth(params);
+          expect(res).toEqual({ chains: 0, buckets: emptyBuckets, endToEnd: 0, endToEndAlerted: 0, endToEndBundleNames: [], inconclusive: 1 });
+        });
+
+        it('stage 1 = 101, stage 2 = 260 (ASR blocked pre-execution): inconclusive, not end to end', async () => {
+          // ES side: 260 is outside the excluded codes, so the stage doc matches the
+          // inconclusive composite (asserted on the query body below and against live ES).
+          routeSearch({
+            bundlePages: [[chain({ bundle: 'b1', host: 'h1', ts: '2025-01-20T09:00:00Z', stagesRun: 1 })]],
+            inconclusivePages: [[errored({ bundle: 'b1', host: 'h1', ts: '2025-01-20T09:00:00Z' })]],
+            bundleMeta: { b1: { name: 'Chain One' } },
+          });
+          const res = await createService().getChainDepth(params);
+          expect(res.endToEnd).toBe(0);
+          expect(res.inconclusive).toBe(1);
+          const filters = searchesWith('bundle_inconclusive')[0].query.bool.filter;
+          expect(JSON.stringify(filters)).not.toContain('260');
+        });
+
+        it('a newer run that errored at stage 1 supersedes the older conclusive run', async () => {
+          routeSearch({
+            bundlePages: [[chain({ bundle: 'b1', host: 'h1', ts: '2025-01-10T09:00:00Z', stagesRun: 1, blocked: true })]],
+            inconclusivePages: [[errored({ bundle: 'b1', host: 'h1', ts: '2025-01-20T09:00:00Z' })]],
+            bundleMeta: { b1: { name: 'Chain One' } },
+          });
+          const res = await createService().getChainDepth(params);
+          expect(res.buckets[0].blocked).toBe(0);
+          expect(res.chains).toBe(0);
+          expect(res.inconclusive).toBe(1);
+        });
+
+        it('an older errored run does not touch a newer conclusive run', async () => {
+          routeSearch({
+            bundlePages: [[chain({ bundle: 'b1', host: 'h1', ts: '2025-01-20T09:00:00Z', stagesRun: 2, blocked: true })]],
+            inconclusivePages: [[errored({ bundle: 'b1', host: 'h1', ts: '2025-01-10T09:00:00Z' })]],
+            bundleMeta: { b1: { name: 'Chain One' } },
+          });
+          const res = await createService().getChainDepth(params);
+          expect(res.buckets[1].blocked).toBe(1);
+          expect(res.inconclusive).toBe(0);
+        });
+
+        it('counts each (org, bundle, host) once, however many errored runs it has', async () => {
+          routeSearch({
+            bundlePages: [[]],
+            inconclusivePages: [[
+              errored({ bundle: 'b1', host: 'h1', ts: '2025-01-10T09:00:00Z' }),
+              errored({ bundle: 'b1', host: 'h1', ts: '2025-01-20T09:00:00Z' }),
+              errored({ bundle: 'b1', host: 'h2', ts: '2025-01-20T09:00:00Z' }),
+              errored({ bundle: 'b1', host: 'h1', ts: '2025-01-20T09:00:00Z', oid: 'org-b' }),
+            ]],
+          });
+          const res = await createService().getChainDepth(params);
+          expect(res.inconclusive).toBe(3);
+        });
+
+        it('the inconclusive composite uses the snapshot filters, non-CH bundles and the not-conclusive-not-skipped codes', async () => {
+          routeSearch({ bundlePages: [[]] });
+          const svc = createService();
+          const exclusion = { bool: { must_not: [{ term: { 'f0rtika.test_name': 'excluded-test' } }] } };
+          (svc as any).getRiskAcceptanceService().buildExclusionFilter.mockResolvedValue(exclusion);
+          await svc.getChainDepth({ ...params, org: 'org-a', threatActors: 'APT29' });
+          const req = searchesWith('bundle_inconclusive')[0];
+          const filters = req.query.bool.filter;
+          expect(filters).toContainEqual((createService() as any).PER_BUNDLE_FILTER);
+          expect(filters).toContainEqual({ exists: { field: 'event.ERROR' } });
+          expect(filters).toContainEqual({ term: { 'routing.oid': 'org-a' } });
+          expect(filters).toContainEqual(exclusion);
+          expect(filters).toContainEqual({ range: { 'routing.event_time': { gte: '2025-01-01T00:00:00.000Z', lte: '2025-01-31T00:00:00.000Z' } } });
+          expect(JSON.stringify(filters)).toContain('APT29');
+          expect(JSON.stringify(filters)).not.toContain('"event.ERROR":[101');
+          expect(filters).toContainEqual({ bool: { must_not: [{ terms: { 'event.ERROR': [0, 101, 105, 126, 127, 200] } }] } });
+          expect(req.aggs.bundle_inconclusive.composite.sources).toEqual([
+            { oid: { terms: { field: 'routing.oid', missing_bucket: true } } },
+            { bundle: { terms: { field: 'f0rtika.bundle_id' } } },
+            { host: { terms: { field: 'routing.hostname' } } },
+            { ts: { terms: { field: 'routing.event_time' } } },
+          ]);
+          expect(req.aggs.bundle_inconclusive.composite.size).toBe(10000);
+          expect(req.aggs.bundle_inconclusive.aggs).toBeUndefined();
+        });
+
+        it('result=protected|unprotected shows no inconclusive chains; a superseded pair still stays out', async () => {
+          routeSearch({
+            bundlePages: [[chain({ bundle: 'b1', host: 'h1', ts: '2025-01-10T09:00:00Z', stagesRun: 3 })]],
+            inconclusivePages: [[errored({ bundle: 'b1', host: 'h1', ts: '2025-01-20T09:00:00Z' })]],
+            bundleMeta: { b1: { name: 'Chain One' } },
+          });
+          const res = await createService().getChainDepth({ ...params, result: 'unprotected' });
+          expect(res).toMatchObject({ chains: 0, endToEnd: 0, inconclusive: 0 });
+        });
+
+        it('a repeated request is served from the cache', async () => {
+          routeSearch({ bundlePages: [[]] });
+          const svc = createService();
+          await svc.getChainDepth(params);
+          await svc.getChainDepth(params);
+          expect(searchesWith('bundle_inconclusive')).toHaveLength(1);
         });
       });
 

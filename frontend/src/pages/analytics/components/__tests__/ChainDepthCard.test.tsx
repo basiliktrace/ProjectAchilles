@@ -15,6 +15,7 @@ const data: ChainDepthResponse = {
   endToEnd: 3,
   endToEndAlerted: 1,
   endToEndBundleNames: ['APT29 Chain', 'FIN7 Chain'],
+  inconclusive: 0,
 };
 
 describe('ChainDepthCard', () => {
@@ -83,11 +84,44 @@ describe('ChainDepthCard', () => {
           endToEnd: 0,
           endToEndAlerted: 0,
           endToEndBundleNames: [],
+          inconclusive: 0,
         }}
       />,
     );
     expect(screen.getByText('No multi-stage chains in this window')).toBeInTheDocument();
     expect(screen.queryAllByRole('button')).toHaveLength(0);
+  });
+
+  it('notes inconclusive chains in the footer and keeps them out of the rows', () => {
+    render(<ChainDepthCard data={{ ...data, inconclusive: 2 }} />);
+    expect(
+      screen.getByText('2 chains inconclusive — a stage errored or was blocked before it ran — not shown'),
+    ).toBeInTheDocument();
+    expect(screen.getByText('8 chains')).toBeInTheDocument();
+  });
+
+  it('with only inconclusive chains it shows the footer, not the empty state', () => {
+    render(
+      <ChainDepthCard
+        data={{
+          chains: 0,
+          buckets: [1, 2, 3, 4].map((stage) => ({ stage: stage as 1 | 2 | 3 | 4, blocked: 0, alertedNotBlocked: 0, bundleNames: [] })),
+          endToEnd: 0,
+          endToEndAlerted: 0,
+          endToEndBundleNames: [],
+          inconclusive: 1,
+        }}
+      />,
+    );
+    expect(screen.queryByText('No multi-stage chains in this window')).not.toBeInTheDocument();
+    expect(
+      screen.getByText('1 chain inconclusive — a stage errored or was blocked before it ran — not shown'),
+    ).toBeInTheDocument();
+  });
+
+  it('says nothing about inconclusive chains when there are none', () => {
+    render(<ChainDepthCard data={data} />);
+    expect(screen.queryByText(/inconclusive/)).not.toBeInTheDocument();
   });
 
   it('shows the error state when the fetch failed', () => {
