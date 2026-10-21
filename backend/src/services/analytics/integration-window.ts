@@ -9,19 +9,23 @@ export interface TimeWindow {
 /** Alert feed source filter. Linked = f0rtika.achilles_correlated: true; organic = everything else. */
 export type AlertSource = 'all' | 'test' | 'organic';
 
-/** Facet counts behind the alert feed's filter segments and summary strip. */
+/**
+ * Facet counts behind the alert feed's filter segments and summary strip.
+ * Every count sees the window, search, techniques and status filters;
+ * severity only ever filters the listed hits.
+ */
 export interface AlertFacetCounts {
-  /** All filters except source. */
+  /** Ignores source and severity, so `all` equals the alerts tile. */
   bySource: { all: number; test: number; organic: number };
-  /** All filters except severity. */
+  /** Honours source, ignores severity. */
   bySeverity: Record<string, number>;
-  /** All filters. Counts alerts Achilles really resolved (enabled, error-free receipt). */
+  /** Honours source, ignores severity. Counts alerts Achilles really resolved (enabled, error-free receipt). */
   autoResolved: number;
   /** Window only: linked AND status NOT IN ('closed','resolved'). */
   linkedOpen: number;
-  /** CrowdStrike only, all filters. */
+  /** CrowdStrike only. Honours source, ignores severity. */
   byPrevention?: { prevented: number; detected_only: number; kill_failed: number };
-  /** Defender only, all filters. */
+  /** Defender only. Honours source, ignores severity. */
   byProduct?: Record<string, number>;
 }
 

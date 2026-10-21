@@ -6,19 +6,23 @@ export type TimeWindow = { from: string; to: string };
 /** Alert feed source filter. Linked = Achilles-correlated; organic = everything else. */
 export type AlertSource = 'all' | 'test' | 'organic';
 
-/** Facet counts behind the alert feed's filter segments and summary strip. */
+/**
+ * Facet counts behind the alert feed's filter segments and summary strip.
+ * Every count sees the window, search, techniques and status filters;
+ * severity only ever filters the listed hits.
+ */
 export interface AlertFacetCounts {
-  /** All filters except source. */
+  /** Ignores source and severity, so `all` equals the alerts tile. */
   bySource: { all: number; test: number; organic: number };
-  /** All filters except severity. */
+  /** Honours source, ignores severity. */
   bySeverity: Record<string, number>;
-  /** Alerts Achilles really resolved (enabled, error-free receipt). */
+  /** Honours source, ignores severity. Alerts Achilles really resolved (enabled, error-free receipt). */
   autoResolved: number;
   /** Window only: linked AND status NOT IN ('closed','resolved'). */
   linkedOpen: number;
-  /** CrowdStrike only. */
+  /** CrowdStrike only. Honours source, ignores severity. */
   byPrevention?: { prevented: number; detected_only: number; kill_failed: number };
-  /** Defender only. */
+  /** Defender only. Honours source, ignores severity. */
   byProduct?: Record<string, number>;
 }
 
@@ -29,7 +33,7 @@ export interface TechniqueCoverageItem {
   prevented: number;
   detectedOnly: number;
   missed: number;
-  /** Vendor alerts tagged with this exact technique id in the window. */
+  /** Distinct vendor alerts in the window tagged with this id or an `<id>.` sub-technique (the drawer's rule). */
   alerts: number;
 }
 

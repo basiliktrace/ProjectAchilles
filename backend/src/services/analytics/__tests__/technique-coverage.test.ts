@@ -43,7 +43,9 @@ function alertResponse(counts: Record<string, number>) {
   return {
     hits: { total: { value: 0, relation: 'eq' }, hits: [] },
     aggregations: {
-      techniques: { buckets: Object.entries(counts).map(([key, doc_count]) => ({ key, doc_count })) },
+      techniques: {
+        buckets: Object.fromEntries(Object.entries(counts).map(([key, doc_count]) => [key, { doc_count }])),
+      },
     },
   };
 }
@@ -51,7 +53,7 @@ function alertResponse(counts: Record<string, number>) {
 // ---------------------------------------------------------------------------
 // Minimal evaluator for the ES query DSL subset the predicates use, so the
 // tests pin the predicate's *semantics* against concrete documents, not just
-// its shape. Supports term, exists and bool (filter/must/should/must_not,
+// its shape. Supports term (multi-valued fields too), prefix, exists and bool (filter/must/should/must_not,
 // minimum_should_match).
 // ---------------------------------------------------------------------------
 type Doc = Record<string, unknown>;
@@ -60,7 +62,13 @@ const asArray = <T>(v: T | T[] | undefined): T[] => (v === undefined ? [] : Arra
 function matches(q: QueryDslQueryContainer, doc: Doc): boolean {
   if (q.term) {
     const [field, value] = Object.entries(q.term)[0];
-    return field in doc && doc[field] === value;
+    const v = doc[field];
+    return Array.isArray(v) ? v.includes(value) : field in doc && v === value;
+  }
+  if (q.prefix) {
+    const [field, value] = Object.entries(q.prefix)[0];
+    const prefix = typeof value === 'string' ? value : String((value as { value: string }).value);
+    return asArray(doc[field] as string | string[] | undefined).some((x) => typeof x === 'string' && x.startsWith(prefix));
   }
   if (q.exists) return q.exists.field in doc && doc[q.exists.field] !== null && doc[q.exists.field] !== undefined;
   if (q.bool) {
@@ -162,13 +170,17 @@ describe('technique coverage', () => {
     expect(req.query.bool.must_not).toEqual(attackSimulationExclusions());
   });
 
-  it('counts alerts by exact technique id in the created_at window, doc_type alert only', async () => {
+  const rowFilter = (t: string) => ({
+    bool: { should: [{ term: { mitre_techniques: t } }, { prefix: { mitre_techniques: `${t}.` } }], minimum_should_match: 1 },
+  });
+
+  it('counts alerts per row by the id or its sub-techniques in the created_at window, doc_type alert only', async () => {
     mockSearch
       .mockResolvedValueOnce(resultsResponse(3, { prevented: 0, detected: 0 }, [
         { key: 'T1486', doc_count: 2, prevented: 0, detected: 0 },
         { key: 'T1574.002', doc_count: 1, prevented: 0, detected: 0 },
       ]))
-      .mockResolvedValueOnce(alertResponse({ T1486: 4, T1574: 9 }));
+      .mockResolvedValueOnce(alertResponse({ T1486: 4, 'T1574.002': 0 }));
     const res = await getTechniqueCoverage(client, opts('defender'));
 
     const req = mockSearch.mock.calls[1][0];
@@ -178,12 +190,35 @@ describe('technique coverage', () => {
       { term: { doc_type: 'alert' } },
       { range: { created_at: { gte: WINDOW.from, lte: WINDOW.to } } },
     ]);
-    expect(req.aggs.techniques.terms).toEqual({
-      field: 'mitre_techniques', size: 500, include: ['T1486', 'T1574.002'],
+    // One filters bucket per tested technique: the same rule as getAlerts({ techniques: [t] }).
+    expect(req.aggs.techniques).toEqual({
+      filters: { filters: { T1486: rowFilter('T1486'), 'T1574.002': rowFilter('T1574.002') } },
     });
-    // No sub-technique roll-up: the parent's T1574 alerts are not credited to T1574.002.
     expect(res.byTechnique.find((t) => t.technique === 'T1574.002')?.alerts).toBe(0);
     expect(res.byTechnique.find((t) => t.technique === 'T1486')?.alerts).toBe(4);
+  });
+
+  it('rolls sub-technique alerts up into the parent row (distinct alerts), never parent alerts down', async () => {
+    mockSearch
+      .mockResolvedValueOnce(resultsResponse(2, { prevented: 0, detected: 0 }, [
+        { key: 'T1574', doc_count: 1, prevented: 0, detected: 0 },
+        { key: 'T1574.002', doc_count: 1, prevented: 0, detected: 0 },
+      ]))
+      .mockResolvedValueOnce(alertResponse({ T1574: 3, 'T1574.002': 2 }));
+    const res = await getTechniqueCoverage(client, opts('crowdstrike'));
+
+    const filters = mockSearch.mock.calls[1][0].aggs.techniques.filters.filters as Record<string, QueryDslQueryContainer>;
+    const alerts: Doc[] = [
+      { mitre_techniques: ['T1574'] },                     // parent only
+      { mitre_techniques: ['T1574.002'] },                 // sub-technique
+      { mitre_techniques: ['T1574.001', 'T1574.002'] },    // two subs, one alert
+      { mitre_techniques: ['T15740'] },                    // a different id sharing the prefix digits
+    ];
+    const count = (t: string) => alerts.filter((a) => matches(filters[t], a)).length;
+    expect(count('T1574')).toBe(3);
+    expect(count('T1574.002')).toBe(2);
+    expect(res.byTechnique.find((t) => t.technique === 'T1574')?.alerts).toBe(3);
+    expect(res.byTechnique.find((t) => t.technique === 'T1574.002')?.alerts).toBe(2);
   });
 
   it('derives detectedOnly = detected - prevented and missed = executions - detected per technique and overall', async () => {

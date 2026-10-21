@@ -27,7 +27,11 @@ export interface TechniqueCoverageItem {
   prevented: number;
   detectedOnly: number;
   missed: number;
-  /** Vendor alerts tagged with this exact technique id in the window. */
+  /**
+   * Distinct vendor alerts in the window tagged with this id or any of its
+   * `<id>.` sub-techniques (the drawer's rule). Parent alerts are not
+   * credited to a sub-technique row.
+   */
   alerts: number;
 }
 
@@ -98,7 +102,6 @@ function outcomeAgg(vendor: CoverageVendor): AggregationsAggregationContainer {
 
 type OutcomeBuckets = { buckets?: { prevented?: { doc_count: number }; detected?: { doc_count: number } } };
 type TechniqueBucket = { key: string; doc_count: number; outcome?: OutcomeBuckets };
-type CountBucket = { key: string; doc_count: number };
 
 function outcomeCounts(agg: OutcomeBuckets | undefined): { prevented: number; detected: number } {
   return {
@@ -150,8 +153,10 @@ export async function getTechniqueCoverage(
   const aggs = resultsResponse.aggregations as Record<string, unknown> | undefined;
   const techniqueBuckets = ((aggs?.techniques as { buckets?: TechniqueBucket[] } | undefined)?.buckets) ?? [];
 
-  // Request 2: vendor alerts per tested technique, exact id (no sub-technique
-  // roll-up), restricted to the tested ids so none fall outside the top terms.
+  // Request 2: vendor alerts per tested technique — one filters bucket per row
+  // matching the id or an `<id>.` sub-technique, the same rule as
+  // getAlerts({ techniques: [id] }) so the cell equals its drawer. A filters
+  // bucket counts each alert once however many of the row's subs it carries.
   const alertCounts = new Map<string, number>();
   if (techniqueBuckets.length > 0) {
     const alertResponse = await client.search({
@@ -164,17 +169,29 @@ export async function getTechniqueCoverage(
       },
       aggs: {
         techniques: {
-          terms: {
-            field: 'mitre_techniques',
-            size: TERMS_SIZE,
-            include: techniqueBuckets.map((b) => b.key),
+          filters: {
+            filters: Object.fromEntries(
+              techniqueBuckets.map((b): [string, QueryDslQueryContainer] => [
+                b.key,
+                {
+                  bool: {
+                    should: [
+                      { term: { mitre_techniques: b.key } },
+                      { prefix: { mitre_techniques: `${b.key}.` } },
+                    ],
+                    minimum_should_match: 1,
+                  },
+                },
+              ]),
+            ),
           },
         },
       },
     });
     const alertAggs = alertResponse.aggregations as Record<string, unknown> | undefined;
-    const buckets = ((alertAggs?.techniques as { buckets?: CountBucket[] } | undefined)?.buckets) ?? [];
-    for (const b of buckets) alertCounts.set(b.key, b.doc_count);
+    const buckets =
+      (alertAggs?.techniques as { buckets?: Record<string, { doc_count: number }> } | undefined)?.buckets ?? {};
+    for (const [key, b] of Object.entries(buckets)) alertCounts.set(key, b.doc_count);
   }
 
   const byTechnique: TechniqueCoverageItem[] = techniqueBuckets.map((b) => {

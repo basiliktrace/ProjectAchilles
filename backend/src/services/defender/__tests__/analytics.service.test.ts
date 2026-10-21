@@ -1393,7 +1393,7 @@ describe('DefenderAnalyticsService', () => {
       expect(result.counts.byPrevention).toBeUndefined();
     });
 
-    it('scopes each facet to every filter except its own', async () => {
+    it('scopes facets: source counts ignore source and severity, the strip honours source only', async () => {
       mockSearch.mockResolvedValueOnce(emptyPage);
 
       await service.getAlerts({
@@ -1403,9 +1403,13 @@ describe('DefenderAnalyticsService', () => {
       const req = mockSearch.mock.calls[0][0];
       const linked = { term: { 'f0rtika.achilles_correlated': true } };
       const sev = { terms: { severity: ['high'] } };
-      expect(req.aggs.facet_source.filter.bool.filter).toEqual([sev]);
+      // R15: bySource ignores source AND severity, so the feed's "All" equals the
+      // alerts tile; the strip (bySeverity, vendor facet, autoResolved) honours
+      // source and ignores severity. Severity only filters the hits.
+      expect(req.aggs.facet_source.filter).toEqual({ match_all: {} });
       expect(req.aggs.facet_severity.filter.bool.filter).toEqual([linked]);
-      expect(req.aggs.facet_filtered.filter.bool.filter).toEqual([linked, sev]);
+      expect(req.aggs.facet_filtered.filter.bool.filter).toEqual([linked]);
+      expect(req.post_filter.bool.filter).toEqual([linked, sev]);
       expect(req.aggs.facet_filtered.aggs.product.terms.field).toBe('service_source');
       expect(req.aggs.facet_filtered.aggs.prevention).toBeUndefined();
       expect(req.aggs.facet_linked_open.global).toEqual({});
@@ -1442,6 +1446,18 @@ describe('DefenderAnalyticsService', () => {
         { term: { 'f0rtika.auto_resolve_mode': 'enabled' } },
       ]);
       expect(resolved.bool.must_not).toEqual([{ exists: { field: 'f0rtika.auto_resolve_error' } }]);
+    });
+
+    it('keeps severity out of every facet (bySource carries no severity clause)', async () => {
+      mockSearch.mockResolvedValueOnce(emptyPage);
+
+      await service.getAlerts({ severities: ['critical', 'high'], window: WINDOW });
+
+      const req = mockSearch.mock.calls[0][0];
+      expect(JSON.stringify(req.aggs.facet_source)).not.toContain('"severity"');
+      expect(JSON.stringify(req.aggs.facet_filtered.filter)).not.toContain('"severity"');
+      expect(req.aggs.facet_source.filter).toEqual({ match_all: {} });
+      expect(req.post_filter).toEqual({ bool: { filter: [{ terms: { severity: ['critical', 'high'] } }] } });
     });
 
     it('returns zeroed counts when aggregations are missing', async () => {

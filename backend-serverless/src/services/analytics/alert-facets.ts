@@ -78,7 +78,6 @@ export interface VendorFacet {
 
 export interface AlertFacetOptions {
   source?: AlertSource;
-  severities?: string[];
   window: TimeWindow | null;
   /** Vendor statuses that mean closed; the linked-open tile excludes them. */
   closedStatuses: string[];
@@ -87,19 +86,22 @@ export interface AlertFacetOptions {
 
 /**
  * Facet aggregations for an alert feed, plus a reader for the response.
- * Each facet applies every filter except its own, so a segment's count is
- * what the list would show if that segment were picked. Source and severity
- * go in the caller's post_filter, never the query, for the same reason.
+ * All facets see the caller's query (window, search, techniques, status).
+ * Source and severity go in the caller's post_filter, never the query, so:
+ *   - bySource ignores source AND severity, so the feed's "All" equals the
+ *     alerts tile for the same window;
+ *   - the summary strip (bySeverity, the vendor facet, autoResolved) honours
+ *     source and ignores severity, so the strip is one consistent population;
+ *   - severity filters only the hits (table rows and the pagination total).
  * The linked-open tile only has the window, so it ignores the query too.
  */
 export function alertFacets(opts: AlertFacetOptions) {
   const source = sourceFilter(opts.source);
-  const severity = severityFilter(opts.severities);
   const range = windowRange('created_at', opts.window);
 
   const aggs: Record<string, AggregationsAggregationContainer> = {
     facet_source: {
-      filter: allOf(severity),
+      filter: allOf(),
       aggs: { split: { filters: { filters: { test: LINKED, organic: ORGANIC } } } },
     },
     facet_severity: {
@@ -107,7 +109,7 @@ export function alertFacets(opts: AlertFacetOptions) {
       aggs: { split: { terms: { field: 'severity', size: 10 } } },
     },
     facet_filtered: {
-      filter: allOf(source, severity),
+      filter: allOf(source),
       aggs: {
         auto_resolved: { filter: RESOLVED_BY_ACHILLES },
         ...(opts.vendorFacet ? { [opts.vendorFacet.key]: opts.vendorFacet.agg } : {}),

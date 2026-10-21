@@ -167,7 +167,7 @@ export class DefenderAnalyticsService {
   }
 
   /** Facet aggregations for the alert feed; see alert-facets.ts. */
-  private alertFacets(filters: { source?: AlertSource; severities?: string[]; window: TimeWindow | null }) {
+  private alertFacets(filters: { source?: AlertSource; window: TimeWindow | null }) {
     return alertFacets({
       ...filters,
       closedStatuses: ['resolved'],
@@ -377,7 +377,7 @@ export class DefenderAnalyticsService {
     // aggregations still see the alerts those filters exclude.
     const sourceClause = sourceFilter(source);
     const severityClause = severityFilter(severities);
-    const facets = this.alertFacets({ source, severities, window });
+    const facets = this.alertFacets({ source, window });
 
     const result = await client.search({
       index: DEFENDER_INDEX,
