@@ -58,7 +58,10 @@ export function RunList({ rows, selectedKey, onSelect, checkedKeys, onToggleChec
             onClick={() => onSelect(row.key)}
             className={cn(
               'cursor-pointer border-b border-border px-3 py-2.5 transition-colors last:border-b-0',
-              selected ? 'border-l-2 border-l-accent bg-raised' : 'border-l-2 border-l-transparent hover:bg-raised/60',
+              // Inset shadow, not a border: the list's rounded, scrolling box clips a left border.
+              selected
+                ? 'bg-accent-dim shadow-[inset_3px_0_0_var(--color-accent)]'
+                : 'hover:bg-raised/60',
             )}
           >
             <div className="flex items-center gap-2">
@@ -71,7 +74,14 @@ export function RunList({ rows, selectedKey, onSelect, checkedKeys, onToggleChec
                 />
               )}
               {row.type === 'bundle' && <Package className="h-3.5 w-3.5 shrink-0 text-info" />}
-              <span className="min-w-0 flex-1 truncate text-[13px] font-medium">{name}</span>
+              <span
+                className={cn(
+                  'min-w-0 flex-1 truncate text-[13px] font-medium',
+                  selected && 'font-semibold text-foreground',
+                )}
+              >
+                {name}
+              </span>
               {row.type === 'bundle' && (
                 <Badge variant="default" className="hidden shrink-0 md:inline-flex">
                   {row.totalCount} {row.category === 'cyber-hygiene' ? 'controls' : 'stages'}
