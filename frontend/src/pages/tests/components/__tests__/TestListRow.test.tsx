@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
 import type { ComponentProps } from 'react';
 import type { TestMetadata } from '@/types/test';
-import { TestListRow } from '../TestListRow';
+import { TestListHeader, TestListRow } from '../TestListRow';
 
 const baseTest: TestMetadata = {
   uuid: 'u1',
@@ -75,6 +75,62 @@ describe('TestListRow', () => {
     expect(screen.getAllByText('—')).toHaveLength(2);
   });
 
+  it.each([0, -1])('shows "—" for a score of %s, as the old card hid it', (score) => {
+    renderRow({}, { score });
+    expect(screen.getByText('—')).toBeTruthy();
+    expect(screen.queryByText(score.toFixed(1))).toBeNull();
+  });
+
+  it('gates techniques and stages to 2xl and platform to xl', () => {
+    renderRow();
+    const techniques = screen.getByText('T1059.001').parentElement!;
+    expect(techniques.className).toMatch(/(^|\s)hidden(\s|$)/);
+    expect(techniques.className).toContain('2xl:flex');
+    const stages = screen.getByText('5');
+    expect(stages.className).toMatch(/(^|\s)hidden(\s|$)/);
+    expect(stages.className).toContain('2xl:block');
+    const platform = screen.getByText('Windows, Linux');
+    expect(platform.className).toMatch(/(^|\s)hidden(\s|$)/);
+    expect(platform.className).toContain('xl:block');
+    expect(platform.className).not.toContain('2xl:block');
+  });
+
+  it('keeps the score visible at every width, beside the actions', () => {
+    renderRow();
+    expect(screen.getByText('8.8').className).not.toMatch(/(^|\s)hidden(\s|$)/);
+  });
+
+  it('shows the actions at full opacity on devices without hover', () => {
+    renderRow();
+    const actions = screen.getByRole('button', { name: `Run ${baseTest.name}` }).parentElement!;
+    expect(actions.className).toContain('[@media(hover:none)]:opacity-100');
+    expect(actions.className).toContain('group-focus-within:opacity-100');
+  });
+
+  it('gives the favorite and run buttons title tooltips', () => {
+    renderRow();
+    expect(screen.getByRole('button', { name: `Add ${baseTest.name} to favorites` }).getAttribute('title')).toBe('Add favorite');
+    expect(screen.getByRole('button', { name: `Run ${baseTest.name}` }).getAttribute('title')).toBe('Run test');
+  });
+
+  it('uses no fixed minimum width', () => {
+    const { container } = render(
+      <ul>
+        <TestListRow
+          test={baseTest}
+          fleet={{ text: 'x', share: null, title: '' }}
+          onOpen={vi.fn()}
+          isFavorite={false}
+          onToggleFavorite={vi.fn()}
+          selectMode={false}
+          selected={false}
+          onToggleSelect={vi.fn()}
+        />
+      </ul>,
+    );
+    expect(container.innerHTML).not.toContain('min-w-[');
+  });
+
   it('renders the fleet result text and bar share', () => {
     renderRow();
     const text = screen.getByText('9 / 12 endpoints protected');
@@ -116,5 +172,37 @@ describe('TestListRow', () => {
     fireEvent.click(screen.getByText('Windows, Linux'));
     expect(props.onOpen).toHaveBeenCalledTimes(1);
     expect(screen.queryByRole('checkbox')).toBeNull();
+  });
+});
+
+describe('TestListHeader', () => {
+  it('is hidden below xl and shares the row column tracks', () => {
+    const { container } = render(<TestListHeader />);
+    const header = container.firstElementChild as HTMLElement;
+    expect(header.className).toMatch(/(^|\s)hidden(\s|$)/);
+    expect(header.className).toContain('xl:grid');
+    expect(header.className).toContain('xl:grid-cols-[minmax(0,1fr)_120px_180px_48px_72px]');
+    expect(header.className).toContain('2xl:grid-cols-[minmax(0,1fr)_150px_120px_56px_180px_48px_72px]');
+  });
+
+  it('shows the Techniques and Stages headers at 2xl only', () => {
+    render(<TestListHeader />);
+    for (const label of ['Techniques', 'Stages']) {
+      const cell = screen.getByText(label);
+      expect(cell.className).toMatch(/(^|\s)hidden(\s|$)/);
+      expect(cell.className).toContain('2xl:block');
+    }
+    for (const label of ['Test', 'Platform', 'Fleet result', 'Score']) {
+      expect(screen.getByText(label).className).not.toContain('hidden');
+    }
+  });
+
+  it('uses the same column tracks as a row', () => {
+    const { container } = render(<TestListHeader />);
+    const header = container.firstElementChild as HTMLElement;
+    renderRow();
+    const row = screen.getAllByRole('listitem')[0];
+    const tracks = (el: HTMLElement) => el.className.split(/\s+/).filter((c) => c.includes('grid-cols-'));
+    expect(tracks(row)).toEqual(tracks(header));
   });
 });

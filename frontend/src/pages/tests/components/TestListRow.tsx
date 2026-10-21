@@ -6,12 +6,18 @@ import { cn } from '@/lib/utils';
 import type { FleetResult } from './fleetResult';
 
 /*
- * Library list grid (board A). From `lg` up every column shows; below it the
- * techniques/platform/stages/score cells hide and the fleet result stacks under
- * the name so a 375px row keeps most of its width for the name.
+ * Column tracks, shared by the header and every row so they cannot drift.
+ * Below xl the row stacks (name, subtitle, fleet | score, actions) and the header hides.
+ * Width check (list = viewport - 240 sidebar - 48 gutters - 216 rail; row px-4 = 32):
+ * xl at 1280: 776 - 32 - (120+180+48+72) - 4*12 = 276px name; 2xl at the 1016 cap:
+ * 1016 - 32 - (150+120+56+180+48+72) - 6*12 = 286px name.
  */
 const ROW_GRID =
-  'grid grid-cols-[minmax(0,1fr)_auto] gap-x-3 gap-y-1.5 px-3 lg:grid-cols-[minmax(0,1fr)_210px_150px_64px_190px_56px_76px] lg:gap-4 lg:px-4';
+  'grid grid-cols-[minmax(0,1fr)_auto_auto] gap-x-3 gap-y-1.5 px-3 xl:grid-cols-[minmax(0,1fr)_120px_180px_48px_72px] xl:px-4 2xl:grid-cols-[minmax(0,1fr)_150px_120px_56px_180px_48px_72px]';
+
+/** Cells that only exist from xl (platform) or 2xl (techniques, stages). */
+const FROM_XL = 'hidden xl:block';
+const FROM_2XL = 'hidden 2xl:block';
 
 const FOCUS_RING = 'focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent';
 
@@ -35,19 +41,19 @@ function actorLine(test: TestMetadata): string {
   return sub ? `${actor} · ${sub}` : actor;
 }
 
-/** Column labels for a group's list; hidden below `lg`, where the row stacks. */
+/** Column labels for a group's list; hidden below `xl`, where the row stacks. */
 export function TestListHeader() {
   return (
     <div
       className={cn(
         ROW_GRID,
-        'hidden border-b border-border py-2.5 text-[11px] uppercase tracking-wider text-faint lg:grid',
+        'hidden border-b border-border py-2.5 text-[11px] uppercase tracking-wider text-faint xl:grid',
       )}
     >
       <span>Test</span>
-      <span>Techniques</span>
+      <span className={FROM_2XL}>Techniques</span>
       <span>Platform</span>
-      <span>Stages</span>
+      <span className={FROM_2XL}>Stages</span>
       <span>Fleet result</span>
       <span>Score</span>
       <span />
@@ -109,7 +115,7 @@ export function TestListRow({
         </div>
       </div>
 
-      <div className="hidden flex-wrap items-center gap-1 lg:flex">
+      <div className="hidden flex-wrap items-center gap-1 2xl:flex">
         {test.techniques.slice(0, VISIBLE_TECHNIQUES).map((technique) => (
           <span key={technique} className="rounded bg-overlay px-1.5 py-px font-mono text-[11px] text-muted">
             {technique}
@@ -118,17 +124,17 @@ export function TestListRow({
         {extraTechniques > 0 && <span className="text-[11px] text-faint">+{extraTechniques}</span>}
       </div>
 
-      <span className="hidden truncate text-xs text-muted lg:block" title={platforms}>
+      <span className={cn(FROM_XL, 'truncate text-xs text-muted')} title={platforms}>
         {platforms}
       </span>
 
-      <span className="hidden font-mono text-xs text-muted lg:block">
+      <span className={cn(FROM_2XL, 'font-mono text-xs text-muted')}>
         {stageCount > 0 ? stageCount : '—'}
       </span>
 
       <div
         title={fleet.title}
-        className="flex min-w-0 flex-col gap-1 max-lg:col-start-1 max-lg:row-start-2"
+        className="flex min-w-0 flex-col gap-1 max-xl:col-start-1 max-xl:row-start-2"
       >
         {fleet.share != null && (
           <div className="flex h-1.5 w-full max-w-[120px] overflow-hidden rounded-full bg-danger-dim">
@@ -147,14 +153,14 @@ export function TestListRow({
         </span>
       </div>
 
-      <span className="hidden font-mono text-xs text-muted lg:block">
-        {test.score != null ? test.score.toFixed(1) : '—'}
+      <span className="self-center font-mono text-xs text-muted max-xl:col-start-2 max-xl:row-span-2 max-xl:row-start-1">
+        {test.score != null && test.score > 0 ? test.score.toFixed(1) : '—'}
       </span>
 
       <div
         className={cn(
-          'flex items-center justify-end gap-1.5 opacity-40 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100',
-          'max-lg:col-start-2 max-lg:row-span-2 max-lg:row-start-1',
+          'flex items-center justify-end gap-1.5 opacity-40 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100 [@media(hover:none)]:opacity-100',
+          'max-xl:col-start-3 max-xl:row-span-2 max-xl:row-start-1',
         )}
       >
         {!selectMode && (
@@ -163,6 +169,7 @@ export function TestListRow({
               type="button"
               aria-label={isFavorite ? `Remove ${test.name} from favorites` : `Add ${test.name} to favorites`}
               aria-pressed={isFavorite}
+              title={isFavorite ? 'Remove favorite' : 'Add favorite'}
               onClick={(e) => {
                 e.stopPropagation();
                 onToggleFavorite();
@@ -179,6 +186,7 @@ export function TestListRow({
               <button
                 type="button"
                 aria-label={`Run ${test.name}`}
+                title="Run test"
                 onClick={(e) => {
                   e.stopPropagation();
                   onExecute();

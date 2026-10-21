@@ -403,26 +403,24 @@ export default function TestsPage() {
                   <span className="text-[11px] text-faint">{group.tests.length} tests</span>
                   <div className="h-px flex-1 bg-border" />
                 </div>
-                <div className="overflow-x-auto rounded-[10px] border border-border bg-surface">
-                  <div className="lg:min-w-[900px]">
-                    <TestListHeader />
-                    <ul>
-                      {group.tests.map((test) => (
-                        <TestListRow
-                          key={test.uuid}
-                          test={test}
-                          fleet={fleetResultText(test, fleetResults.get(test.uuid), fleetState)}
-                          onOpen={() => navigate(`/tests/${test.uuid}`)}
-                          isFavorite={isFavorite(test.uuid)}
-                          onToggleFavorite={() => toggleFavorite(test.uuid)}
-                          onExecute={canCreateTasks ? () => openDrawer([test]) : undefined}
-                          selectMode={selectMode}
-                          selected={selectedUuids.has(test.uuid)}
-                          onToggleSelect={() => toggleSelect(test.uuid)}
-                        />
-                      ))}
-                    </ul>
-                  </div>
+                <div className="overflow-hidden rounded-[10px] border border-border bg-surface">
+                  <TestListHeader />
+                  <ul>
+                    {group.tests.map((test) => (
+                      <TestListRow
+                        key={test.uuid}
+                        test={test}
+                        fleet={fleetResultText(test, fleetResults.get(test.uuid), fleetState)}
+                        onOpen={() => navigate(`/tests/${test.uuid}`)}
+                        isFavorite={isFavorite(test.uuid)}
+                        onToggleFavorite={() => toggleFavorite(test.uuid)}
+                        onExecute={canCreateTasks ? () => openDrawer([test]) : undefined}
+                        selectMode={selectMode}
+                        selected={selectedUuids.has(test.uuid)}
+                        onToggleSelect={() => toggleSelect(test.uuid)}
+                      />
+                    ))}
+                  </ul>
                 </div>
               </section>
             ))

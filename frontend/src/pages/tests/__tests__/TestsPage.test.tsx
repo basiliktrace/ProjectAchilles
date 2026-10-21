@@ -81,6 +81,13 @@ describe('TestsPage', () => {
     }
   });
 
+  it('lays the list out without a minimum width or a sideways scroller', async () => {
+    const { container } = renderPage();
+    await screen.findByRole('button', { name: 'test a' });
+    expect(container.innerHTML).not.toContain('min-w-[');
+    expect(container.querySelector('.overflow-x-auto')).toBeNull();
+  });
+
   it('shows "—" for fleet results when analytics is not configured, without fetching', async () => {
     renderPage();
     await screen.findByRole('button', { name: 'test a' });
