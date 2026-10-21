@@ -82,7 +82,7 @@ Browse the full test library with rich metadata and execute tests directly from 
 - **Execution drawer** — assign and run tests directly from the browse page
 - **Favorite tests**, track recent views, view version history and Git modification dates
 
-![Tests — facet rail with category, platform and threat-actor filters beside the test list showing fleet results and test scores](/img/screenshots/tests.png)
+![Tests — the test library with category, platform and threat-actor filters (screenshot predates the list view)](/img/screenshots/tests.png)
 
 :::tip Hybrid Test Library
 Tests can come from an upstream Git repository (auto-synced) or from custom local directories. Both sources are indexed with collision-free UUIDs. See [Custom Tests](../user-guide/test-browser/custom-tests) for details.

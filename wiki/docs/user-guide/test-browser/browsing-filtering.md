@@ -27,9 +27,9 @@ Columns appear as the window gets wider:
 
 | Width | Layout |
 |-------|--------|
-| Below 1280px | Two-line rows, no header |
-| 1280px and up | Adds **Platform**, **Fleet result** and **Score** columns |
-| 1536px and up | Adds **Techniques** (the first two unique ATT&CK IDs, then `+n`) and **Stages** |
+| Below 1280px | No header row. Each row stacks the name and `actor · subcategory`, with the fleet result line (and its bar) underneath; score and actions sit on the right |
+| 1280px and up | A header row appears, and **Platform**, **Fleet result** and **Score** become columns |
+| 1536px and up | Adds **Techniques** (the first two unique ATT&CK IDs, then `+n`) and **Stages** columns |
 
 ### Fleet result
 
@@ -39,8 +39,9 @@ The fleet result is the latest result per endpoint over the last 90 days, the sa
 |-------|---------|
 | `N / M endpoints protected` | N of M endpoints protected on their latest result |
 | `N / M checks passed` | The same count for cyber-hygiene tests, where each control is a check |
-| `Not run in 90 days` | No endpoint reported a result in the window |
-| `—` | Analytics is not configured or unavailable |
+| `Not run yet` | The test has no recorded execution at all |
+| `No conclusive result in 90 days` | The test may have run, but no endpoint returned protected or unprotected in the window. Errors, blocks before execution (exit 260), skipped stages and risk-accepted results don't count |
+| `—` | Fleet results are loading, or analytics is not configured or unavailable |
 
 Hover the cell for the window and the time of the last run. The data comes from `GET /api/analytics/test-results`; see the [Analytics API reference](../../api-reference/analytics).
 
@@ -62,7 +63,7 @@ There is no severity facet. An old `?severity=` link still loads; the parameter 
 
 ## Favorites
 
-Click the heart icon on any test row to favorite it. Favorites are stored per-user in the browser's local storage. Use the **Favorites** filter to show only starred tests.
+Click the heart icon on any test row to favorite it. Favorites are stored per-user in the browser's local storage. Use the **Favorites** filter to show only favorited tests.
 
 ## Categories
 
@@ -77,7 +78,7 @@ Tests are organized into categories that map to MITRE ATT&CK tactics:
 - Exfiltration
 - And more...
 
-Each category has a color-coded badge in the test list.
+The test list groups tests under a plain header for each category, with the number of tests in it.
 
 ## Browser Architecture
 
@@ -113,7 +114,7 @@ graph TD
 The browser home page has three top-level modes, selectable from the navigation:
 
 - **Browse** (default) -- Full-featured browser with Overview and Browse sub-tabs
-- **Favorites** -- Shows only tests you have starred
+- **Favorites** -- Shows only tests you have favorited
 - **Recent** -- Displays tests you have recently viewed, in chronological order
 
 ## MITRE ATT&CK Coverage
@@ -219,7 +220,7 @@ From the Browse tab, select multiple tests using checkboxes, then:
 
 - Click the **heart icon** on any test row to add it to your favorites
 - Favorites are stored per-user in browser local storage
-- Switch to **Favorites** mode to see only your starred tests
+- Switch to **Favorites** mode to see only your favorited tests
 
 ### Recent Tests
 
