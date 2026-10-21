@@ -1,0 +1,176 @@
+import { useEffect, useState } from 'react';
+import {
+  ResponsiveContainer,
+  ComposedChart,
+  Area,
+  Bar,
+  XAxis,
+  YAxis,
+  Tooltip,
+  CartesianGrid,
+} from 'recharts';
+import { Loader2, Activity } from 'lucide-react';
+import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
+import { analyticsApi } from '@/services/api/analytics';
+import type { IntegrationTrendPoint } from '@/services/api/integrationTypes';
+import type { IntegrationVendor, TimeWindow } from './vendorConfig';
+import { bucketExecutions } from './weeklyBuckets';
+
+interface Point {
+  date: string;
+  tests: number;
+  linked: number;
+  organic: number;
+}
+
+const LINKED = 'var(--chart-series-alert)';
+const ORGANIC = 'var(--muted-foreground)';
+const EXEC = 'var(--chart-series-exec)';
+
+function buildSeries(
+  tests: Array<{ timestamp: string; total?: number }>,
+  alerts: IntegrationTrendPoint[],
+): Point[] {
+  const interval = alerts[0]?.interval ?? 'day';
+  const execs = bucketExecutions(tests, interval);
+  const byDate = new Map<string, Point>();
+  for (const [date, total] of Object.entries(execs)) {
+    byDate.set(date, { date, tests: total, linked: 0, organic: 0 });
+  }
+  for (const a of alerts) {
+    const date = a.date.slice(0, 10);
+    const row = byDate.get(date) ?? { date, tests: 0, linked: 0, organic: 0 };
+    row.linked = a.linked;
+    row.organic = Math.max(0, a.count - a.linked);
+    byDate.set(date, row);
+  }
+  return Array.from(byDate.values()).sort((a, b) => a.date.localeCompare(b.date));
+}
+
+interface Props {
+  vendor: IntegrationVendor;
+  window: TimeWindow;
+}
+
+export default function IntegrationTimelineCard({ vendor, window }: Props) {
+  const [data, setData] = useState<Point[] | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function load() {
+      setLoading(true);
+      setError(null);
+      const [testResult, alertResult] = await Promise.allSettled([
+        // Attack simulations only; cyber-hygiene checks can't trip a vendor alert.
+        analyticsApi.getDefenseScoreTrend({
+          from: window.from,
+          to: window.to,
+          interval: 'day',
+          excludeCyberHygiene: true,
+        }),
+        vendor.api.getAlertTrend(30, window),
+      ]);
+      if (cancelled) return;
+      if (testResult.status === 'rejected' && alertResult.status === 'rejected') {
+        setError('Unable to load test or alert volume');
+        setLoading(false);
+        return;
+      }
+      const tests = testResult.status === 'fulfilled' ? testResult.value : [];
+      const alerts = alertResult.status === 'fulfilled' ? alertResult.value : [];
+      setData(buildSeries(tests, alerts));
+      setLoading(false);
+    }
+    load();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [vendor.id, window.from, window.to]);
+
+  const tick = { fontSize: 11, fill: 'var(--muted-foreground)' };
+
+  return (
+    <Card>
+      <CardHeader className="pb-2">
+        <CardTitle className="text-sm font-medium flex items-center gap-2">
+          <Activity className="w-4 h-4 text-primary" />
+          Test Execution vs {vendor.alertsTitle} Volume
+        </CardTitle>
+      </CardHeader>
+      <CardContent>
+        {loading ? (
+          <div className="h-[260px] flex items-center justify-center">
+            <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
+          </div>
+        ) : error ? (
+          <div className="h-[260px] flex items-center justify-center text-sm text-muted-foreground">
+            {error}
+          </div>
+        ) : !data || data.length === 0 ? (
+          <div className="h-[260px] flex items-center justify-center text-sm text-muted-foreground">
+            No test or alert activity in the selected window
+          </div>
+        ) : (
+          <>
+            <ResponsiveContainer width="100%" height={260}>
+              <ComposedChart data={data} margin={{ top: 10, right: 20, left: 0, bottom: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
+                <XAxis
+                  dataKey="date"
+                  tickFormatter={(d: string) =>
+                    new Date(`${d}T00:00:00Z`).toLocaleDateString(undefined, {
+                      month: 'short',
+                      day: 'numeric',
+                      timeZone: 'UTC',
+                    })
+                  }
+                  tick={tick}
+                  stroke="var(--muted-foreground)"
+                />
+                <YAxis yAxisId="tests" orientation="left" tick={tick} stroke="var(--muted-foreground)" />
+                <YAxis yAxisId="alerts" orientation="right" tick={tick} stroke="var(--muted-foreground)" />
+                <Tooltip
+                  contentStyle={{
+                    background: 'var(--card)',
+                    border: '1px solid var(--border)',
+                    borderRadius: 6,
+                    fontSize: 12,
+                    color: 'var(--foreground)',
+                  }}
+                />
+                <Area
+                  yAxisId="tests"
+                  type="monotone"
+                  dataKey="tests"
+                  name="Test executions"
+                  stroke={EXEC}
+                  fill={EXEC}
+                  fillOpacity={0.2}
+                />
+                <Bar yAxisId="alerts" dataKey="linked" name="Alerts linked to a test" stackId="alerts" fill={LINKED} />
+                <Bar yAxisId="alerts" dataKey="organic" name="Organic alerts" stackId="alerts" fill={ORGANIC} fillOpacity={0.6} />
+              </ComposedChart>
+            </ResponsiveContainer>
+            <div className="flex flex-wrap items-center justify-center gap-4 pt-2 text-[11px] text-muted-foreground">
+              <LegendItem color={EXEC} label="Test executions" />
+              <LegendItem color={LINKED} label="Alerts linked to a test" />
+              <LegendItem color={ORGANIC} label="Organic alerts" />
+            </div>
+          </>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function LegendItem({ color, label }: { color: string; label: string }) {
+  return (
+    <span className="inline-flex items-center gap-1.5">
+      <span className="inline-block w-2.5 h-2.5 rounded-sm" style={{ background: color }} />
+      {label}
+    </span>
+  );
+}
