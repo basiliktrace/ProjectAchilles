@@ -24,7 +24,10 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          fetch-depth: 1
+          # Full history, so review subagents can use git log/show/diff (auto-approved
+          # as read-only) without git fetch. Don't add Bash(git ...) allow rules: they
+          # bypass that read-only check and allow --output and --no-index.
+          fetch-depth: 0
 
       - name: Run Claude Code Review
         id: claude-review
@@ -36,12 +39,9 @@ jobs:
           # Without --comment the plugin stops after the review and posts nothing
           prompt: '/code-review:code-review ${{ github.repository }}/pull/${{ github.event.pull_request.number }} --comment'
           # Pinned: the action's default model changes with its version
-          # Read-only git lets review subagents check history and diffs. Fetch is
-          # limited to origin (HTTPS): `git fetch --upload-pack=<cmd> <local path>`
-          # runs <cmd>. No sed/awk/python3, which can execute arbitrary code.
           claude_args: |
             --model claude-opus-5-5
-            --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr list:*),Bash(gh issue view:*),Bash(gh issue list:*),Bash(gh search:*),Bash(cd:*),Bash(git show:*),Bash(git diff:*),Bash(git log:*),Bash(git fetch origin:*)"
+            --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr list:*),Bash(gh issue view:*),Bash(gh issue list:*),Bash(gh search:*)"
 
       # Full output stays hidden (public repo); list only which tool calls were denied
       - name: Report denied tool calls
