@@ -2517,6 +2517,7 @@ export class ElasticsearchService {
       bundle_name: getField(source, 'f0rtika.bundle_name'),
       control_id: getField(source, 'f0rtika.control_id'),
       control_validator: getField(source, 'f0rtika.control_validator'),
+      control_description: getField(source, 'f0rtika.control_description'),
       is_bundle_control: getField(source, 'f0rtika.is_bundle_control') ?? false,
       defender_detected: getField(source, 'f0rtika.defender_detected') ?? false,
       defender_stage_detected: getField(source, 'f0rtika.defender_stage_detected') ?? false,

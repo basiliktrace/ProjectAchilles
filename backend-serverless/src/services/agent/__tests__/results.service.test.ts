@@ -428,6 +428,23 @@ describe('results.service', () => {
       expect(doc1.f0rtika.control_validator).toBe('Microsoft Defender');
     });
 
+    it('writes control_description only when the stage has a non-empty description', async () => {
+      const bundle = makeBundle();
+      bundle.controls[0] = { ...bundle.controls[0], description: 'PowerShell recon' };
+      bundle.controls[1] = { ...bundle.controls[1], description: '' };
+      await ingestResult(makeTask(), makeResult({ bundle_results: bundle }));
+
+      const ops = mockEsBulk.mock.calls[0][0].operations;
+      expect(ops[1].f0rtika.control_description).toBe('PowerShell recon');
+      expect('control_description' in ops[3].f0rtika).toBe(false);
+    });
+
+    it('omits control_description when the control has no description', async () => {
+      await ingestResult(makeTask(), makeResult({ bundle_results: makeBundle() }));
+      const ops = mockEsBulk.mock.calls[0][0].operations;
+      expect('control_description' in ops[1].f0rtika).toBe(false);
+    });
+
     it('maps control exit codes to is_protected correctly', async () => {
       const result = makeResult({ bundle_results: makeBundle() });
       await ingestResult(makeTask(), result);

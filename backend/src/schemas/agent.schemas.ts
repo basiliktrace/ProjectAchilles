@@ -85,7 +85,7 @@ export const UpdateTaskStatusSchema = z.object({
 
 // ── Task result submission (agent → backend) ─────────────────────────────────
 
-const BundleControlResultSchema = z.object({
+export const BundleControlResultSchema = z.object({
   control_id: z.string(),
   control_name: z.string(),
   validator: z.string(),
@@ -101,6 +101,7 @@ const BundleControlResultSchema = z.object({
   details: z.string(),
   skipped: z.boolean(),
   error_message: z.string(),
+  description: z.string().optional(),
 });
 
 const BundleResultsSchema = z.object({

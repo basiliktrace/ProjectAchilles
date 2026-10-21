@@ -149,6 +149,8 @@ export interface EnrichedTestExecution extends TestExecution {
   bundle_name?: string;
   control_id?: string;
   control_validator?: string;
+  /** What the stage does (from bundle_results.json); absent on older documents. */
+  control_description?: string;
   is_bundle_control?: boolean;
   // Populated by the Defender enrichment pass when an alert in
   // achilles-defender correlates to this doc via bundle UUID + hostname +

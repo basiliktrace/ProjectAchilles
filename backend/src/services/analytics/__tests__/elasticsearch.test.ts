@@ -1244,6 +1244,27 @@ describe('elasticsearch.ts', () => {
       expect(result.groups[0].representative.control_validator).toBe('Stage 1');
     });
 
+    it('maps control_description from f0rtika.control_description', async () => {
+      const mk = (desc?: string) => makeHitSource({
+        'f0rtika.is_bundle_control': true,
+        'f0rtika.bundle_id': 'bundle-003',
+        'f0rtika.control_validator': 'Stage 1',
+        'f0rtika.control_id': 'id-1',
+        ...(desc !== undefined ? { 'f0rtika.control_description': desc } : {}),
+      });
+      const bucket = makeGroupBucket('bundle::bundle-003::host-a::1', [mk('PowerShell recon')]);
+      const bucket2 = makeGroupBucket('bundle::bundle-004::host-a::1', [mk()]);
+
+      mockCount.mockResolvedValue(esCountResponse(2));
+      mockSearch.mockResolvedValue(makeGroupedSearchResponse([bucket, bucket2], 2));
+
+      const svc = createService();
+      const result = await svc.getGroupedPaginatedExecutions(makePaginatedParams());
+
+      expect(result.groups[0].members[0].control_description).toBe('PowerShell recon');
+      expect(result.groups[1].members[0].control_description).toBeUndefined();
+    });
+
     it('maps standalone groups correctly', async () => {
       const source = makeHitSource();
       const bucket = makeGroupBucket('standalone::uuid-001::host-a', [source]);

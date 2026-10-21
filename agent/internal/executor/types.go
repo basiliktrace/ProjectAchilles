@@ -55,6 +55,8 @@ type BundleControlResult struct {
 	Details      string   `json:"details"`
 	Skipped      bool     `json:"skipped"`
 	ErrorMessage string   `json:"error_message"`
+	// Description is an optional human-readable summary of what the stage does.
+	Description string `json:"description,omitempty"`
 }
 
 // BundleResults represents the complete output of a cyber-hygiene bundle.

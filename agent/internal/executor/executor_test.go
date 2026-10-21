@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -309,5 +310,39 @@ func TestLimitedWriter(t *testing.T) {
 	}
 	if buf.Len() != 10 {
 		t.Errorf("buffer length after second write: got %d, want 10", buf.Len())
+	}
+}
+
+// TestBundleControlDescriptionRoundTrip verifies the per-stage description in
+// bundle_results.json survives parse -> result payload JSON, and is omitted when empty.
+func TestBundleControlDescriptionRoundTrip(t *testing.T) {
+	in := `{"bundle_id":"b1","controls":[` +
+		`{"control_id":"T1059.001","validator":"Stage 1","description":"PowerShell recon"},` +
+		`{"control_id":"T1003","validator":"Stage 2"}]}`
+	var bundle BundleResults
+	if err := json.Unmarshal([]byte(in), &bundle); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if got := bundle.Controls[0].Description; got != "PowerShell recon" {
+		t.Fatalf("Description = %q, want %q", got, "PowerShell recon")
+	}
+
+	out, err := json.Marshal(Result{BundleResults: &bundle})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var back struct {
+		BundleResults struct {
+			Controls []map[string]any `json:"controls"`
+		} `json:"bundle_results"`
+	}
+	if err := json.Unmarshal(out, &back); err != nil {
+		t.Fatalf("re-unmarshal: %v", err)
+	}
+	if back.BundleResults.Controls[0]["description"] != "PowerShell recon" {
+		t.Errorf("description lost in result payload: %v", back.BundleResults.Controls[0])
+	}
+	if _, ok := back.BundleResults.Controls[1]["description"]; ok {
+		t.Errorf("empty description should be omitted: %v", back.BundleResults.Controls[1])
 	}
 }
