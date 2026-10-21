@@ -263,6 +263,23 @@ export interface TechniqueOutcomeItem {
   lastTestedAt: string;
 }
 
+/** One "blocked at stage N" row of the chain-depth card; stage 4 = "4+". */
+export interface ChainDepthBucket {
+  stage: 1 | 2 | 3 | 4;
+  blocked: number;
+  alertedNotBlocked: number;
+  bundleNames: string[];
+}
+
+/** How deep attack chains get: latest run per (org, bundle, host), non-cyber-hygiene bundles. */
+export interface ChainDepthResponse {
+  chains: number;
+  buckets: ChainDepthBucket[];
+  endToEnd: number;
+  endToEndAlerted: number;
+  endToEndBundleNames: string[];
+}
+
 export interface ExecutionActivityDay {
   date: string;
   protected: number;
@@ -667,6 +684,12 @@ export const analyticsApi = {
 
   async getTechniqueOutcomes(params?: { org?: string; from?: string; to?: string }): Promise<TechniqueOutcomeItem[]> {
     const response = await apiClient.get('/analytics/technique-outcomes', { params });
+    return response.data;
+  },
+
+  /** Always latest-result posture; takes every filter-bar param. */
+  async getChainDepth(params?: ExtendedFilterParams & { basis?: 'latest' | 'executions' }): Promise<ChainDepthResponse> {
+    const response = await apiClient.get('/analytics/chain-depth', { params });
     return response.data;
   },
 

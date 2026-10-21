@@ -8,7 +8,7 @@ const CHART_FILES = [
   'pages/analytics/components/StackedBarChart.tsx',
   'pages/analytics/components/ErrorTypePieChart.tsx',
   'pages/analytics/components/DefenseScoreByHostChart.tsx',
-  'pages/analytics/components/CategoryBreakdownChart.tsx',
+  'pages/analytics/components/ChainDepthCard.tsx',
   'pages/analytics/components/CoverageTreemap.tsx',
   'pages/analytics/components/SeverityBreakdownChart.tsx',
   'pages/analytics/components/AlertsSummaryCard.tsx',
