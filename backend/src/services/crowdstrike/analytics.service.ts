@@ -8,11 +8,11 @@ import { buildAlertTimeWindowQuery, buildCrowdStrikeEvidenceQuery } from './evid
 import { attackSimulationExclusions } from '../analytics/attack-simulation-filter.js';
 import { projectAlertHit } from '../alerts/alertHit.js';
 import { windowRange } from '../analytics/integration-window.js';
+import { alertDocs, alertFacets, allOf, firstString, severityFilter, sourceFilter } from '../analytics/alert-facets.js';
 import type { AlertFacetCounts, AlertSource, TimeWindow } from '../analytics/integration-window.js';
 import { resolveTestNames } from '../analytics/test-name-lookup.js';
 import type { Client } from '@elastic/elasticsearch';
 import type {
-  AggregationsAggregationContainer,
   QueryDslQueryContainer,
 } from '@elastic/elasticsearch/lib/api/types.js';
 import type { DetectionRateResponse, RelatedAlertsResponse } from '../../types/crowdstrike.js';
@@ -121,71 +121,8 @@ export interface PaginatedAlerts {
   counts: AlertFacetCounts;
 }
 
-// ---------------------------------------------------------------------------
-// Alert feed filters and facets
-// ---------------------------------------------------------------------------
-
-/** An alert the enrichment pass matched to an Achilles test. */
-const LINKED: QueryDslQueryContainer = { term: { 'f0rtika.achilles_correlated': true } };
-/** Everything not linked, including docs that predate the correlation field. */
-const ORGANIC: QueryDslQueryContainer = { bool: { must_not: [LINKED] } };
 /** prevention_action values meaning Falcon stopped the activity. */
 const PREVENTED_ACTIONS = ['quarantined', 'process_killed', 'blocked'];
-/**
- * Alerts Achilles really resolved in Falcon. Receipts are also written in
- * dry-run mode and on failed PATCHes, so `auto_resolved: true` alone is not
- * enough (same rule as projectAlertHit's auto_resolved_at).
- */
-const RESOLVED_BY_ACHILLES: QueryDslQueryContainer = {
-  bool: {
-    filter: [
-      { term: { 'f0rtika.auto_resolved': true } },
-      { term: { 'f0rtika.auto_resolve_mode': 'enabled' } },
-    ],
-    must_not: [{ exists: { field: 'f0rtika.auto_resolve_error' } }],
-  },
-};
-
-function sourceFilter(source?: AlertSource): QueryDslQueryContainer | null {
-  if (source === 'test') return LINKED;
-  if (source === 'organic') return ORGANIC;
-  return null;
-}
-
-function severityFilter(severities?: string[]): QueryDslQueryContainer | null {
-  return severities && severities.length > 0 ? { terms: { severity: severities } } : null;
-}
-
-/** AND of the non-null clauses; match_all when there are none. */
-function allOf(...clauses: Array<QueryDslQueryContainer | null>): QueryDslQueryContainer {
-  const present = clauses.filter((c): c is QueryDslQueryContainer => c !== null);
-  return present.length > 0 ? { bool: { filter: present } } : { match_all: {} };
-}
-
-/** Alert docs, optionally limited to a created_at window. */
-function alertDocs(window: TimeWindow | null): QueryDslQueryContainer {
-  const range = windowRange('created_at', window);
-  return range
-    ? { bool: { must: [{ term: { doc_type: 'alert' } }, range] } }
-    : { term: { doc_type: 'alert' } };
-}
-
-interface FacetBucket { doc_count?: number }
-
-interface FacetAggregations {
-  facet_source?: FacetBucket & { split?: { buckets?: { test?: FacetBucket; organic?: FacetBucket } } };
-  facet_severity?: { split?: { buckets?: Array<{ key: string; doc_count: number }> } };
-  facet_filtered?: {
-    auto_resolved?: FacetBucket;
-    prevention?: { buckets?: { prevented?: FacetBucket; detected_only?: FacetBucket; kill_failed?: FacetBucket } };
-  };
-  facet_linked_open?: { split?: FacetBucket };
-}
-
-function firstString(value: unknown): string | null {
-  const first = Array.isArray(value) ? value[0] : value;
-  return typeof first === 'string' && first ? first : null;
-}
 
 // ---------------------------------------------------------------------------
 // Service
@@ -205,80 +142,34 @@ export class CrowdStrikeAnalyticsService {
     return this.getEsContext().client;
   }
 
-  /**
-   * Facet aggregations for the alert feed, plus a reader for the response.
-   * Each facet applies every filter except its own, so a segment's count is
-   * what the list would show if that segment were picked. Source and severity
-   * go in the caller's post_filter, never the query, for the same reason.
-   * The linked-open tile only has the window, so it ignores the query too.
-   */
+  /** Facet aggregations for the alert feed; see alert-facets.ts. */
   private alertFacets(filters: { source?: AlertSource; severities?: string[]; window: TimeWindow | null }) {
-    const source = sourceFilter(filters.source);
-    const severity = severityFilter(filters.severities);
-    const range = windowRange('created_at', filters.window);
-
-    const aggs: Record<string, AggregationsAggregationContainer> = {
-      facet_source: {
-        filter: allOf(severity),
-        aggs: { split: { filters: { filters: { test: LINKED, organic: ORGANIC } } } },
-      },
-      facet_severity: {
-        filter: allOf(source),
-        aggs: { split: { terms: { field: 'severity', size: 10 } } },
-      },
-      facet_filtered: {
-        filter: allOf(source, severity),
-        aggs: {
-          auto_resolved: { filter: RESOLVED_BY_ACHILLES },
-          prevention: {
+    return alertFacets({
+      ...filters,
+      closedStatuses: ['closed', 'resolved'],
+      vendorFacet: {
+        key: 'prevention',
+        agg: {
+          filters: {
             filters: {
-              filters: {
-                prevented: { terms: { prevention_action: PREVENTED_ACTIONS } },
-                detected_only: { bool: { must_not: [{ exists: { field: 'prevention_action' } }] } },
-                kill_failed: { term: { prevention_action: 'kill_failed' } },
-              },
+              prevented: { terms: { prevention_action: PREVENTED_ACTIONS } },
+              detected_only: { bool: { must_not: [{ exists: { field: 'prevention_action' } }] } },
+              kill_failed: { term: { prevention_action: 'kill_failed' } },
             },
           },
         },
-      },
-      facet_linked_open: {
-        global: {},
-        aggs: {
-          split: {
-            filter: {
-              bool: {
-                filter: [{ term: { doc_type: 'alert' } }, ...(range ? [range] : []), LINKED],
-                must_not: [{ terms: { status: ['closed', 'resolved'] } }],
-              },
+        read: (response) => {
+          const buckets = (response as { buckets?: Record<string, { doc_count?: number } | undefined> } | undefined)?.buckets;
+          return {
+            byPrevention: {
+              prevented: buckets?.prevented?.doc_count ?? 0,
+              detected_only: buckets?.detected_only?.doc_count ?? 0,
+              kill_failed: buckets?.kill_failed?.doc_count ?? 0,
             },
-          },
+          };
         },
       },
-    };
-
-    const read = (aggregations: unknown): AlertFacetCounts => {
-      const a = (aggregations ?? {}) as FacetAggregations;
-      const bySeverity: Record<string, number> = {};
-      for (const b of a.facet_severity?.split?.buckets ?? []) bySeverity[b.key] = b.doc_count;
-      const prevention = a.facet_filtered?.prevention?.buckets;
-      return {
-        bySource: {
-          all: a.facet_source?.doc_count ?? 0,
-          test: a.facet_source?.split?.buckets?.test?.doc_count ?? 0,
-          organic: a.facet_source?.split?.buckets?.organic?.doc_count ?? 0,
-        },
-        bySeverity,
-        autoResolved: a.facet_filtered?.auto_resolved?.doc_count ?? 0,
-        linkedOpen: a.facet_linked_open?.split?.doc_count ?? 0,
-        byPrevention: {
-          prevented: prevention?.prevented?.doc_count ?? 0,
-          detected_only: prevention?.detected_only?.doc_count ?? 0,
-          kill_failed: prevention?.kill_failed?.doc_count ?? 0,
-        },
-      };
-    };
-
-    return { aggs, read };
+    });
   }
 
   // ── ZTA Score (CrowdStrike's Secure-Score equivalent) ─────────
