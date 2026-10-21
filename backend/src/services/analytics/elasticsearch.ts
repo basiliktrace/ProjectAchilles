@@ -40,6 +40,7 @@ import type {
   CategorySubcategoryBreakdownItem,
   SubcategoryBreakdownItem,
   ThreatActorCoverageItem,
+  TechniqueOutcomeItem,
   DefenseScoreByHostItem,
   CanonicalTestCountResponse,
   ErrorRateResponse,
@@ -1080,6 +1081,7 @@ export class ElasticsearchService {
       run.category = info?.category;
       run.subcategory = info?.subcategory;
       run.techniques = info?.techniques ?? [];
+      run.threatActor = info?.threatActor;
     });
     return runs;
   }
@@ -1088,7 +1090,7 @@ export class ElasticsearchService {
   private async fetchTestMetadata(
     filters: any[],
     testCount: number,
-  ): Promise<Map<string, { testName?: string; category?: string; subcategory?: string; techniques: string[] }>> {
+  ): Promise<Map<string, { testName?: string; category?: string; subcategory?: string; techniques: string[]; threatActor?: string }>> {
     const response = await this.client.search({
       index: this.settings.indexPattern,
       size: 0,
@@ -1101,14 +1103,14 @@ export class ElasticsearchService {
               top_hits: {
                 size: 1,
                 sort: [{ 'routing.event_time': { order: 'desc' } }],
-                _source: ['f0rtika.test_name', 'f0rtika.category', 'f0rtika.subcategory', 'f0rtika.techniques'],
+                _source: ['f0rtika.test_name', 'f0rtika.category', 'f0rtika.subcategory', 'f0rtika.techniques', 'f0rtika.threat_actor'],
               },
             },
           },
         },
       },
     });
-    const out = new Map<string, { testName?: string; category?: string; subcategory?: string; techniques: string[] }>();
+    const out = new Map<string, { testName?: string; category?: string; subcategory?: string; techniques: string[]; threatActor?: string }>();
     const buckets: any[] = (response.aggregations as any)?.test_meta?.buckets ?? [];
     for (const b of buckets) {
       const src = b.doc?.hits?.hits?.[0]?._source ?? {};
@@ -1117,6 +1119,7 @@ export class ElasticsearchService {
         category: optString(getField(src, 'f0rtika.category')),
         subcategory: optString(getField(src, 'f0rtika.subcategory')),
         techniques: toStringArray(getField(src, 'f0rtika.techniques')),
+        threatActor: optString(getField(src, 'f0rtika.threat_actor')),
       });
     }
     return out;
@@ -1194,6 +1197,7 @@ export class ElasticsearchService {
       run.category = info?.category;
       run.subcategory = info?.subcategory;
       run.techniques = info?.techniques ?? [];
+      run.threatActor = info?.threatActor;
     });
     return runs;
   }
@@ -1201,7 +1205,8 @@ export class ElasticsearchService {
   /**
    * Static per-bundle metadata, once per bundle_id (mirrors fetchTestMetadata):
    * bundle_name / category / subcategory from the bundle's latest control doc,
-   * and the union of f0rtika.techniques over its control docs.
+   * the union of f0rtika.techniques over its control docs, and the most
+   * common f0rtika.threat_actor (every control carries the bundle's actor).
    * Strictly, a pair's techniques are those of its latest RUN's controls. A
    * bundle's controls are stable across runs, so the per-bundle_id union is
    * the same set, without fetching control docs for every historical run.
@@ -1209,7 +1214,7 @@ export class ElasticsearchService {
   private async fetchBundleMetadata(
     filters: any[],
     bundleCount: number,
-  ): Promise<Map<string, { bundleName?: string; category?: string; subcategory?: string; techniques: string[] }>> {
+  ): Promise<Map<string, { bundleName?: string; category?: string; subcategory?: string; techniques: string[]; threatActor?: string }>> {
     const response = await this.client.search({
       index: this.settings.indexPattern,
       size: 0,
@@ -1226,11 +1231,12 @@ export class ElasticsearchService {
               },
             },
             techniques: { terms: { field: 'f0rtika.techniques', size: this.BUNDLE_TECHNIQUES_SIZE } },
+            threat_actor: { terms: { field: 'f0rtika.threat_actor', size: 1 } },
           },
         },
       },
     });
-    const out = new Map<string, { bundleName?: string; category?: string; subcategory?: string; techniques: string[] }>();
+    const out = new Map<string, { bundleName?: string; category?: string; subcategory?: string; techniques: string[]; threatActor?: string }>();
     const buckets: any[] = (response.aggregations as any)?.bundle_meta?.buckets ?? [];
     for (const b of buckets) {
       const src = b.doc?.hits?.hits?.[0]?._source ?? {};
@@ -1239,6 +1245,7 @@ export class ElasticsearchService {
         category: optString(getField(src, 'f0rtika.category')),
         subcategory: optString(getField(src, 'f0rtika.subcategory')),
         techniques: ((b.techniques?.buckets ?? []) as any[]).map(t => String(t.key)),
+        threatActor: optString(b.threat_actor?.buckets?.[0]?.key),
       });
     }
     return out;
@@ -2775,6 +2782,75 @@ export class ElasticsearchService {
     return items
       .sort((a, b) => (b.protected + b.unprotected) - (a.protected + a.unprotected) || a.name.localeCompare(b.name))
       .slice(0, 50);
+  }
+
+  /**
+   * Threat actor coverage, basis=latest: per actor, the share of its test x
+   * endpoint pairs whose latest result is protected (combined verdict), worst
+   * first. Pairs without a threat actor are left out.
+   */
+  async getThreatActorCoverageLatest(params: AnalyticsQueryParams & Partial<ExtendedAnalyticsQueryParams>): Promise<ThreatActorCoverageItem[]> {
+    const pairs = await this.getLatestPairs(params);
+    const byActor = new Map<string, PairRun[]>();
+    for (const p of pairs) {
+      if (!p.threatActor) continue;
+      const list = byActor.get(p.threatActor);
+      if (list) list.push(p);
+      else byActor.set(p.threatActor, [p]);
+    }
+    const items: ThreatActorCoverageItem[] = [];
+    for (const [threatActor, actorPairs] of byActor) {
+      const s = summarizePairs(actorPairs);
+      if (s.score === null) continue;
+      const lastTs = actorPairs.reduce((m, p) => Math.max(m, p.ts), Number.NEGATIVE_INFINITY);
+      items.push({
+        threatActor,
+        coverage: s.score,
+        testCount: new Set(actorPairs.map(p => p.testName)).size,
+        protectedCount: s.protectedCount,
+        totalExecutions: s.pairCount,
+        pairCount: s.pairCount,
+        lastTestedAt: new Date(lastTs).toISOString(),
+      });
+    }
+    return items.sort((a, b) =>
+      a.coverage - b.coverage || b.totalExecutions - a.totalExecutions || a.threatActor.localeCompare(b.threatActor));
+  }
+
+  /**
+   * Per-technique outcomes, basis=latest: each per-stage pair under each of
+   * its techniques counts as blocked (is_protected), detected-only (combined
+   * but not strict) or got through. Always per-stage, for the same reason as
+   * getTechniqueDistributionLatest. Every technique is returned (no top-N).
+   */
+  async getTechniqueOutcomes(params: AnalyticsQueryParams & Partial<ExtendedAnalyticsQueryParams>): Promise<TechniqueOutcomeItem[]> {
+    const pairs = await this.getLatestPairs({ ...params, scoringMode: 'all-stages' });
+    const byTechnique = new Map<string, { protected: number; detected: number; unprotected: number; lastTs: number }>();
+    for (const p of pairs) {
+      for (const technique of new Set(p.techniques)) {
+        let t = byTechnique.get(technique);
+        if (!t) {
+          t = { protected: 0, detected: 0, unprotected: 0, lastTs: Number.NEGATIVE_INFINITY };
+          byTechnique.set(technique, t);
+        }
+        if (p.strictProtected) t.protected++;
+        else if (p.protected) t.detected++;
+        else t.unprotected++;
+        if (p.ts > t.lastTs) t.lastTs = p.ts;
+      }
+    }
+    const items: TechniqueOutcomeItem[] = [];
+    for (const [technique, t] of byTechnique) {
+      items.push({
+        technique,
+        protected: t.protected,
+        detected: t.detected,
+        unprotected: t.unprotected,
+        lastTestedAt: new Date(t.lastTs).toISOString(),
+      });
+    }
+    const total = (i: TechniqueOutcomeItem) => i.protected + i.detected + i.unprotected;
+    return items.sort((a, b) => total(b) - total(a) || a.technique.localeCompare(b.technique));
   }
 
   // Get canonical test count (stable denominator for coverage calculations)

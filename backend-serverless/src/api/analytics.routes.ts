@@ -541,7 +541,19 @@ router.get('/defense-score/by-category-subcategory', asyncHandler(async (req, re
 // GET /api/analytics/threat-actor-coverage - Threat actor coverage metrics
 router.get('/threat-actor-coverage', asyncHandler(async (req, res) => {
   const es = await getEsService();
-  const result = await es.getThreatActorCoverage(extractFilterParams(req.query));
+  const filterParams = extractFilterParams(req.query);
+  const result = filterParams.basis === 'latest'
+    ? await es.getThreatActorCoverageLatest(filterParams)
+    : await es.getThreatActorCoverage(filterParams);
+  res.json(result);
+}));
+
+// GET /api/analytics/technique-outcomes - Blocked / detected-only / got-through
+// per technique. Always latest-result posture (per-stage pairs); basis is ignored.
+router.get('/technique-outcomes', asyncHandler(async (req, res) => {
+  const es = await getEsService();
+  const { basis: _basis, ...query } = req.query;
+  const result = await es.getTechniqueOutcomes(extractFilterParams(query));
   res.json(result);
 }));
 

@@ -316,6 +316,19 @@ export interface ThreatActorCoverageItem {
   testCount: number;
   protectedCount: number;
   totalExecutions: number;
+  /** basis=latest only: test x endpoint pairs (equals totalExecutions there). */
+  pairCount?: number;
+  /** basis=latest only: ISO time of the actor's most recent pair result. */
+  lastTestedAt?: string;
+}
+
+// Per-technique latest-result outcomes (per-stage test x endpoint pairs)
+export interface TechniqueOutcomeItem {
+  technique: string;
+  protected: number; // strict: is_protected (blocked)
+  detected: number; // combined-only: Defender/CrowdStrike detected, not blocked
+  unprotected: number; // got through
+  lastTestedAt: string; // ISO time of the technique's most recent pair result
 }
 
 // Defense score by hostname item

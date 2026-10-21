@@ -2557,7 +2557,7 @@ describe('elasticsearch.ts', () => {
         names: { buckets: [] },
       };
     }
-    type Meta = Record<string, { name: string; category?: string; subcategory?: string; techniques?: string[] }>;
+    type Meta = Record<string, { name: string; category?: string; subcategory?: string; techniques?: string[]; threatActor?: string }>;
 
     /** Dispatch mockSearch by aggregation name so parallel query order doesn't matter. */
     function routeSearch(opts: { pairPages?: unknown[][]; bundlePages?: unknown[][]; meta?: Meta; bundleMeta?: Meta; rawPairPages?: unknown[][] }) {
@@ -2580,7 +2580,7 @@ describe('elasticsearch.ts', () => {
               test_meta: {
                 buckets: Object.entries(opts.meta ?? {}).map(([key, m]) => ({
                   key,
-                  doc: { hits: { hits: [{ _source: { f0rtika: { test_name: m.name, category: m.category, subcategory: m.subcategory, techniques: m.techniques ?? [] } } }] } },
+                  doc: { hits: { hits: [{ _source: { f0rtika: { test_name: m.name, category: m.category, subcategory: m.subcategory, techniques: m.techniques ?? [], threat_actor: m.threatActor } } }] } },
                 })),
               },
             },
@@ -2594,6 +2594,7 @@ describe('elasticsearch.ts', () => {
                   key,
                   doc: { hits: { hits: [{ _source: { f0rtika: { bundle_name: m.name, category: m.category, subcategory: m.subcategory } } }] } },
                   techniques: { buckets: (m.techniques ?? []).map(t => ({ key: t, doc_count: 1 })) },
+                  threat_actor: { buckets: m.threatActor ? [{ key: m.threatActor, doc_count: 3 }] : [] },
                 })),
               },
             },
@@ -2690,6 +2691,20 @@ describe('elasticsearch.ts', () => {
         expect(meta.aggs.test_meta.aggs.doc.top_hits.size).toBe(1);
       });
 
+      it('joins threatActor from the test metadata doc (f0rtika.threat_actor)', async () => {
+        routeSearch({
+          pairPages: [[
+            pairBucket({ test: 'u1', host: 'h1', ts: '2025-01-10T10:30:00Z', code: 126, isProtected: true }),
+            pairBucket({ test: 'u2', host: 'h1', ts: '2025-01-10T10:30:00Z', code: 101 }),
+          ]],
+          meta: { u1: { name: 'Test One', threatActor: 'APT29' }, u2: { name: 'Test Two' } },
+        });
+        const runs = await (createService() as any).fetchPairRuns(BASE_FILTERS, false);
+        expect(runs.map((r: any) => r.threatActor)).toEqual(['APT29', undefined]);
+        const meta = searchesWith('test_meta')[0];
+        expect(meta.aggs.test_meta.aggs.doc.top_hits._source).toContain('f0rtika.threat_actor');
+      });
+
       it('a null event.ERROR from top_metrics yields no error code (not 0)', async () => {
         routeSearch({ pairPages: [[pairBucket({ test: 'u1', host: 'h1', ts: '2025-01-10T10:30:00Z', code: null })]] });
         const [run] = await (createService() as any).fetchPairRuns(BASE_FILTERS, false, { withMetadata: false, latestOnly: false });
@@ -2771,6 +2786,23 @@ describe('elasticsearch.ts', () => {
         const byKey = Object.fromEntries(runs.map((r: any) => [r.pairKey, r]));
         expect(byKey['org-a|bundle:b1|h1']).toMatchObject({ testName: 'Bundle One', category: 'intel-driven', subcategory: 'kc', techniques: ['T1', 'T2'] });
         expect(byKey['org-a|bundle:b2|h1']).toMatchObject({ testName: 'Bundle Two', subcategory: 'lm', techniques: ['T9'] });
+      });
+
+      it('bundle pairs take threatActor from the top f0rtika.threat_actor bucket', async () => {
+        routeSearch({
+          pairPages: [[]],
+          bundlePages: [[
+            bundleBucket({ bundle: 'b1', host: 'h1', ts: '2025-01-11T09:00:00Z', combined: 0, strict: 0, codes: [101], controls: [{ techniques: [] }] }),
+            bundleBucket({ bundle: 'b2', host: 'h1', ts: '2025-01-11T09:00:00Z', combined: 0, strict: 0, codes: [101], controls: [{ techniques: [] }] }),
+          ]],
+          bundleMeta: { b1: { name: 'Bundle One', threatActor: 'Lazarus' }, b2: { name: 'Bundle Two' } },
+        });
+        const runs = await (createService() as any).fetchPairRuns(BASE_FILTERS, true);
+        const byKey = Object.fromEntries(runs.map((r: any) => [r.pairKey, r]));
+        expect(byKey['org-a|bundle:b1|h1'].threatActor).toBe('Lazarus');
+        expect(byKey['org-a|bundle:b2|h1'].threatActor).toBeUndefined();
+        const meta = searchesWith('bundle_meta')[0];
+        expect(meta.aggs.bundle_meta.aggs.threat_actor.terms).toEqual({ field: 'f0rtika.threat_actor', size: 1 });
       });
 
       it('without metadata no bundle_meta query is issued', async () => {
@@ -3351,6 +3383,82 @@ describe('elasticsearch.ts', () => {
           ]);
           const intel = res[1];
           expect(intel.subcategories.reduce((n, s) => n + s.count, 0)).toBe(intel.count);
+        });
+      });
+
+      describe('threatActorCoverageLatest', () => {
+        it('groups pairs by actor, skips pairs without one, worst coverage first', async () => {
+          const res = await stub([
+            pair({ pairKey: 'o|u1|h1', threatActor: 'APT29', testName: 'Test One', protected: true, ts: Date.parse('2025-01-10T00:00:00Z') }),
+            pair({ pairKey: 'o|u1|h2', threatActor: 'APT29', testName: 'Test One', ts: Date.parse('2025-01-12T00:00:00Z') }),
+            pair({ pairKey: 'o|u2|h1', threatActor: 'APT29', testName: 'Test Two', protected: true, ts: Date.parse('2025-01-11T00:00:00Z') }),
+            pair({ pairKey: 'o|u3|h1', threatActor: 'Lazarus', testName: 'Test Three', ts: Date.parse('2025-01-05T00:00:00Z') }),
+            pair({ pairKey: 'o|u4|h1', testName: 'No Actor', protected: true }),
+          ]).getThreatActorCoverageLatest(params);
+          expect(res).toEqual([
+            {
+              threatActor: 'Lazarus', coverage: 0, testCount: 1, protectedCount: 0, totalExecutions: 1,
+              pairCount: 1, lastTestedAt: '2025-01-05T00:00:00.000Z',
+            },
+            {
+              threatActor: 'APT29', coverage: 66.67, testCount: 2, protectedCount: 2, totalExecutions: 3,
+              pairCount: 3, lastTestedAt: '2025-01-12T00:00:00.000Z',
+            },
+          ]);
+        });
+        it('coverage uses the combined verdict (detected-only counts as protected)', async () => {
+          const [item] = await stub([
+            pair({ pairKey: 'a', threatActor: 'APT29', protected: true, strictProtected: false }),
+            pair({ pairKey: 'b', threatActor: 'APT29' }),
+          ]).getThreatActorCoverageLatest(params);
+          expect(item).toMatchObject({ coverage: 50, protectedCount: 1 });
+        });
+        it('an any-stage bundle pair counts under its bundle name', async () => {
+          const svc = stub([
+            pair({ pairKey: 'o|bundle:b1|h1', threatActor: 'APT29', testName: 'Bundle One', protected: true }),
+            pair({ pairKey: 'o|bundle:b1|h2', threatActor: 'APT29', testName: 'Bundle One' }),
+          ]);
+          const [item] = await svc.getThreatActorCoverageLatest({ ...params, scoringMode: 'any-stage' });
+          expect(svc.getLatestPairs).toHaveBeenCalledWith(expect.objectContaining({ scoringMode: 'any-stage' }));
+          expect(item).toMatchObject({ threatActor: 'APT29', testCount: 1, pairCount: 2, coverage: 50 });
+        });
+        it('ties on coverage: more pairs first, then name', async () => {
+          const res = await stub([
+            pair({ pairKey: 'a', threatActor: 'B' }),
+            pair({ pairKey: 'b', threatActor: 'A' }),
+            pair({ pairKey: 'c', threatActor: 'C' }),
+            pair({ pairKey: 'd', threatActor: 'C' }),
+          ]).getThreatActorCoverageLatest(params);
+          expect(res.map(r => r.threatActor)).toEqual(['C', 'A', 'B']);
+        });
+        it('no pairs with an actor -> empty list', async () => {
+          expect(await stub([pair({ pairKey: 'a' })]).getThreatActorCoverageLatest(params)).toEqual([]);
+        });
+      });
+
+      describe('techniqueOutcomes', () => {
+        it('splits each technique into blocked (strict), detected-only and got-through', async () => {
+          const res = await stub([
+            pair({ pairKey: 'a', techniques: ['T1059'], protected: true, strictProtected: true, ts: Date.parse('2025-01-10T00:00:00Z') }),
+            pair({ pairKey: 'b', techniques: ['T1059', 'T1105'], protected: true, strictProtected: false, ts: Date.parse('2025-01-15T00:00:00Z') }),
+            pair({ pairKey: 'c', techniques: ['T1059'], ts: Date.parse('2025-01-12T00:00:00Z') }),
+            pair({ pairKey: 'd', techniques: [] }),
+          ]).getTechniqueOutcomes(params);
+          expect(res).toEqual([
+            { technique: 'T1059', protected: 1, detected: 1, unprotected: 1, lastTestedAt: '2025-01-15T00:00:00.000Z' },
+            { technique: 'T1105', protected: 0, detected: 1, unprotected: 0, lastTestedAt: '2025-01-15T00:00:00.000Z' },
+          ]);
+        });
+        it('always per-stage, even in any-stage mode', async () => {
+          const svc = stub([]);
+          await svc.getTechniqueOutcomes({ ...params, scoringMode: 'any-stage' });
+          expect(svc.getLatestPairs).toHaveBeenCalledWith(expect.objectContaining({ scoringMode: 'all-stages' }));
+        });
+        it('returns every technique (no top-N cap)', async () => {
+          const pairs = Array.from({ length: 60 }, (_, i) =>
+            pair({ pairKey: `p${i}`, techniques: [`T${1000 + i}`] }));
+          const res = await stub(pairs).getTechniqueOutcomes(params);
+          expect(res).toHaveLength(60);
         });
       });
 
