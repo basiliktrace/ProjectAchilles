@@ -136,7 +136,6 @@ export interface DashboardData {
   defensePairCount: number | null;
   /** Last minus first scored point of the defense trend. */
   defenseDelta: number | null;
-  defense7: DefenseScore | null;
   cadence: CadenceView | null;
   actorReadiness: ActorReadinessView | null;
   attackMatrix: AttackMatrixView | null;
@@ -171,7 +170,6 @@ export function useDashboardData(range: DateRangeValue = DEFAULT_TIME_RANGE): Da
   const [tests, setTests] = useState<TestMetadata[] | null>(null);
   const [syncStatus, setSyncStatus] = useState<SyncStatus | null>(null);
   const [defenseScore, setDefenseScore] = useState<DefenseScore | null>(null);
-  const [defense7, setDefense7] = useState<DefenseScore | null>(null);
   const [activity, setActivity] = useState<ExecutionActivityResponse | null>(null);
   const [actorCoverage, setActorCoverage] = useState<ThreatActorCoverageItem[] | null>(null);
   const [techniqueOutcomes, setTechniqueOutcomes] = useState<TechniqueOutcomeItem[] | null>(null);
@@ -217,9 +215,8 @@ export function useDashboardData(range: DateRangeValue = DEFAULT_TIME_RANGE): Da
   const loadAnalyticsData = useCallback(async () => {
     if (!analyticsConfigured) return;
     const bounds = getDateRangeFilter({ preset, from: customFrom, to: customTo });
-    const [dRange, d7, er, dTrend, eTrend, act, actors, outcomes] = await Promise.allSettled([
+    const [dRange, er, dTrend, eTrend, act, actors, outcomes] = await Promise.allSettled([
       analyticsApi.getDefenseScore({ ...bounds, scoringMode, basis: 'latest' }),
-      analyticsApi.getDefenseScore({ from: 'now-7d', scoringMode }),
       analyticsApi.getErrorRate(bounds),
       analyticsApi.getDefenseScoreTrend({ ...bounds, interval: 'day', scoringMode, basis: 'latest' }),
       analyticsApi.getErrorRateTrend({ ...bounds, interval: 'day' }),
@@ -228,7 +225,6 @@ export function useDashboardData(range: DateRangeValue = DEFAULT_TIME_RANGE): Da
       analyticsApi.getTechniqueOutcomes({ ...bounds }),
     ]);
     setDefenseScore(settle(dRange));
-    setDefense7(settle(d7));
     setErrorRate(settle(er));
     setDefenseTrend(settle(dTrend));
     setErrorTrend(settle(eTrend));
@@ -379,7 +375,6 @@ export function useDashboardData(range: DateRangeValue = DEFAULT_TIME_RANGE): Da
     defenseCurrentScore: current.score,
     defensePairCount: current.pairCount,
     defenseDelta,
-    defense7,
     cadence,
     actorReadiness,
     attackMatrix,
