@@ -24,7 +24,10 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          fetch-depth: 1
+          # Full history, so review subagents can use git log/show/diff (auto-approved
+          # as read-only) without git fetch. Don't add Bash(git ...) allow rules: they
+          # bypass that read-only check and allow --output and --no-index.
+          fetch-depth: 0
 
       - name: Run Claude Code Review
         id: claude-review
