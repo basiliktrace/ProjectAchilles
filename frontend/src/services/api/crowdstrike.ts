@@ -11,11 +11,16 @@ export interface ZtaScoreSummary {
   osScore: number;
   sensorConfigScore: number;
   deviceCount: number;
+  minScore: number;
 }
 
 export interface ZtaScoreTrendPoint {
   date: string;
   overallScore: number;
+  /** Alias of overallScore, kept for the CLI. */
+  score: number;
+  osScore: number;
+  sensorConfigScore: number;
   deviceCount: number;
 }
 

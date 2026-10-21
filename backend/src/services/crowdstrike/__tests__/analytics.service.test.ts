@@ -102,6 +102,20 @@ describe('CrowdStrikeAnalyticsService', () => {
       expect(result[1].score).toBe(72);
       expect(result[1].deviceCount).toBe(11);
     });
+
+    it('exposes overallScore and keeps the score alias', async () => {
+      mockSearch.mockResolvedValueOnce({
+        hits: {
+          hits: [
+            { _source: { timestamp: '2026-09-29T00:00:00Z', overall_score: 97, os_score: 91, sensor_config_score: 100, device_count: 6 } },
+          ],
+        },
+      });
+
+      const result = await service.getZtaScoreTrend(30);
+
+      expect(result[0]).toMatchObject({ overallScore: 97, score: 97, osScore: 91, sensorConfigScore: 100, deviceCount: 6 });
+    });
   });
 
   // ── Alerts ─────────────────────────────────────────────────
@@ -163,6 +177,23 @@ describe('CrowdStrikeAnalyticsService', () => {
       const recentHighQuery = mockSearch.mock.calls[1][0];
       expect(JSON.stringify(recentHighQuery.query)).toContain('critical');
       expect(JSON.stringify(recentHighQuery.query)).toContain('high');
+    });
+  });
+
+  describe('getAlertSummary product', () => {
+    it('maps product from category on recent alerts', async () => {
+      mockSearch.mockResolvedValueOnce({
+        hits: { total: { value: 1 }, hits: [] },
+        aggregations: { by_severity: { buckets: [] }, by_status: { buckets: [] } },
+      });
+      mockSearch.mockResolvedValueOnce({
+        hits: { hits: [{ _source: { alert_id: 'a1', alert_title: 'X', severity: 'high', created_at: '2026-10-01T10:00:00Z', service_source: 'Falcon', category: 'NGAV' } }] },
+      });
+      mockSearch.mockResolvedValueOnce({ hits: { hits: [] } });
+
+      const result = await service.getAlertSummary();
+
+      expect(result.recentHigh[0].product).toBe('NGAV');
     });
   });
 

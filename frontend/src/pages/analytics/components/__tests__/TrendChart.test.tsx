@@ -127,8 +127,8 @@ describe('TrendChart', () => {
 
   it('uses the last secure and ZTA values', () => {
     const zta: ZtaScoreTrendPoint[] = [
-      { date: '2026-10-18', overallScore: 70, deviceCount: 4 },
-      { date: '2026-10-19', overallScore: 75.5, deviceCount: 4 },
+      { date: '2026-10-18', overallScore: 70, score: 70, osScore: 0, sensorConfigScore: 0, deviceCount: 4 },
+      { date: '2026-10-19', overallScore: 75.5, score: 75.5, osScore: 0, sensorConfigScore: 0, deviceCount: 4 },
     ];
     render(
       <TrendChart

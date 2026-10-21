@@ -27,6 +27,8 @@ export interface ZtaScoreSummary {
 
 export interface ZtaScoreTrendPoint {
   date: string;
+  overallScore: number;
+  /** Alias of overallScore, kept for the CLI. */
   score: number;
   osScore: number;
   sensorConfigScore: number;
@@ -39,6 +41,7 @@ interface RecentAlert {
   severity: string;
   created_at: string;
   service_source: string;
+  product: string;
 }
 
 export interface AlertSummary {
@@ -169,6 +172,7 @@ export class CrowdStrikeAnalyticsService {
       const source = hit._source as Record<string, unknown>;
       return {
         date: String(source.timestamp ?? ''),
+        overallScore: Number(source.overall_score ?? 0),
         score: Number(source.overall_score ?? 0),
         osScore: Number(source.os_score ?? 0),
         sensorConfigScore: Number(source.sensor_config_score ?? 0),
@@ -221,6 +225,7 @@ export class CrowdStrikeAnalyticsService {
         severity: String(s.severity ?? ''),
         created_at: String(s.created_at ?? ''),
         service_source: String(s.service_source ?? ''),
+        product: String(s.category ?? ''),
       };
     };
 
