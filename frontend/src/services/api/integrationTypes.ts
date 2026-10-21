@@ -68,6 +68,8 @@ export interface IntegrationAlertItem {
   achilles_correlated: boolean;
   achilles_test_uuid?: string;
   achilles_test_name?: string;
+  /** 'bundle' when achilles_test_uuid is a bundle (name = bundle_name), else 'test'. */
+  achilles_test_kind?: 'test' | 'bundle';
   /** Defender only (CrowdStrike items carry `product` instead). */
   service_source?: string;
 }

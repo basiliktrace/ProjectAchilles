@@ -146,7 +146,7 @@ describe('IntegrationAlertFeed', () => {
   it('shows the test name for a linked alert, or the short uuid when the name is missing', async () => {
     getAlerts.mockResolvedValue(
       page([
-        item({ alert_id: '1', achilles_correlated: true, achilles_test_name: 'LSASS Dump', achilles_test_uuid: 'abcdef12-0000' }),
+        item({ alert_id: '1', achilles_correlated: true, achilles_test_name: 'LSASS Dump', achilles_test_kind: 'test', achilles_test_uuid: 'abcdef12-0000' }),
         item({ alert_id: '2', alert_title: 'two', achilles_correlated: true, achilles_test_uuid: 'abcdef12-0000' }),
       ]),
     );
@@ -154,6 +154,23 @@ describe('IntegrationAlertFeed', () => {
     const link = await screen.findByRole('link', { name: 'LSASS Dump' });
     expect(link).toHaveAttribute('href', '/analytics?tab=executions&tests=LSASS%20Dump');
     expect(screen.getByText('abcdef12')).toBeInTheDocument();
+  });
+
+  it('links a bundle-linked alert with the bundleNames filter, not the test-name filter', async () => {
+    getAlerts.mockResolvedValue(
+      page([
+        item({
+          alert_id: '1',
+          achilles_correlated: true,
+          achilles_test_name: 'Ransomware Chain',
+          achilles_test_kind: 'bundle',
+          achilles_test_uuid: 'b0b0b0b0-0000',
+        }),
+      ]),
+    );
+    renderFeed(mk('defender'));
+    const link = await screen.findByRole('link', { name: 'Ransomware Chain' });
+    expect(link).toHaveAttribute('href', '/analytics?tab=executions&bundleNames=Ransomware%20Chain');
   });
 
   it("shows 'No alerts match these filters' and disables pagination on zero results", async () => {

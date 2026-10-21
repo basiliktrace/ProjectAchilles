@@ -105,6 +105,8 @@ export interface CrowdStrikeAlertItem {
   achilles_test_uuid?: string;
   /** Display name of the matched test or bundle, when it can be resolved. */
   achilles_test_name?: string;
+  /** 'bundle' when achilles_test_uuid is a bundle (name = bundle_name), else 'test'. */
+  achilles_test_kind?: 'test' | 'bundle';
 }
 
 export interface ScoreComparisonPoint {
@@ -457,7 +459,7 @@ export class CrowdStrikeAnalyticsService {
       const testUuid = typeof f0rtika.achilles_test_uuid === 'string' && f0rtika.achilles_test_uuid
         ? f0rtika.achilles_test_uuid
         : undefined;
-      const testName = testUuid ? testNames.get(testUuid) : undefined;
+      const linked = testUuid ? testNames.get(testUuid) : undefined;
       const item: CrowdStrikeAlertItem = {
         alert_id: String(s.alert_id ?? ''),
         alert_title: String(s.alert_title ?? ''),
@@ -479,7 +481,7 @@ export class CrowdStrikeAnalyticsService {
         ...(s.portal_url ? { portal_url: String(s.portal_url) } : {}),
         achilles_correlated: f0rtika.achilles_correlated === true,
         ...(testUuid ? { achilles_test_uuid: testUuid } : {}),
-        ...(testName ? { achilles_test_name: testName } : {}),
+        ...(linked ? { achilles_test_name: linked.name, achilles_test_kind: linked.kind } : {}),
       };
       if (typeof f0rtika.auto_resolved === 'boolean') {
         item.auto_resolved = f0rtika.auto_resolved;

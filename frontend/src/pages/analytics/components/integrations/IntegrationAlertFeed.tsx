@@ -53,10 +53,13 @@ function SummaryItem({ label, value }: { label: string; value: number }) {
 function LinkedTestCell({ alert }: { alert: IntegrationAlertItem }) {
   if (!alert.achilles_correlated) return <span className="text-muted-foreground">Organic</span>;
   if (alert.achilles_test_name) {
-    // The analytics `tests` filter matches f0rtika.test_name, i.e. the test name.
+    // A bundle uuid resolves to its bundle_name, which only the `bundleNames`
+    // filter matches; the `tests` filter matches f0rtika.test_name (on bundle
+    // control docs that is the control's name, not the bundle's).
+    const param = alert.achilles_test_kind === 'bundle' ? 'bundleNames' : 'tests';
     return (
       <Link
-        to={`/analytics?tab=executions&tests=${encodeURIComponent(alert.achilles_test_name)}`}
+        to={`/analytics?tab=executions&${param}=${encodeURIComponent(alert.achilles_test_name)}`}
         className="text-accent hover:underline"
       >
         {alert.achilles_test_name}

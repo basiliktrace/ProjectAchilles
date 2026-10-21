@@ -76,6 +76,8 @@ export interface CrowdStrikeAlertItem {
   achilles_correlated: boolean;
   achilles_test_uuid?: string;
   achilles_test_name?: string;
+  /** 'bundle' when achilles_test_uuid is a bundle (name = bundle_name), else 'test'. */
+  achilles_test_kind?: 'test' | 'bundle';
   /**
    * 'stage' when the alert's evidence carries a `<bundle_uuid>-<technique>.exe`
    * binary that pins it to a specific stage; 'bundle' otherwise (orchestrator

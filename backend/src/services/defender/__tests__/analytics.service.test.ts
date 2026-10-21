@@ -26,7 +26,9 @@ vi.mock('../index-management.js', () => ({
   DEFENDER_INDEX: 'achilles-defender',
 }));
 
-const mockResolveTestNames = vi.fn(async (..._args: unknown[]) => new Map<string, string>());
+const mockResolveTestNames = vi.fn(
+  async (..._args: unknown[]) => new Map<string, { name: string; kind: 'test' | 'bundle' }>(),
+);
 vi.mock('../../analytics/test-name-lookup.js', () => ({
   resolveTestNames: (...args: unknown[]) => mockResolveTestNames(...args),
 }));
@@ -1301,7 +1303,7 @@ describe('DefenderAnalyticsService', () => {
     });
 
     it('maps hostname, prevention, remediation_status, portal_url and correlation fields', async () => {
-      mockResolveTestNames.mockResolvedValueOnce(new Map([['u1', 'Ransomware chain']]));
+      mockResolveTestNames.mockResolvedValueOnce(new Map([['u1', { name: 'Ransomware chain', kind: 'bundle' as const }]]));
       mockSearch.mockResolvedValueOnce({
         hits: {
           total: { value: 1 },
@@ -1332,6 +1334,7 @@ describe('DefenderAnalyticsService', () => {
       expect(item.achilles_correlated).toBe(true);
       expect(item.achilles_test_uuid).toBe('u1');
       expect(item.achilles_test_name).toBe('Ransomware chain');
+      expect(item.achilles_test_kind).toBe('bundle');
       expect(item.alert_title).toBe('Ransomware note dropped');
 
       expect(mockResolveTestNames).toHaveBeenCalledTimes(1);
@@ -1351,6 +1354,7 @@ describe('DefenderAnalyticsService', () => {
       expect(item.achilles_correlated).toBe(false);
       expect(item.achilles_test_uuid).toBeUndefined();
       expect(item.achilles_test_name).toBeUndefined();
+      expect(item.achilles_test_kind).toBeUndefined();
       expect(item.prevention_action).toBeUndefined();
       expect(item.remediation_status).toBeUndefined();
       expect(item.portal_url).toBeUndefined();

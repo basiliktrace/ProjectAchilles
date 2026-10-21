@@ -67,6 +67,8 @@ export interface DefenderAlertItem {
   achilles_correlated: boolean;
   achilles_test_uuid?: string;
   achilles_test_name?: string;
+  /** 'bundle' when achilles_test_uuid is a bundle (name = bundle_name), else 'test'. */
+  achilles_test_kind?: 'test' | 'bundle';
   recommended_actions: string;
   /**
    * 'stage' when the alert's evidence carries a `<bundle_uuid>-<technique>.exe`
