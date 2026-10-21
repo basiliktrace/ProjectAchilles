@@ -6,6 +6,7 @@ import {
 } from './evidence-correlation.js';
 import { CROWDSTRIKE_INDEX } from './index-management.js';
 import type { EnrichmentPassOptions, EnrichmentPassResult } from '../../types/crowdstrike.js';
+import { enrichmentEligibleClauses } from '../analytics/enrichment-eligibility.js';
 
 const DEFAULT_LOOKBACK_DAYS = 90;
 const DEFAULT_BATCH_SIZE = 200;
@@ -18,7 +19,6 @@ const DEFAULT_MAX_DURATION_MS = 60_000;
 // policy blocks, including the ASR rule the platform excludes by design
 // (docs/defender-asr-exclusion-rationale.md).
 // See docs/edr-killed-stage-detection.md.
-const ENRICHMENT_ELIGIBLE_ERROR_CODES = [0, 1, 101, 105, 126, 127, 259, 999];
 
 // Exit codes proving a stage reached a conclusive outcome on its own
 // (101 executed unprotected; 105/126/127 policy-prevented). A wide/bundle-level
@@ -315,8 +315,7 @@ export class CrowdStrikeEnrichmentService {
       bool: {
         filter: [
           { range: { 'routing.event_time': { gte: `now-${lookbackDays}d` } } },
-          { terms: { 'event.ERROR': ENRICHMENT_ELIGIBLE_ERROR_CODES } },
-          { bool: { must_not: [{ term: { 'f0rtika.category': 'cyber-hygiene' } }] } },
+          ...enrichmentEligibleClauses(),
           {
             bool: {
               should: [
