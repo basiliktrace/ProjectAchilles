@@ -12,40 +12,12 @@ import {
 import { Loader2, Activity } from 'lucide-react';
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
 import { analyticsApi } from '@/services/api/analytics';
-import type { IntegrationTrendPoint } from '@/services/api/integrationTypes';
 import type { IntegrationVendor, TimeWindow } from './vendorConfig';
-import { bucketExecutions } from './weeklyBuckets';
-
-interface Point {
-  date: string;
-  tests: number;
-  linked: number;
-  organic: number;
-}
+import { buildSeries, type TimelinePoint } from './buildSeries';
 
 const LINKED = 'var(--chart-series-alert)';
 const ORGANIC = 'var(--muted-foreground)';
 const EXEC = 'var(--chart-series-exec)';
-
-function buildSeries(
-  tests: Array<{ timestamp: string; total?: number }>,
-  alerts: IntegrationTrendPoint[],
-): Point[] {
-  const interval = alerts[0]?.interval ?? 'day';
-  const execs = bucketExecutions(tests, interval);
-  const byDate = new Map<string, Point>();
-  for (const [date, total] of Object.entries(execs)) {
-    byDate.set(date, { date, tests: total, linked: 0, organic: 0 });
-  }
-  for (const a of alerts) {
-    const date = a.date.slice(0, 10);
-    const row = byDate.get(date) ?? { date, tests: 0, linked: 0, organic: 0 };
-    row.linked = a.linked;
-    row.organic = Math.max(0, a.count - a.linked);
-    byDate.set(date, row);
-  }
-  return Array.from(byDate.values()).sort((a, b) => a.date.localeCompare(b.date));
-}
 
 interface Props {
   vendor: IntegrationVendor;
@@ -53,15 +25,17 @@ interface Props {
 }
 
 export default function IntegrationTimelineCard({ vendor, window }: Props) {
-  const [data, setData] = useState<Point[] | null>(null);
+  const [data, setData] = useState<TimelinePoint[] | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [failed, setFailed] = useState<string[]>([]);
 
   useEffect(() => {
     let cancelled = false;
     async function load() {
       setLoading(true);
       setError(null);
+      setFailed([]);
       const [testResult, alertResult] = await Promise.allSettled([
         // Attack simulations only; cyber-hygiene checks can't trip a vendor alert.
         analyticsApi.getDefenseScoreTrend({
@@ -80,7 +54,11 @@ export default function IntegrationTimelineCard({ vendor, window }: Props) {
       }
       const tests = testResult.status === 'fulfilled' ? testResult.value : [];
       const alerts = alertResult.status === 'fulfilled' ? alertResult.value : [];
-      setData(buildSeries(tests, alerts));
+      const missing: string[] = [];
+      if (testResult.status === 'rejected') missing.push('Test executions');
+      if (alertResult.status === 'rejected') missing.push('Alert volume');
+      setFailed(missing);
+      setData(buildSeries(tests, alerts, window));
       setLoading(false);
     }
     load();
@@ -115,6 +93,11 @@ export default function IntegrationTimelineCard({ vendor, window }: Props) {
           </div>
         ) : (
           <>
+            {failed.length > 0 && (
+              <p role="status" className="pb-2 text-xs text-warning">
+                {failed.map((f) => `${f} unavailable`).join('; ')}
+              </p>
+            )}
             <ResponsiveContainer width="100%" height={260}>
               <ComposedChart data={data} margin={{ top: 10, right: 20, left: 0, bottom: 0 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />

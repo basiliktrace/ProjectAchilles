@@ -66,4 +66,18 @@ describe('IntegrationTimelineCard', () => {
       expect(screen.getByText('Unable to load test or alert volume')).toBeInTheDocument(),
     );
   });
+
+  it('flags a failed alert request instead of showing it as zero alerts', async () => {
+    mockGetAlertTrend.mockRejectedValue(new Error('x'));
+    render(<IntegrationTimelineCard vendor={vendor} window={window} />);
+    await waitFor(() => expect(screen.getByText('Alert volume unavailable')).toBeInTheDocument());
+    expect(screen.queryByText('Test executions unavailable')).toBeNull();
+  });
+
+  it('flags a failed execution request', async () => {
+    mockGetDefenseScoreTrend.mockRejectedValue(new Error('x'));
+    render(<IntegrationTimelineCard vendor={vendor} window={window} />);
+    await waitFor(() => expect(screen.getByText('Test executions unavailable')).toBeInTheDocument());
+    expect(screen.queryByText('Alert volume unavailable')).toBeNull();
+  });
 });
