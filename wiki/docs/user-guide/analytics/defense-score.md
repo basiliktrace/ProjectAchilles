@@ -142,11 +142,16 @@ wide right column carrying the shapes you read.
   "End to end · detected" (an EDR alerted but did not block) and "End to end ·
   undetected" (no alert at all), because the Defense Score counts a detection
   as protected while chain depth counts only a block. On a stage row, an amber
-  segment means an EDR alerted on an earlier stage. Chains whose latest run had a stage error or
-  a pre-execution block (for example exit 999 or 260) are counted as
-  "inconclusive" in the footer, not in the rows. It follows the filter bar, and
-  clicking a row filters Executions to those bundles. It relies on chains
-  stopping at the first blocked stage, with later stages ingested as Skipped.
+  segment means an EDR alerted on an earlier stage.
+  "Not run · binary blocked" (blue) counts chains whose latest run had a stage
+  blocked before it ran (exit 260), for example an ASR prevalence rule
+  stopping the freshly built test binary. The technique was never evaluated,
+  so this is not a protection result and is not counted as protected anywhere.
+  Chains whose latest run had a stage error (for example exit 999) are noted
+  in the footer, not in the rows. The chip totals the rows. It follows the
+  filter bar, and clicking a row filters Executions to those bundles. It relies
+  on chains stopping at the first blocked stage, with later stages ingested as
+  Skipped.
 
 **Posture row — left column**
 
