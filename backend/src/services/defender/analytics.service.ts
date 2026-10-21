@@ -8,8 +8,14 @@ import { buildAlertTimeWindowQuery, buildDefenderEvidenceQuery } from './evidenc
 import { attackSimulationExclusions } from '../analytics/attack-simulation-filter.js';
 import { projectAlertHit } from '../alerts/alertHit.js';
 import { getControlMitreTechniques } from './control-correlation.service.js';
+import { windowRange } from '../analytics/integration-window.js';
+import type { AlertFacetCounts, AlertSource, TimeWindow } from '../analytics/integration-window.js';
+import { resolveTestNames } from '../analytics/test-name-lookup.js';
 import type { Client } from '@elastic/elasticsearch';
-import type { QueryDslQueryContainer } from '@elastic/elasticsearch/lib/api/types.js';
+import type {
+  AggregationsAggregationContainer,
+  QueryDslQueryContainer,
+} from '@elastic/elasticsearch/lib/api/types.js';
 import type { DetectionRateResponse, RelatedAlertsResponse } from '../../types/defender.js';
 
 // ---------------------------------------------------------------------------
@@ -44,6 +50,8 @@ export interface AlertSummary {
   byStatus: Record<string, number>;
   recentHigh: RecentAlert[];
   recentMedium: RecentAlert[];
+  /** Facet counts for the hero tiles, over the same window. */
+  counts: AlertFacetCounts;
 }
 
 export interface AlertTrendPoint {
@@ -70,6 +78,19 @@ export interface DefenderAlertItem {
   auto_resolved?: boolean;
   auto_resolved_at?: string | null;
   auto_resolve_mode?: 'disabled' | 'dry_run' | 'enabled' | null;
+  /** First of evidence_hostnames, or null. */
+  hostname: string | null;
+  /** Normalised prevention outcome (process_killed | blocked | quarantined); absent when Defender only detected. */
+  prevention_action?: string;
+  /** Raw Defender remediationStatus behind prevention_action. */
+  remediation_status?: string;
+  /** Deep link to the alert in the Defender portal. */
+  portal_url?: string;
+  /** True when the enrichment pass matched this alert to an Achilles test. */
+  achilles_correlated: boolean;
+  achilles_test_uuid?: string;
+  /** Display name of the matched test or bundle, when it can be resolved. */
+  achilles_test_name?: string;
 }
 
 export interface ControlItem {
@@ -110,6 +131,8 @@ export interface PaginatedAlerts {
   total: number;
   page: number;
   pageSize: number;
+  /** Facet counts for the filter segments and summary strip. */
+  counts: AlertFacetCounts;
 }
 
 export interface ControlCorrelationResult {
@@ -118,17 +141,152 @@ export interface ControlCorrelationResult {
 }
 
 // ---------------------------------------------------------------------------
+// Alert feed filters and facets
+// ---------------------------------------------------------------------------
+
+/** An alert the enrichment pass matched to an Achilles test. */
+const LINKED: QueryDslQueryContainer = { term: { 'f0rtika.achilles_correlated': true } };
+/** Everything not linked, including docs that predate the correlation field. */
+const ORGANIC: QueryDslQueryContainer = { bool: { must_not: [LINKED] } };
+/** Defender's closed alert state; linkedOpen excludes it. */
+const CLOSED_STATUSES = ['resolved'];
+/**
+ * Alerts Achilles really resolved in Defender. Receipts are also written in
+ * dry-run mode and on failed PATCHes, so `auto_resolved: true` alone is not
+ * enough (same rule as projectAlertHit's auto_resolved_at).
+ */
+const RESOLVED_BY_ACHILLES: QueryDslQueryContainer = {
+  bool: {
+    filter: [
+      { term: { 'f0rtika.auto_resolved': true } },
+      { term: { 'f0rtika.auto_resolve_mode': 'enabled' } },
+    ],
+    must_not: [{ exists: { field: 'f0rtika.auto_resolve_error' } }],
+  },
+};
+
+function sourceFilter(source?: AlertSource): QueryDslQueryContainer | null {
+  if (source === 'test') return LINKED;
+  if (source === 'organic') return ORGANIC;
+  return null;
+}
+
+function severityFilter(severities?: string[]): QueryDslQueryContainer | null {
+  return severities && severities.length > 0 ? { terms: { severity: severities } } : null;
+}
+
+/** AND of the non-null clauses; match_all when there are none. */
+function allOf(...clauses: Array<QueryDslQueryContainer | null>): QueryDslQueryContainer {
+  const present = clauses.filter((c): c is QueryDslQueryContainer => c !== null);
+  return present.length > 0 ? { bool: { filter: present } } : { match_all: {} };
+}
+
+/** Alert docs, optionally limited to a created_at window. */
+function alertDocs(window: TimeWindow | null): QueryDslQueryContainer {
+  const range = windowRange('created_at', window);
+  return range
+    ? { bool: { must: [{ term: { doc_type: 'alert' } }, range] } }
+    : { term: { doc_type: 'alert' } };
+}
+
+interface FacetBucket { doc_count?: number }
+
+interface FacetAggregations {
+  facet_source?: FacetBucket & { split?: { buckets?: { test?: FacetBucket; organic?: FacetBucket } } };
+  facet_severity?: { split?: { buckets?: Array<{ key: string; doc_count: number }> } };
+  facet_filtered?: {
+    auto_resolved?: FacetBucket;
+    product?: { buckets?: Array<{ key: string; doc_count: number }> };
+  };
+  facet_linked_open?: { split?: FacetBucket };
+}
+
+function firstString(value: unknown): string | null {
+  const first = Array.isArray(value) ? value[0] : value;
+  return typeof first === 'string' && first ? first : null;
+}
+
+// ---------------------------------------------------------------------------
 // Service
 // ---------------------------------------------------------------------------
 
 export class DefenderAnalyticsService {
-  private getEsClient(): Client {
+  private getEsContext() {
     const settingsService = new SettingsService();
     const settings = settingsService.getSettings();
     if (!settings.configured) {
       throw new Error('Elasticsearch is not configured');
     }
-    return createEsClient(settings);
+    return { client: createEsClient(settings), settings };
+  }
+
+  private getEsClient(): Client {
+    return this.getEsContext().client;
+  }
+
+  /**
+   * Facet aggregations for the alert feed, plus a reader for the response.
+   * Each facet applies every filter except its own, so a segment's count is
+   * what the list would show if that segment were picked. Source and severity
+   * go in the caller's post_filter, never the query, for the same reason.
+   * The linked-open tile only has the window, so it ignores the query too.
+   */
+  private alertFacets(filters: { source?: AlertSource; severities?: string[]; window: TimeWindow | null }) {
+    const source = sourceFilter(filters.source);
+    const severity = severityFilter(filters.severities);
+    const range = windowRange('created_at', filters.window);
+
+    const aggs: Record<string, AggregationsAggregationContainer> = {
+      facet_source: {
+        filter: allOf(severity),
+        aggs: { split: { filters: { filters: { test: LINKED, organic: ORGANIC } } } },
+      },
+      facet_severity: {
+        filter: allOf(source),
+        aggs: { split: { terms: { field: 'severity', size: 10 } } },
+      },
+      facet_filtered: {
+        filter: allOf(source, severity),
+        aggs: {
+          auto_resolved: { filter: RESOLVED_BY_ACHILLES },
+          product: { terms: { field: 'service_source', size: 20 } },
+        },
+      },
+      facet_linked_open: {
+        global: {},
+        aggs: {
+          split: {
+            filter: {
+              bool: {
+                filter: [{ term: { doc_type: 'alert' } }, ...(range ? [range] : []), LINKED],
+                must_not: [{ terms: { status: CLOSED_STATUSES } }],
+              },
+            },
+          },
+        },
+      },
+    };
+
+    const read = (aggregations: unknown): AlertFacetCounts => {
+      const a = (aggregations ?? {}) as FacetAggregations;
+      const bySeverity: Record<string, number> = {};
+      for (const b of a.facet_severity?.split?.buckets ?? []) bySeverity[b.key] = b.doc_count;
+      const byProduct: Record<string, number> = {};
+      for (const b of a.facet_filtered?.product?.buckets ?? []) byProduct[b.key] = b.doc_count;
+      return {
+        bySource: {
+          all: a.facet_source?.doc_count ?? 0,
+          test: a.facet_source?.split?.buckets?.test?.doc_count ?? 0,
+          organic: a.facet_source?.split?.buckets?.organic?.doc_count ?? 0,
+        },
+        bySeverity,
+        autoResolved: a.facet_filtered?.auto_resolved?.doc_count ?? 0,
+        linkedOpen: a.facet_linked_open?.split?.doc_count ?? 0,
+        byProduct,
+      };
+    };
+
+    return { aggs, read };
   }
 
   // ── Secure Score ─────────────────────────────────────────────
@@ -195,16 +353,19 @@ export class DefenderAnalyticsService {
 
   // ── Alerts ───────────────────────────────────────────────────
 
-  async getAlertSummary(): Promise<AlertSummary> {
+  async getAlertSummary(window: TimeWindow | null = null): Promise<AlertSummary> {
     const client = this.getEsClient();
+    const range = windowRange('created_at', window);
+    const facets = this.alertFacets({ window });
 
     const result = await client.search({
       index: DEFENDER_INDEX,
       size: 0,
-      query: { term: { doc_type: 'alert' } },
+      query: alertDocs(window),
       aggs: {
         by_severity: { terms: { field: 'severity', size: 10 } },
         by_status: { terms: { field: 'status', size: 10 } },
+        ...facets.aggs,
       },
     });
 
@@ -248,6 +409,7 @@ export class DefenderAnalyticsService {
           bool: {
             must: [
               { term: { doc_type: 'alert' } },
+              ...(range ? [range] : []),
               { term: { severity } },
             ],
           },
@@ -262,12 +424,24 @@ export class DefenderAnalyticsService {
       recentBySeverity('medium', 5),
     ]);
 
-    return { total, bySeverity, byStatus, recentHigh, recentMedium };
+    return {
+      total,
+      bySeverity,
+      byStatus,
+      recentHigh,
+      recentMedium,
+      counts: facets.read(result.aggregations),
+    };
   }
 
   async getAlerts(params: {
     page?: number;
     pageSize?: number;
+    /**
+     * Single exact-match severity, kept for existing callers.
+     * @deprecated Use `severities`: this goes into the base query, so the
+     * severity facet does not see alerts it excludes (and the counts reflect it).
+     */
     severity?: string;
     status?: string;
     search?: string;
@@ -275,11 +449,22 @@ export class DefenderAnalyticsService {
     techniques?: string[];
     sortField?: string;
     sortOrder?: 'asc' | 'desc';
+    /** Linked (test) vs organic alerts; 'all' or absent = no filter. */
+    source?: AlertSource;
+    /** Severities to OR-filter on. Unlike `severity`, this leaves the severity facet unfiltered. */
+    severities?: string[];
+    /** created_at window; null or absent = all time. */
+    window?: TimeWindow | null;
   }): Promise<PaginatedAlerts> {
-    const client = this.getEsClient();
-    const { page = 1, pageSize = 25, severity, status, search, techniques, sortField = 'created_at', sortOrder = 'desc' } = params;
+    const { client, settings } = this.getEsContext();
+    const {
+      page = 1, pageSize = 25, severity, status, search, techniques,
+      sortField = 'created_at', sortOrder = 'desc', source, severities, window = null,
+    } = params;
 
     const must: QueryDslQueryContainer[] = [{ term: { doc_type: 'alert' } }];
+    const range = windowRange('created_at', window);
+    if (range) must.push(range);
     if (severity) must.push({ term: { severity } });
     if (status) must.push({ term: { status } });
     if (search) must.push({ multi_match: { query: search, fields: ['alert_title', 'description', 'category'] } });
@@ -293,11 +478,19 @@ export class DefenderAnalyticsService {
       must.push({ bool: { should, minimum_should_match: 1 } });
     }
 
+    // Source and severity filter the hits through post_filter so the facet
+    // aggregations still see the alerts those filters exclude.
+    const sourceClause = sourceFilter(source);
+    const severityClause = severityFilter(severities);
+    const facets = this.alertFacets({ source, severities, window });
+
     const result = await client.search({
       index: DEFENDER_INDEX,
       from: (page - 1) * pageSize,
       size: pageSize,
       query: { bool: { must } },
+      ...(sourceClause || severityClause ? { post_filter: allOf(sourceClause, severityClause) } : {}),
+      aggs: facets.aggs,
       sort: [{ [sortField]: { order: sortOrder } }],
     });
 
@@ -305,9 +498,20 @@ export class DefenderAnalyticsService {
       ? result.hits.total
       : (result.hits.total as { value: number })?.value ?? 0;
 
-    const data = result.hits.hits.map((hit) => {
-      const s = hit._source as Record<string, unknown>;
+    const sources = result.hits.hits.map((hit) => (hit._source as Record<string, unknown>) ?? {});
+    const testUuids = new Set<string>();
+    for (const s of sources) {
+      const uuid = (s.f0rtika as Record<string, unknown> | undefined)?.achilles_test_uuid;
+      if (typeof uuid === 'string' && uuid) testUuids.add(uuid);
+    }
+    const testNames = await resolveTestNames(client, settings.indexPattern, [...testUuids]);
+
+    const data = sources.map((s) => {
       const f0rtika = (s.f0rtika as Record<string, unknown> | undefined) ?? {};
+      const testUuid = typeof f0rtika.achilles_test_uuid === 'string' && f0rtika.achilles_test_uuid
+        ? f0rtika.achilles_test_uuid
+        : undefined;
+      const testName = testUuid ? testNames.get(testUuid) : undefined;
       const item: DefenderAlertItem = {
         alert_id: String(s.alert_id ?? ''),
         alert_title: String(s.alert_title ?? ''),
@@ -321,6 +525,13 @@ export class DefenderAnalyticsService {
         updated_at: String(s.updated_at ?? ''),
         resolved_at: s.resolved_at ? String(s.resolved_at) : null,
         recommended_actions: String(s.recommended_actions ?? ''),
+        hostname: firstString(s.evidence_hostnames),
+        ...(s.prevention_action ? { prevention_action: String(s.prevention_action) } : {}),
+        ...(s.remediation_status ? { remediation_status: String(s.remediation_status) } : {}),
+        ...(s.portal_url ? { portal_url: String(s.portal_url) } : {}),
+        achilles_correlated: f0rtika.achilles_correlated === true,
+        ...(testUuid ? { achilles_test_uuid: testUuid } : {}),
+        ...(testName ? { achilles_test_name: testName } : {}),
       };
       if (typeof f0rtika.auto_resolved === 'boolean') {
         item.auto_resolved = f0rtika.auto_resolved;
@@ -332,7 +543,7 @@ export class DefenderAnalyticsService {
       return item;
     });
 
-    return { data, total, page, pageSize };
+    return { data, total, page, pageSize, counts: facets.read(result.aggregations) };
   }
 
   async getAlertTrend(days: number): Promise<AlertTrendPoint[]> {
