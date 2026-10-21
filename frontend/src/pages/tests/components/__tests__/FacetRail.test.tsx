@@ -44,4 +44,19 @@ describe('FacetRail', () => {
     expect(inactive.className).not.toMatch(/(^|\s)border(\s|-|$)/);
     expect(inactive.className).not.toMatch(/(^|\s)bg-(?!transparent)/);
   });
+
+  it('shows a visible keyboard focus ring on options', () => {
+    renderRail('intel-driven');
+    for (const label of ['intel-driven', 'cyber-hygiene']) {
+      const cls = screen.getByText(label).closest('button')!.className;
+      expect(cls).toContain('focus-visible:ring-1');
+      expect(cls).toContain('focus-visible:ring-accent');
+    }
+  });
+
+  it('washes inactive rows on hover only', () => {
+    renderRail('intel-driven');
+    const cls = screen.getByText('cyber-hygiene').closest('button')!.className;
+    expect(cls).toContain('hover:bg-raised/50');
+  });
 });

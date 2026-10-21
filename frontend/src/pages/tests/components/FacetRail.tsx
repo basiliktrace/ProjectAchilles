@@ -32,8 +32,10 @@ function FacetRow({
     <button
       onClick={onClick}
       className={cn(
-        'flex min-h-10 w-full items-center justify-between gap-2 rounded-md px-2 py-1.5 text-left text-xs transition-colors lg:min-h-0',
-        active ? 'bg-accent-dim text-accent' : 'text-muted hover:text-foreground',
+        'flex min-h-10 w-full items-center justify-between gap-2 rounded-md px-2 py-1.5 text-left text-xs transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent lg:min-h-0',
+        active
+          ? 'bg-accent-dim text-accent'
+          : 'text-muted hover:bg-raised/50 hover:text-foreground',
       )}
     >
       <span className="flex min-w-0 items-center gap-1.5">
