@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import { parseWindowQuery, windowRange, trendInterval } from '../integration-window.js';
+import {
+  parseWindowQuery, windowRange, trendInterval, parseAlertSource, parseSeverityList,
+} from '../integration-window.js';
 
 const expect400 = (q: Record<string, unknown>) => {
   try {
@@ -44,5 +46,36 @@ describe('integration-window', () => {
       range: { 'routing.event_time': { gte: 'a', lte: 'b' } },
     });
     expect(windowRange('x', null)).toBeNull();
+  });
+});
+
+describe('alert filter params', () => {
+  it('parseAlertSource accepts all/test/organic and treats absent as undefined', () => {
+    expect(parseAlertSource(undefined)).toBeUndefined();
+    expect(parseAlertSource('')).toBeUndefined();
+    expect(parseAlertSource('all')).toBe('all');
+    expect(parseAlertSource('test')).toBe('test');
+    expect(parseAlertSource('organic')).toBe('organic');
+  });
+
+  it("parseAlertSource rejects anything else with 400 'Invalid source'", () => {
+    for (const bad of ['bogus', ['test', 'organic']]) {
+      try {
+        parseAlertSource(bad);
+      } catch (e) {
+        expect((e as { statusCode: number }).statusCode).toBe(400);
+        expect((e as Error).message).toBe('Invalid source');
+        continue;
+      }
+      throw new Error('expected throw');
+    }
+  });
+
+  it('parseSeverityList splits, trims and lowercases a comma list', () => {
+    expect(parseSeverityList(undefined)).toBeUndefined();
+    expect(parseSeverityList('')).toBeUndefined();
+    expect(parseSeverityList(' , ')).toBeUndefined();
+    expect(parseSeverityList('high')).toEqual(['high']);
+    expect(parseSeverityList('High, critical,')).toEqual(['high', 'critical']);
   });
 });

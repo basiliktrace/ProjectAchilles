@@ -6,6 +6,25 @@ export interface TimeWindow {
   to: string;
 }
 
+/** Alert feed source filter. Linked = f0rtika.achilles_correlated: true; organic = everything else. */
+export type AlertSource = 'all' | 'test' | 'organic';
+
+/** Facet counts behind the alert feed's filter segments and summary strip. */
+export interface AlertFacetCounts {
+  /** All filters except source. */
+  bySource: { all: number; test: number; organic: number };
+  /** All filters except severity. */
+  bySeverity: Record<string, number>;
+  /** All filters. Counts alerts Achilles really resolved (enabled, error-free receipt). */
+  autoResolved: number;
+  /** Window only: linked AND status NOT IN ('closed','resolved'). */
+  linkedOpen: number;
+  /** CrowdStrike only, all filters. */
+  byPrevention?: { prevented: number; detected_only: number; kill_failed: number };
+  /** Defender only, all filters. */
+  byProduct?: Record<string, number>;
+}
+
 const DAY_MS = 86_400_000;
 
 /**
@@ -27,6 +46,22 @@ export function parseWindowQuery(query: Record<string, unknown>): TimeWindow | n
     throw new AppError('Invalid from/to', 400);
   }
   return { from, to };
+}
+
+const ALERT_SOURCES: readonly string[] = ['all', 'test', 'organic'];
+
+/** Parses req.query.source. Undefined when absent; AppError(400, 'Invalid source') otherwise. */
+export function parseAlertSource(value: unknown): AlertSource | undefined {
+  if (value === undefined || value === '') return undefined;
+  if (typeof value === 'string' && ALERT_SOURCES.includes(value)) return value as AlertSource;
+  throw new AppError('Invalid source', 400);
+}
+
+/** Parses a comma-separated severity list (`high` or `high,critical`). Undefined when empty. */
+export function parseSeverityList(value: unknown): string[] | undefined {
+  if (value === undefined) return undefined;
+  const list = String(value).split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
+  return list.length > 0 ? list : undefined;
 }
 
 /** ES range clause on `field`, or null for a null window. */
