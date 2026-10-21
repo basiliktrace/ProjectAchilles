@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"golang.org/x/net/publicsuffix"
 )
 
 type fakeResolver struct {
@@ -49,6 +51,9 @@ func TestNormalize(t *testing.T) {
 		{long + ".example.com", "", true},
 		{tooLong, "", true},
 		{"a.b..", "", true},
+		{"com.do", "", true},
+		{"co.uk", "", true},
+		{"home.arpa", "", true},
 	}
 	for _, tc := range tests {
 		got, err := Normalize(tc.in)
@@ -175,6 +180,9 @@ func TestZoneCandidates(t *testing.T) {
 		{"achilles.corp.example.com", "example.com", []string{"corp.example.com", "example.com"}},
 		{"achilles.example.com", "example.com", []string{"example.com"}},
 		{"example.com", "example.com", []string{"example.com"}},
+		{"achilles.banco.com.do", "banco.com.do", []string{"banco.com.do"}},
+		{"a.home.arpa", "a.home.arpa", []string{"a.home.arpa"}},
+		{"x.y.home.arpa", "y.home.arpa", []string{"y.home.arpa"}},
 		{"a.b.example.co.uk", "example.co.uk", []string{"b.example.co.uk", "example.co.uk"}},
 		{"a.b.corp.lan", "corp.lan", []string{"b.corp.lan", "corp.lan"}},
 		{"achilles.corp.lan", "corp.lan", []string{"corp.lan"}},
@@ -216,5 +224,25 @@ func TestResolvesTo(t *testing.T) {
 	boom := &fakeResolver{host: func(context.Context, string) ([]string, error) { return nil, errors.New("boom") }}
 	if _, _, err := ResolvesTo(context.Background(), "x.example.com", "10.0.5.20", boom); err == nil {
 		t.Error("expected error for non-NXDOMAIN failure")
+	}
+}
+
+func TestZoneCandidatesNeverBareSuffix(t *testing.T) {
+	nsOK := func(context.Context, string) ([]*net.NS, error) { return []*net.NS{{Host: "ns."}}, nil }
+	for _, h := range []string{"a.home.arpa", "x.y.home.arpa", "a.b.corp.lan", "achilles.banco.com.do", "achilles.corp.example.com", "a.co.uk", "a.corp", "a.local"} {
+		res := Classify(context.Background(), h, &fakeResolver{ns: nsOK})
+		if len(res.ZoneCandidates) == 0 {
+			t.Errorf("%s: empty candidates", h)
+		}
+		for _, c := range res.ZoneCandidates {
+			if ps, _ := publicsuffix.PublicSuffix(c); ps == c {
+				t.Errorf("%s: candidate %q is a public suffix", h, c)
+			}
+			for _, p := range privateTLDs {
+				if c == p {
+					t.Errorf("%s: candidate %q is a special TLD", h, c)
+				}
+			}
+		}
 	}
 }

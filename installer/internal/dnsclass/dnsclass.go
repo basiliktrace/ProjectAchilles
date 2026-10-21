@@ -80,6 +80,14 @@ func Normalize(raw string) (string, error) {
 			return "", fmt.Errorf("invalid hostname %q: %w", h, err)
 		}
 	}
+	if ps, _ := publicsuffix.PublicSuffix(h); ps == h {
+		return "", fmt.Errorf("%q is a public suffix, not a host; use a name under it such as achilles.%s", h, h)
+	}
+	for _, t := range privateTLDs {
+		if h == t {
+			return "", fmt.Errorf("%q is a reserved top-level domain, not a host; use a name under it such as achilles.%s", h, h)
+		}
+	}
 	return h, nil
 }
 
@@ -120,10 +128,22 @@ func isPrivateTLD(host string) bool {
 	return !icann && !strings.Contains(ps, ".")
 }
 
-// lastTwo returns the last two labels of host.
-func lastTwo(host string) string {
+// privateRegistrable returns the TLD plus one label. For a multi-label special
+// TLD such as home.arpa that is three labels, so the TLD is never a candidate.
+func privateRegistrable(host string) string {
+	n := 2
+	for _, t := range privateTLDs {
+		if hasSuffixLabel(host, t) {
+			if m := strings.Count(t, ".") + 2; m > n {
+				n = m
+			}
+		}
+	}
 	l := strings.Split(host, ".")
-	return strings.Join(l[len(l)-2:], ".")
+	if n > len(l) {
+		n = len(l)
+	}
+	return strings.Join(l[len(l)-n:], ".")
 }
 
 // zoneCandidates lists the parents of host from nearest down to registrable.
@@ -161,7 +181,7 @@ func Classify(ctx context.Context, host string, r Resolver) Result {
 	res := Result{Host: h}
 
 	if isPrivateTLD(h) {
-		res.Registrable = lastTwo(h)
+		res.Registrable = privateRegistrable(h)
 		res.Kind = PrivateOnly
 		res.ZoneCandidates = zoneCandidates(h, res.Registrable)
 		res.Reason = "the name is under a private/reserved top-level domain that cannot be publicly registered"
