@@ -22,40 +22,27 @@ function FacetRow({
   count,
   active,
   onClick,
-  dotClass,
 }: {
   label: string;
   count?: number;
   active: boolean;
   onClick: () => void;
-  dotClass?: string;
 }) {
   return (
     <button
       onClick={onClick}
       className={cn(
-        'flex min-h-10 w-full items-center justify-between gap-2 rounded-md border px-2 py-1.5 text-left text-xs transition-colors lg:min-h-0',
-        active
-          ? 'border-accent/25 bg-accent-dim text-accent'
-          : 'border-transparent text-muted hover:bg-raised hover:text-foreground',
+        'flex min-h-10 w-full items-center justify-between gap-2 rounded-md px-2 py-1.5 text-left text-xs transition-colors lg:min-h-0',
+        active ? 'bg-accent-dim text-accent' : 'text-muted hover:text-foreground',
       )}
     >
       <span className="flex min-w-0 items-center gap-1.5">
-        {dotClass && <span className={cn('h-[7px] w-[7px] shrink-0 rounded-full', dotClass)} />}
         <span className="truncate">{label}</span>
       </span>
       {count != null && <span className="font-mono text-[10px] text-faint">{count}</span>}
     </button>
   );
 }
-
-const SEVERITY_DOTS: Record<string, string> = {
-  critical: 'bg-danger',
-  high: 'bg-warning',
-  medium: 'bg-warning/60',
-  low: 'bg-info',
-  info: 'bg-faint',
-};
 
 const VIEWS: Array<{ value: ViewFilter; label: string }> = [
   { value: 'all', label: 'All tests' },
@@ -64,13 +51,6 @@ const VIEWS: Array<{ value: ViewFilter; label: string }> = [
 ];
 
 export function FacetRail({ counts, filters, showNotRunYet, showHasBinary, onChange }: FacetRailProps) {
-  const toggleSeverity = (value: string) => {
-    const next = new Set(filters.severities);
-    if (next.has(value)) next.delete(value);
-    else next.add(value);
-    onChange({ severities: next });
-  };
-
   return (
     <div className="flex flex-col gap-5">
       <div>
@@ -100,20 +80,6 @@ export function FacetRail({ counts, filters, showNotRunYet, showHasBinary, onCha
             count={c.count}
             active={filters.category === c.value}
             onClick={() => onChange({ category: filters.category === c.value ? null : c.value })}
-          />
-        ))}
-      </div>
-
-      <div>
-        <SectionLabel>Severity</SectionLabel>
-        {counts.severities.map((s) => (
-          <FacetRow
-            key={s.value}
-            label={s.value}
-            count={s.count}
-            active={filters.severities.has(s.value)}
-            onClick={() => toggleSeverity(s.value)}
-            dotClass={SEVERITY_DOTS[s.value] ?? 'bg-faint'}
           />
         ))}
       </div>

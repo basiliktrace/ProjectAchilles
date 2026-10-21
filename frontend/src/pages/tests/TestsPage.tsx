@@ -45,7 +45,6 @@ import {
 
 const SORT_OPTIONS: Array<{ value: SortField; label: string }> = [
   { value: 'name', label: 'Name' },
-  { value: 'severity', label: 'Severity' },
   { value: 'score', label: 'Score' },
   { value: 'createdDate', label: 'Created' },
   { value: 'lastModifiedDate', label: 'Modified' },
@@ -92,13 +91,9 @@ export default function TestsPage() {
   const isDesktop = useIsDesktop();
   const [filtersOpen, setFiltersOpen] = useState(false);
 
-  // Deep-linkable facets live in the URL (?category= &severity= &tactic= &view=)
+  // Deep-linkable facets live in the URL (?category= &tactic= &view=); a legacy ?severity= is ignored
   const view = (searchParams.get('view') as ViewFilter) || 'all';
   const category = searchParams.get('category');
-  const severities = useMemo(
-    () => new Set((searchParams.get('severity') || '').split(',').filter(Boolean)),
-    [searchParams],
-  );
   const tacticSlug = useMemo(() => {
     const raw = searchParams.get('tactic');
     return raw ? tacticToSlug(raw) : null;
@@ -113,8 +108,6 @@ export default function TestsPage() {
       };
       if ('view' in patch) apply('view', patch.view === 'all' ? null : (patch.view as string));
       if ('category' in patch) apply('category', patch.category ?? null);
-      if ('severities' in patch)
-        apply('severity', patch.severities?.size ? [...patch.severities].join(',') : null);
       if ('tacticSlug' in patch) apply('tactic', patch.tacticSlug ?? null);
       setSearchParams(next, { replace: true });
     },
@@ -126,7 +119,6 @@ export default function TestsPage() {
       ...DEFAULT_FILTERS,
       query,
       category,
-      severities,
       tacticSlug,
       target: searchParams.get('platform'),
       threatActor: searchParams.get('actor'),
@@ -136,13 +128,12 @@ export default function TestsPage() {
       sortField,
       sortDirection,
     }),
-    [query, category, severities, tacticSlug, searchParams, notRunYet, hasBinary, view, sortField, sortDirection],
+    [query, category, tacticSlug, searchParams, notRunYet, hasBinary, view, sortField, sortDirection],
   );
 
   const activeFacetCount =
     (filters.view !== 'all' ? 1 : 0) +
     (filters.category ? 1 : 0) +
-    filters.severities.size +
     (filters.target ? 1 : 0) +
     (filters.threatActor ? 1 : 0) +
     (filters.tacticSlug ? 1 : 0) +
@@ -337,18 +328,6 @@ export default function TestsPage() {
           {!isDesktop && filters.category && (
             <FacetChip label={filters.category} onClear={() => handleFilterChange({ category: null })} />
           )}
-          {!isDesktop &&
-            [...filters.severities].map((s) => (
-              <FacetChip
-                key={s}
-                label={s}
-                onClear={() => {
-                  const next = new Set(filters.severities);
-                  next.delete(s);
-                  handleFilterChange({ severities: next });
-                }}
-              />
-            ))}
           {!isDesktop && filters.target && (
             <FacetChip label={targetLabel(filters.target)} onClear={() => handleFilterChange({ target: null })} />
           )}

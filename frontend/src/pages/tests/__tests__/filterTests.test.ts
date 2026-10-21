@@ -80,21 +80,6 @@ describe('filterTests', () => {
     expect(result.map((t) => t.uuid).sort()).toEqual(['b', 'c']);
   });
 
-  it('severity is multi-select', () => {
-    const result = filterTests(
-      tests,
-      { ...DEFAULT_FILTERS, severities: new Set(['critical', 'high']) },
-      ctx,
-    );
-    expect(result).toHaveLength(3);
-    const onlyCritical = filterTests(
-      tests,
-      { ...DEFAULT_FILTERS, severities: new Set(['critical']) },
-      ctx,
-    );
-    expect(onlyCritical.map((t) => t.uuid)).toEqual(['a']);
-  });
-
   it('filters by tactic slug', () => {
     const result = filterTests(tests, { ...DEFAULT_FILTERS, tacticSlug: 'impact' }, ctx);
     expect(result.map((t) => t.uuid)).toEqual(['a']);
@@ -120,19 +105,11 @@ describe('computeFacetCounts', () => {
   it('a facet ignores its own selection but respects others', () => {
     const counts = computeFacetCounts(
       tests,
-      { ...DEFAULT_FILTERS, category: 'intel-driven', severities: new Set(['high']) },
+      { ...DEFAULT_FILTERS, category: 'intel-driven', tacticSlug: 'impact' },
       ctx,
     );
-    // Category counts computed with category cleared, severity=high applied
-    expect(counts.categories).toEqual([
-      { value: 'cyber-hygiene', count: 1 },
-      { value: 'intel-driven', count: 1 },
-    ]);
-    // Severity counts with severities cleared, category applied
-    expect(counts.severities).toEqual([
-      { value: 'critical', count: 1 },
-      { value: 'high', count: 1 },
-    ]);
+    // Category counts computed with category cleared, tactic applied
+    expect(counts.categories).toEqual([{ value: 'intel-driven', count: 1 }]);
     expect(counts.total).toBe(1); // both filters applied
   });
 });
