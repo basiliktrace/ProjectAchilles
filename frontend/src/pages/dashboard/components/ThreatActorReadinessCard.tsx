@@ -2,13 +2,21 @@ import { Link } from 'react-router-dom';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { cn } from '@/lib/utils';
 import type { ActorReadinessView, ActorRow } from '../dashboardViews';
+import { AnalyticsSetupPrompt } from './AnalyticsSetupPrompt';
 
 interface ThreatActorReadinessCardProps {
   view: ActorReadinessView | null;
+  /** Analytics (Elasticsearch) is configured; false shows a setup prompt. */
+  configured: boolean;
   loading?: boolean;
 }
 
 const UNTESTED_SHOWN = 6;
+
+/** "Not tested in last 30d" / "Never tested" (all time). */
+function untestedPrefix(rangeLabel: string): string {
+  return rangeLabel === 'all time' ? 'Never tested' : `Not tested in ${rangeLabel.replace(/^the /, '')}`;
+}
 
 function scoreClass(score: number): string {
   if (score < 80) return 'text-danger';
@@ -40,20 +48,26 @@ function ActorLine({ row }: { row: ActorRow }) {
   );
 }
 
-export function ThreatActorReadinessCard({ view, loading }: ThreatActorReadinessCardProps) {
+export function ThreatActorReadinessCard({ view, configured, loading }: ThreatActorReadinessCardProps) {
   if (loading) {
     return <div className="h-72 animate-pulse rounded-lg border border-border bg-raised" aria-hidden="true" />;
   }
-  if (!view) {
+  if (!configured || !view) {
     return (
       <Card className="h-full">
         <CardHeader>
           <CardTitle>Threat actor readiness</CardTitle>
           <CardDescription>Which adversaries would get through today · worst first</CardDescription>
         </CardHeader>
-        <CardContent className="flex h-40 items-center justify-center text-sm text-faint">
-          Couldn't load threat actor readiness — try again later
-        </CardContent>
+        {!configured ? (
+          <CardContent>
+            <AnalyticsSetupPrompt subject="threat actor readiness" />
+          </CardContent>
+        ) : (
+          <CardContent className="flex h-40 items-center justify-center text-sm text-faint">
+            Couldn't load threat actor readiness — try again later
+          </CardContent>
+        )}
       </Card>
     );
   }
@@ -90,7 +104,7 @@ export function ThreatActorReadinessCard({ view, loading }: ThreatActorReadiness
               <span className="min-w-0">
                 {view.untestedActors.length > 0 ? (
                   <>
-                    Not tested in {view.rangeLabel.replace(/^the /, '')}:{' '}
+                    {untestedPrefix(view.rangeLabel)}:{' '}
                     <span className="text-warning" title={view.untestedActors.join(', ')}>
                       {view.untestedActors.slice(0, UNTESTED_SHOWN).join(', ')}
                       {view.untestedActors.length > UNTESTED_SHOWN &&

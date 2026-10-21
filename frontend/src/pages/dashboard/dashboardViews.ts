@@ -16,8 +16,6 @@ import { ENTERPRISE_TACTICS } from '@/lib/mitreTactics';
 export interface CadenceView {
   /** One bar per UTC day, oldest first. */
   bars: ExecutionActivityDay[];
-  /** True when the window has no results at all. */
-  noRuns: boolean;
   /** Whole days since the last result; null when there has never been one. */
   lastRunDaysAgo: number | null;
   /** ISO time of the last result (all-time); null = never. */
@@ -30,8 +28,10 @@ export interface CadenceView {
   agentsTotal: number;
   /** Agent task activity over the last 24h; null when metrics are unavailable. */
   tasks24h: { completed: number; failed: number; inProgress: number } | null;
-  /** Earliest upcoming schedule; null when none or schedules unavailable. */
+  /** Earliest upcoming schedule (next run in the future); null when none or schedules unavailable. */
   nextScheduled: { when: string; label: string; endpoints: number } | null;
+  /** False when schedules could not be read (no permission): hide the row rather than say "Nothing scheduled". */
+  schedulesAvailable: boolean;
 }
 
 const MS_PER_DAY = 86_400_000;
@@ -39,14 +39,12 @@ const MS_PER_DAY = 86_400_000;
 export function buildCadence(
   activity: ExecutionActivityResponse,
   metrics: AgentMetrics | null,
+  /** null = schedules unavailable (e.g. 403 for this role). */
   schedules: Schedule[] | null,
   agentsTotal: number,
   now: number = Date.now(),
 ): CadenceView {
   const bars = activity.days ?? [];
-  const noRuns = activity.lastExecutionAt == null && bars.every(
-    (d) => d.protected + d.unprotected + d.inconclusive === 0,
-  );
 
   let lastRunDaysAgo: number | null = null;
   if (activity.lastExecutionAt) {
@@ -63,7 +61,8 @@ export function buildCadence(
   for (const s of schedules ?? []) {
     if (!s.next_run_at) continue;
     const t = new Date(s.next_run_at).getTime();
-    if (Number.isNaN(t)) continue;
+    // A past next_run_at is overdue or stale, not the next run.
+    if (Number.isNaN(t) || t < now) continue;
     if (!nextScheduled || t < new Date(nextScheduled.when).getTime()) {
       nextScheduled = {
         when: s.next_run_at,
@@ -75,7 +74,6 @@ export function buildCadence(
 
   return {
     bars,
-    noRuns,
     lastRunDaysAgo,
     lastRunAt: lastRunDaysAgo == null ? null : activity.lastExecutionAt,
     executions7d: activity.executions7d ?? 0,
@@ -87,6 +85,7 @@ export function buildCadence(
     agentsTotal,
     tasks24h,
     nextScheduled,
+    schedulesAvailable: schedules != null,
   };
 }
 
@@ -176,19 +175,19 @@ export function buildActorReadiness(
 
 export type CellState = 'stopped' | 'partial' | 'through' | 'notRun';
 
-/** Share of endpoints (protected + detected) at or above which a technique is 'stopped'. */
+/** Share of test × endpoint results (protected + detected) at or above which a technique is 'stopped'. */
 export const STOPPED_SHARE = 0.95;
 /** Share at or above which a technique is 'partial'; below it is 'through'. */
 export const PARTIAL_SHARE = 0.8;
 
 export interface MatrixCell {
-  /** Exact technique ID as reported (sub-techniques are their own cells). */
+  /** Technique ID, trimmed and upper-cased (sub-techniques are their own cells). */
   technique: string;
   state: CellState;
   protected: number;
   detected: number;
   unprotected: number;
-  /** Tooltip / aria text, e.g. "T1486 · 7 blocked · 2 detected only · 4 got through of 13 endpoints". */
+  /** Tooltip / aria text, e.g. "T1486 · 7 blocked · 2 detected only · 4 got through of 13 test × endpoint results". */
   label: string;
 }
 
@@ -244,8 +243,13 @@ function makeCell(technique: string, c: Counts | undefined): MatrixCell {
     protected: c.protected,
     detected: c.detected,
     unprotected: c.unprotected,
-    label: `${technique} · ${parts.join(' · ')} of ${n} endpoints`,
+    label: `${technique} · ${parts.join(' · ')} of ${n} test × endpoint results`,
   };
+}
+
+/** "t1059.001 " and "T1059.001" are the same technique. */
+function normaliseTechniqueId(id: string | null | undefined): string {
+  return (id ?? '').trim().toUpperCase();
 }
 
 export function buildAttackMatrix(
@@ -254,8 +258,10 @@ export function buildAttackMatrix(
 ): AttackMatrixView {
   const counts = new Map<string, Counts>();
   for (const o of outcomes) {
-    const prev = counts.get(o.technique) ?? { protected: 0, detected: 0, unprotected: 0 };
-    counts.set(o.technique, {
+    const id = normaliseTechniqueId(o.technique);
+    if (!id) continue;
+    const prev = counts.get(id) ?? { protected: 0, detected: 0, unprotected: 0 };
+    counts.set(id, {
       protected: prev.protected + o.protected,
       detected: prev.detected + o.detected,
       unprotected: prev.unprotected + o.unprotected,
@@ -263,7 +269,8 @@ export function buildAttackMatrix(
   }
   const ids = new Set<string>(counts.keys());
   for (const t of tests) {
-    for (const id of [...(t.techniques ?? []), ...(t.stages ?? []).map((s) => s.technique)]) {
+    for (const raw of [...(t.techniques ?? []), ...(t.stages ?? []).map((s) => s.technique)]) {
+      const id = normaliseTechniqueId(raw);
       if (id) ids.add(id);
     }
   }

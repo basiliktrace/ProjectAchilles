@@ -29,38 +29,52 @@ describe('buildCadence', () => {
       sched({ next_run_at: '2026-10-21T09:00:00Z', agent_ids: ['a', 'b'] }),
       sched({ next_run_at: null }),
     ], 10, NOW);
-    expect(v.noRuns).toBe(false);
     expect(v.lastRunDaysAgo).toBe(3);
     expect(v.protectedPct7d).toBe(75);
     expect(v.tasks24h).toEqual({ completed: 5, failed: 1, inProgress: 1 });
     expect(v.nextScheduled).toEqual({ when: '2026-10-21T09:00:00Z', label: 'Test', endpoints: 2 });
+    expect(v.schedulesAvailable).toBe(true);
     expect(v.agentsTotal).toBe(10);
   });
 
-  it('zero runs and null lastExecutionAt gives an explicit no-runs state without NaN', () => {
+  it('zero runs and null lastExecutionAt gives a never-run state without NaN', () => {
     const v = buildCadence(
       { days: [day('2026-10-19'), day('2026-10-20')], lastExecutionAt: null, executions7d: 0, protectedPct7d: null, endpointsTested7d: 0 },
       null, [], 0, NOW,
     );
-    expect(v.noRuns).toBe(true);
     expect(v.lastRunDaysAgo).toBeNull();
+    expect(v.lastRunAt).toBeNull();
     expect(v.protectedPct7d).toBeNull();
     expect(v.tasks24h).toBeNull();
     expect(JSON.stringify(v)).not.toContain('NaN');
   });
 
-  it('null schedules (403) or none dated gives nextScheduled null', () => {
+  it('null schedules (unavailable) is not "nothing scheduled"; none dated gives nextScheduled null', () => {
     const a: ExecutionActivityResponse = { days: [], lastExecutionAt: null, executions7d: 0, protectedPct7d: null, endpointsTested7d: 0 };
-    expect(buildCadence(a, metrics, null, 1, NOW).nextScheduled).toBeNull();
-    expect(buildCadence(a, metrics, [sched({})], 1, NOW).nextScheduled).toBeNull();
+    const unavailable = buildCadence(a, metrics, null, 1, NOW);
+    expect(unavailable.nextScheduled).toBeNull();
+    expect(unavailable.schedulesAvailable).toBe(false);
+    const none = buildCadence(a, metrics, [sched({})], 1, NOW);
+    expect(none.nextScheduled).toBeNull();
+    expect(none.schedulesAvailable).toBe(true);
+    expect(buildCadence(a, metrics, [], 1, NOW).schedulesAvailable).toBe(true);
   });
 
-  it('is not "no runs" when an old run exists but the window is empty', () => {
+  it('ignores schedules whose next run is already in the past', () => {
+    const a: ExecutionActivityResponse = { days: [], lastExecutionAt: null, executions7d: 0, protectedPct7d: null, endpointsTested7d: 0 };
+    const v = buildCadence(a, metrics, [
+      sched({ next_run_at: '2026-10-19T09:00:00Z', name: 'Overdue' }),
+      sched({ next_run_at: '2026-10-22T09:00:00Z', name: 'Upcoming' }),
+    ], 1, NOW);
+    expect(v.nextScheduled?.label).toBe('Upcoming');
+    expect(buildCadence(a, metrics, [sched({ next_run_at: '2026-10-19T09:00:00Z' })], 1, NOW).nextScheduled).toBeNull();
+  });
+
+  it('reports days since an old run when the window is empty', () => {
     const v = buildCadence(
       { days: [day('2026-10-20')], lastExecutionAt: '2026-08-01T00:00:00Z', executions7d: 0, protectedPct7d: null, endpointsTested7d: 0 },
       metrics, null, 1, NOW,
     );
-    expect(v.noRuns).toBe(false);
     expect(v.lastRunDaysAgo).toBe(80);
   });
 });
@@ -134,13 +148,24 @@ describe('buildAttackMatrix', () => {
       'T1059.003:through', 'T1059.005:through', 'T1059.001:partial', 'T1059:stopped',
       'T1059.007:notRun', 'T1059.008:notRun',
     ]);
-    expect(exec.cells[2].label).toBe('T1059.001 · 3 blocked · 2 detected only · 1 got through of 6 endpoints');
+    expect(exec.cells[2].label).toBe('T1059.001 · 3 blocked · 2 detected only · 1 got through of 6 test × endpoint results');
     expect(exec.cells[4].label).toBe('T1059.007 · in library, not run in this range');
     expect(exec.throughCount).toBe(2);
     expect(exec.stoppedCount).toBe(1);
     expect(exec.testedCount).toBe(4);
     expect(v.weakestTactic?.slug).toBe('execution');
     expect(v.totals).toMatchObject({ through: 2, partial: 1, stopped: 1, notRun: 2, techniques: 6 });
+  });
+
+  it('normalises technique IDs (trim + upper case) when merging outcomes and library techniques', () => {
+    const v = buildAttackMatrix(
+      [o('T1059', 2), o(' t1059 ', 1, 0, 1)],
+      [makeTest({ techniques: ['t1059', ' T1059.001'], stages: [{ stageId: 1, technique: 't1059.001 ', name: 's', fileName: 'f' }] })],
+    );
+    const exec = v.columns.find((c) => c.slug === 'execution')!;
+    expect(exec.cells.map((c) => `${c.technique}:${c.state}`)).toEqual(['T1059:through', 'T1059.001:notRun']);
+    expect(exec.cells[0]).toMatchObject({ protected: 3, unprotected: 1 });
+    expect(v.totals.techniques).toBe(2);
   });
 
   it('no through cells gives weakestTactic null; nothing at all is empty', () => {

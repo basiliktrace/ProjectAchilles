@@ -2,9 +2,12 @@ import { Link } from 'react-router-dom';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { cn } from '@/lib/utils';
 import type { CadenceView } from '../dashboardViews';
+import { AnalyticsSetupPrompt } from './AnalyticsSetupPrompt';
 
 interface TestingCadenceCardProps {
   view: CadenceView | null;
+  /** Analytics (Elasticsearch) is configured; false shows a setup prompt. */
+  configured: boolean;
   loading?: boolean;
 }
 
@@ -35,27 +38,32 @@ function lastRunChip(view: CadenceView): { text: string; className: string } {
   return { text, className: 'bg-raised text-muted' };
 }
 
-export function TestingCadenceCard({ view, loading }: TestingCadenceCardProps) {
+export function TestingCadenceCard({ view, configured, loading }: TestingCadenceCardProps) {
   if (loading) {
     return <div className="h-72 animate-pulse rounded-lg border border-border bg-raised" aria-hidden="true" />;
   }
-  if (!view) {
+  if (!configured || !view) {
     return (
       <Card className="h-full">
         <CardHeader>
           <CardTitle>Testing cadence</CardTitle>
           <CardDescription>Is the programme actually running?</CardDescription>
         </CardHeader>
-        <CardContent className="flex h-40 items-center justify-center text-sm text-faint">
-          Couldn't load testing cadence — try again later
-        </CardContent>
+        {!configured ? (
+          <CardContent>
+            <AnalyticsSetupPrompt subject="testing cadence" />
+          </CardContent>
+        ) : (
+          <CardContent className="flex h-40 items-center justify-center text-sm text-faint">
+            Couldn't load testing cadence — try again later
+          </CardContent>
+        )}
       </Card>
     );
   }
 
   const chip = lastRunChip(view);
   const max = Math.max(1, ...view.bars.map((d) => d.protected + d.unprotected + d.inconclusive));
-  const hasBars = view.bars.length > 0;
   const totals = view.bars.reduce(
     (a, d) => ({
       p: a.p + d.protected,
@@ -103,19 +111,17 @@ export function TestingCadenceCard({ view, loading }: TestingCadenceCardProps) {
                 </div>
               );
             })}
-            {!hasBars && <div className="flex-1 pb-2 text-center text-xs text-faint">No executions in this window</div>}
           </div>
-          {hasBars && (
-            <div className="flex justify-between font-mono text-[10.5px] text-muted">
-              <span>{first ? shortDay(first) : ''}</span>
-              <span>{mid ? shortDay(mid) : ''}</span>
-              <span>{last ? shortDay(last) : ''}</span>
-            </div>
-          )}
+          {/* The backend zero-fills every day, so the bars are never empty. */}
+          <div className="flex justify-between font-mono text-[10.5px] text-muted">
+            <span>{first ? shortDay(first) : ''}</span>
+            <span>{mid ? shortDay(mid) : ''}</span>
+            <span>{last ? shortDay(last) : ''}</span>
+          </div>
           <div className="flex flex-wrap gap-x-3.5 gap-y-1 text-[11.5px] text-muted">
-            <span className="inline-flex items-center gap-1.5"><span className="size-2 rounded-sm bg-accent" />protected</span>
-            <span className="inline-flex items-center gap-1.5"><span className="size-2 rounded-sm bg-danger" />got through</span>
-            <span className="inline-flex items-center gap-1.5"><span className="size-2 rounded-sm bg-overlay ring-1 ring-border-strong" />inconclusive</span>
+            <span className="inline-flex items-center gap-1.5"><span aria-hidden="true" className="size-2 rounded-sm bg-accent" />protected</span>
+            <span className="inline-flex items-center gap-1.5"><span aria-hidden="true" className="size-2 rounded-sm bg-danger" />got through</span>
+            <span className="inline-flex items-center gap-1.5"><span aria-hidden="true" className="size-2 rounded-sm bg-overlay ring-1 ring-border-strong" />inconclusive</span>
           </div>
         </div>
 
@@ -143,19 +149,22 @@ export function TestingCadenceCard({ view, loading }: TestingCadenceCardProps) {
               <span className="text-[13px] text-faint">—</span>
             )}
           </div>
-          <div className={cn(TILE, 'col-span-2 flex-row items-center justify-between gap-2.5')}>
-            <div className="flex min-w-0 flex-col gap-1">
-              <span className={TILE_LABEL}>Next scheduled</span>
-              <span className="truncate text-[13px]">
-                {view.nextScheduled
-                  ? `${formatWhen(view.nextScheduled.when)} · ${view.nextScheduled.label} on ${view.nextScheduled.endpoints} endpoints`
-                  : 'Nothing scheduled'}
-              </span>
+          {/* Hidden when schedules can't be read (no permission), so it never says "Nothing scheduled" wrongly. */}
+          {view.schedulesAvailable && (
+            <div className={cn(TILE, 'col-span-2 flex-row items-center justify-between gap-2.5')}>
+              <div className="flex min-w-0 flex-col gap-1">
+                <span className={TILE_LABEL}>Next scheduled</span>
+                <span className="truncate text-[13px]">
+                  {view.nextScheduled
+                    ? `${formatWhen(view.nextScheduled.when)} · ${view.nextScheduled.label} on ${view.nextScheduled.endpoints} endpoints`
+                    : 'Nothing scheduled'}
+                </span>
+              </div>
+              <Link to="/tasks" className="shrink-0 text-[12.5px] text-accent hover:underline">
+                Tasks →
+              </Link>
             </div>
-            <Link to="/tasks" className="shrink-0 text-[12.5px] text-accent hover:underline">
-              Tasks →
-            </Link>
-          </div>
+          )}
         </div>
       </CardContent>
     </Card>

@@ -197,15 +197,24 @@ export default function DashboardPage() {
             loading={data.loading}
           />
         </div>
-        <TestingCadenceCard view={data.cadence} loading={data.loading} />
+        <TestingCadenceCard view={data.cadence} configured={data.analyticsConfigured} loading={data.loading} />
       </div>
 
       {/* ATT&CK outcomes + threat actors */}
       <div className="grid gap-4 lg:grid-cols-3 max-lg:[&>*]:min-w-0">
         <div className="lg:col-span-2 [&>*]:h-full">
-          <AttackOutcomeMatrix view={data.attackMatrix} rangeLabel={windowLabel} loading={data.loading} />
+          <AttackOutcomeMatrix
+            view={data.attackMatrix}
+            configured={data.analyticsConfigured}
+            rangeLabel={windowLabel}
+            loading={data.loading}
+          />
         </div>
-        <ThreatActorReadinessCard view={data.actorReadiness} loading={data.loading} />
+        <ThreatActorReadinessCard
+          view={data.actorReadiness}
+          configured={data.analyticsConfigured}
+          loading={data.loading}
+        />
       </div>
 
       {/* Bottom row */}

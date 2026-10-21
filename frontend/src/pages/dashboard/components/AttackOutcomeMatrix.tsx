@@ -2,9 +2,12 @@ import { Link } from 'react-router-dom';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { cn } from '@/lib/utils';
 import type { AttackMatrixView, CellState, MatrixColumn } from '../dashboardViews';
+import { AnalyticsSetupPrompt } from './AnalyticsSetupPrompt';
 
 interface AttackOutcomeMatrixProps {
   view: AttackMatrixView | null;
+  /** Analytics (Elasticsearch) is configured; false shows a setup prompt. */
+  configured: boolean;
   /** Window label shown in the description, e.g. "30d". */
   rangeLabel?: string;
   loading?: boolean;
@@ -27,20 +30,26 @@ function Chip({ className, children }: { className: string; children: string }) 
   return <span className={cn('rounded-md px-2 py-1 font-mono text-[11px]', className)}>{children}</span>;
 }
 
-export function AttackOutcomeMatrix({ view, rangeLabel, loading }: AttackOutcomeMatrixProps) {
+export function AttackOutcomeMatrix({ view, configured, rangeLabel, loading }: AttackOutcomeMatrixProps) {
   if (loading) {
     return <div className="h-72 animate-pulse rounded-lg border border-border bg-raised" aria-hidden="true" />;
   }
-  if (!view) {
+  if (!configured || !view) {
     return (
       <Card className="h-full">
         <CardHeader>
           <CardTitle>MITRE ATT&amp;CK coverage</CardTitle>
-          <CardDescription>Each cell is a technique, coloured by the share of endpoints that stopped it</CardDescription>
+          <CardDescription>Each cell is a technique, coloured by the share of its test × endpoint results that were stopped</CardDescription>
         </CardHeader>
-        <CardContent className="flex h-40 items-center justify-center text-sm text-faint">
-          Couldn't load ATT&amp;CK outcomes — try again later
-        </CardContent>
+        {!configured ? (
+          <CardContent>
+            <AnalyticsSetupPrompt subject="ATT&amp;CK outcomes" />
+          </CardContent>
+        ) : (
+          <CardContent className="flex h-40 items-center justify-center text-sm text-faint">
+            Couldn't load ATT&amp;CK outcomes — try again later
+          </CardContent>
+        )}
       </Card>
     );
   }
@@ -50,7 +59,7 @@ export function AttackOutcomeMatrix({ view, rangeLabel, loading }: AttackOutcome
       <CardHeader className="flex-row flex-wrap items-start justify-between gap-3 space-y-0 grid-rows-1">
         <div className="flex flex-col gap-1">
           <CardTitle>MITRE ATT&amp;CK coverage</CardTitle>
-          <CardDescription>Each cell is a technique, coloured by the share of endpoints that stopped it{rangeLabel ? ` · ${rangeLabel}` : ''}</CardDescription>
+          <CardDescription>Each cell is a technique, coloured by the share of its test × endpoint results that were stopped{rangeLabel ? ` · ${rangeLabel}` : ''}</CardDescription>
         </div>
         {!view.empty && (
           <div className="flex flex-wrap gap-1.5">
@@ -106,7 +115,7 @@ export function AttackOutcomeMatrix({ view, rangeLabel, loading }: AttackOutcome
               <div className="flex flex-wrap gap-x-3.5 gap-y-1">
                 {(['stopped', 'partial', 'through', 'notRun'] as const).map((s) => (
                   <span key={s} className="inline-flex items-center gap-1.5">
-                    <span className={cn('size-2.5 rounded-sm', STATE_META[s].cell)} />
+                    <span aria-hidden="true" className={cn('size-2.5 rounded-sm', STATE_META[s].cell)} />
                     {STATE_META[s].legend}
                   </span>
                 ))}

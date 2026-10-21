@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { isAxiosError } from 'axios';
 import {
   analyticsApi,
   type DefenseScore,
@@ -68,6 +69,20 @@ function rangeLabelFor(range: DateRangeValue): string {
 
 function settle<T>(result: PromiseSettledResult<T>): T | null {
   return result.status === 'fulfilled' ? result.value : null;
+}
+
+/**
+ * Next schedules state. null = unavailable: set only on HTTP 403 (role lacks
+ * endpoints:schedules:read), so the cadence card hides its "Next scheduled"
+ * row. A transient failure keeps the previous value instead of flashing
+ * "Nothing scheduled" on one failed poll.
+ */
+export function settleSchedules(
+  prev: Schedule[] | null,
+  result: PromiseSettledResult<Schedule[]>,
+): Schedule[] | null {
+  if (result.status === 'fulfilled') return result.value;
+  return isAxiosError(result.reason) && result.reason.response?.status === 403 ? null : prev;
 }
 
 function relativeTime(iso: string): string {
@@ -192,10 +207,10 @@ export function useDashboardData(range: DateRangeValue = DEFAULT_TIME_RANGE): Da
       agentApi.getMetrics(),
       agentApi.getFleetHealthMetrics(),
       agentApi.listTasks({ limit: RECENT_TASKS + 4 }),
-      // 403 for roles without endpoints:schedules:read -> null
+      // 403 for roles without endpoints:schedules:read -> null (row hidden)
       agentApi.listSchedules({ status: 'active' }),
     ]);
-    setSchedules(settle(sch));
+    setSchedules((prev) => settleSchedules(prev, sch));
     setMetrics(settle(m));
     setFleetHealth(settle(fh));
     setRecentTasks(settle(t)?.tasks ?? null);
