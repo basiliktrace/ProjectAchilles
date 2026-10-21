@@ -86,6 +86,10 @@ describe('TestListRow', () => {
     const techniques = screen.getByText('T1059.001').parentElement!;
     expect(techniques.className).toMatch(/(^|\s)hidden(\s|$)/);
     expect(techniques.className).toContain('2xl:flex');
+    expect(techniques.className).toContain('flex-nowrap');
+    expect(techniques.className).not.toContain('flex-wrap ');
+    expect(techniques.className).toContain('min-w-0');
+    expect(techniques.className).toContain('overflow-hidden');
     const stages = screen.getByText('5');
     expect(stages.className).toMatch(/(^|\s)hidden(\s|$)/);
     expect(stages.className).toContain('2xl:block');
@@ -182,7 +186,7 @@ describe('TestListHeader', () => {
     expect(header.className).toMatch(/(^|\s)hidden(\s|$)/);
     expect(header.className).toContain('xl:grid');
     expect(header.className).toContain('xl:grid-cols-[minmax(0,1fr)_120px_180px_48px_72px]');
-    expect(header.className).toContain('2xl:grid-cols-[minmax(0,1fr)_150px_120px_56px_180px_48px_72px]');
+    expect(header.className).toContain('2xl:grid-cols-[minmax(0,1fr)_180px_120px_56px_160px_48px_72px]');
   });
 
   it('shows the Techniques and Stages headers at 2xl only', () => {

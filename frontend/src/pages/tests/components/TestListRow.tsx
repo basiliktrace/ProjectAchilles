@@ -10,10 +10,11 @@ import type { FleetResult } from './fleetResult';
  * Below xl the row stacks (name, subtitle, fleet | score, actions) and the header hides.
  * Width check (list = viewport - 240 sidebar - 48 gutters - 216 rail; row px-4 = 32):
  * xl at 1280: 776 - 32 - (120+180+48+72) - 4*12 = 276px name; 2xl at the 1016 cap:
- * 1016 - 32 - (150+120+56+180+48+72) - 6*12 = 286px name.
+ * 1016 - 32 - (180+120+56+160+48+72) - 6*12 = 286px name. Techniques 180 fits two
+ * sub-technique chips (~69px each) plus "+n"; fleet 160 fits "12 / 12 endpoints protected".
  */
 const ROW_GRID =
-  'grid grid-cols-[minmax(0,1fr)_auto_auto] gap-x-3 gap-y-1.5 px-3 xl:grid-cols-[minmax(0,1fr)_120px_180px_48px_72px] xl:px-4 2xl:grid-cols-[minmax(0,1fr)_150px_120px_56px_180px_48px_72px]';
+  'grid grid-cols-[minmax(0,1fr)_auto_auto] gap-x-3 gap-y-1.5 px-3 xl:grid-cols-[minmax(0,1fr)_120px_180px_48px_72px] xl:px-4 2xl:grid-cols-[minmax(0,1fr)_180px_120px_56px_160px_48px_72px]';
 
 /** Cells that only exist from xl (platform) or 2xl (techniques, stages). */
 const FROM_XL = 'hidden xl:block';
@@ -115,13 +116,13 @@ export function TestListRow({
         </div>
       </div>
 
-      <div className="hidden flex-wrap items-center gap-1 2xl:flex">
+      <div className="hidden min-w-0 flex-nowrap items-center gap-1 overflow-hidden 2xl:flex">
         {test.techniques.slice(0, VISIBLE_TECHNIQUES).map((technique) => (
-          <span key={technique} className="rounded bg-overlay px-1.5 py-px font-mono text-[11px] text-muted">
+          <span key={technique} className="shrink-0 whitespace-nowrap rounded bg-overlay px-1.5 py-px font-mono text-[11px] text-muted">
             {technique}
           </span>
         ))}
-        {extraTechniques > 0 && <span className="text-[11px] text-faint">+{extraTechniques}</span>}
+        {extraTechniques > 0 && <span className="shrink-0 text-[11px] text-faint">+{extraTechniques}</span>}
       </div>
 
       <span className={cn(FROM_XL, 'truncate text-xs text-muted')} title={platforms}>
