@@ -30,10 +30,12 @@ vi.mock('../../services/integrations/settings.js', () => ({
 
 const mockGetAlerts = vi.fn();
 const mockGetAlertSummary = vi.fn();
+const mockGetAlertTrend = vi.fn();
 vi.mock('../../services/crowdstrike/analytics.service.js', () => ({
   CrowdStrikeAnalyticsService: class MockCrowdStrikeAnalyticsService {
     getAlerts = mockGetAlerts;
     getAlertSummary = mockGetAlertSummary;
+    getAlertTrend = mockGetAlertTrend;
   },
 }));
 
@@ -134,6 +136,32 @@ describe('CrowdStrike analytics routes', () => {
 
       expect(res.status).toBe(400);
       expect(res.body).toEqual({ success: false, error: 'Invalid from/to' });
+    });
+  });
+  describe('GET /alerts/trend', () => {
+    it('passes days and a null window when from/to are absent', async () => {
+      await request(createApp()).get('/api/analytics/crowdstrike/alerts/trend?days=7');
+
+      expect(mockGetAlertTrend).toHaveBeenCalledWith(7, null);
+    });
+
+    it('passes a valid window through', async () => {
+      const res = await request(createApp()).get(
+        '/api/analytics/crowdstrike/alerts/trend?from=2026-10-01T00:00:00.000Z&to=2026-10-20T00:00:00.000Z',
+      );
+
+      expect(res.status).toBe(200);
+      expect(mockGetAlertTrend).toHaveBeenCalledWith(30, {
+        from: '2026-10-01T00:00:00.000Z', to: '2026-10-20T00:00:00.000Z',
+      });
+    });
+
+    it('returns 400 Invalid from/to for from=bad', async () => {
+      const res = await request(createApp()).get('/api/analytics/crowdstrike/alerts/trend?from=bad&to=2026-10-20T00:00:00Z');
+
+      expect(res.status).toBe(400);
+      expect(res.body).toEqual({ success: false, error: 'Invalid from/to' });
+      expect(mockGetAlertTrend).not.toHaveBeenCalled();
     });
   });
 });

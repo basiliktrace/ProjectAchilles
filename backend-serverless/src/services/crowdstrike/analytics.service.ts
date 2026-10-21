@@ -9,8 +9,8 @@ import { CROWDSTRIKE_INDEX } from './index-management.js';
 import { buildAlertTimeWindowQuery, buildCrowdStrikeEvidenceQuery } from './evidence-correlation.js';
 import { attackSimulationExclusions } from '../analytics/attack-simulation-filter.js';
 import { projectAlertHit } from '../alerts/alertHit.js';
-import { windowRange } from '../analytics/integration-window.js';
-import { alertDocs, alertFacets, allOf, firstString, severityFilter, sourceFilter } from '../analytics/alert-facets.js';
+import { trendInterval, windowRange } from '../analytics/integration-window.js';
+import { alertDocs, alertFacets, allOf, LINKED, firstString, severityFilter, sourceFilter } from '../analytics/alert-facets.js';
 import type { AlertFacetCounts, AlertSource, TimeWindow } from '../analytics/integration-window.js';
 import { resolveTestNames } from '../analytics/test-name-lookup.js';
 import type { Client } from '@elastic/elasticsearch';
@@ -65,6 +65,10 @@ export interface AlertSummary {
 export interface AlertTrendPoint {
   date: string;
   count: number;
+  /** Alerts the enrichment pass matched to an Achilles test. */
+  linked: number;
+  /** Bucket width of the series. */
+  interval: 'day' | 'week';
   critical: number;
   high: number;
   medium: number;
@@ -488,24 +492,29 @@ export class CrowdStrikeAnalyticsService {
     return { data, total, page, pageSize, counts: facets.read(result.aggregations) };
   }
 
-  async getAlertTrend(days: number): Promise<AlertTrendPoint[]> {
+  async getAlertTrend(days: number, window: TimeWindow | null = null): Promise<AlertTrendPoint[]> {
     const client = await this.getEsClient();
+
+    const interval = window ? trendInterval(window) : 'day';
 
     const result = await client.search({
       index: CROWDSTRIKE_INDEX,
       size: 0,
-      query: {
-        bool: {
-          must: [
-            { term: { doc_type: 'alert' } },
-            { range: { created_at: { gte: `now-${days}d/d` } } },
-          ],
-        },
-      },
+      query: window
+        ? alertDocs(window)
+        : {
+            bool: {
+              must: [
+                { term: { doc_type: 'alert' } },
+                { range: { created_at: { gte: `now-${days}d/d` } } },
+              ],
+            },
+          },
       aggs: {
         by_day: {
-          date_histogram: { field: 'created_at', calendar_interval: 'day' },
+          date_histogram: { field: 'created_at', calendar_interval: interval },
           aggs: {
+            linked: { filter: LINKED },
             critical: { filter: { term: { severity: 'critical' } } },
             high: { filter: { term: { severity: 'high' } } },
             medium: { filter: { term: { severity: 'medium' } } },
@@ -519,6 +528,7 @@ export class CrowdStrikeAnalyticsService {
     const buckets = ((aggs?.by_day as Record<string, unknown>)?.buckets as Array<{
       key_as_string: string;
       doc_count: number;
+      linked: { doc_count: number };
       critical: { doc_count: number };
       high: { doc_count: number };
       medium: { doc_count: number };
@@ -528,6 +538,8 @@ export class CrowdStrikeAnalyticsService {
     return buckets.map((b) => ({
       date: b.key_as_string,
       count: b.doc_count,
+      linked: b.linked?.doc_count ?? 0,
+      interval,
       critical: b.critical.doc_count,
       high: b.high.doc_count,
       medium: b.medium.doc_count,

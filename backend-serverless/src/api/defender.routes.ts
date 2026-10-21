@@ -77,7 +77,7 @@ router.get('/alerts', requirePermission('analytics:dashboards:read'), asyncHandl
 
 router.get('/alerts/trend', requirePermission('analytics:dashboards:read'), asyncHandler(async (req, res) => {
   const days = parseInt(String(req.query.days ?? '30'), 10);
-  const data = await analyticsService.getAlertTrend(days);
+  const data = await analyticsService.getAlertTrend(days, parseWindowQuery(req.query));
   res.json(data);
 }));
 

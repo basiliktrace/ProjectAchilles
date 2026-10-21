@@ -1499,4 +1499,36 @@ describe('DefenderAnalyticsService', () => {
       }
     });
   });
+  describe('getAlertTrend linked + window', () => {
+    const bucket = { key_as_string: '2026-10-01T00:00:00.000Z', doc_count: 4, critical: { doc_count: 1 }, high: { doc_count: 1 }, medium: { doc_count: 1 }, low: { doc_count: 1 }, linked: { doc_count: 3 } };
+    const respond = () => mockSearch.mockResolvedValueOnce({ hits: { total: { value: 4 }, hits: [] }, aggregations: { by_day: { buckets: [bucket] } } });
+
+    it('getAlertTrend adds linked from a correlated sub-aggregation', async () => {
+      respond();
+      const result = await service.getAlertTrend(30);
+      const body = mockSearch.mock.calls[0][0];
+      expect(body.aggs.by_day.aggs.linked).toEqual({ filter: { term: { 'f0rtika.achilles_correlated': true } } });
+      expect(result[0].linked).toBe(3);
+    });
+
+    it('getAlertTrend uses week buckets for a 2000-01-01 -> now window', async () => {
+      respond();
+      const window = { from: '2000-01-01T00:00:00.000Z', to: new Date().toISOString() };
+      const result = await service.getAlertTrend(30, window);
+      const body = mockSearch.mock.calls[0][0];
+      expect(body.aggs.by_day.date_histogram.calendar_interval).toBe('week');
+      expect(JSON.stringify(body.query)).toContain(window.from);
+      expect(JSON.stringify(body.query)).not.toContain('now-');
+      expect(result[0].interval).toBe('week');
+    });
+
+    it('getAlertTrend keeps day buckets and days behaviour when no window is given', async () => {
+      respond();
+      const result = await service.getAlertTrend(30);
+      const body = mockSearch.mock.calls[0][0];
+      expect(body.aggs.by_day.date_histogram.calendar_interval).toBe('day');
+      expect(JSON.stringify(body.query)).toContain('now-30d/d');
+      expect(result[0].interval).toBe('day');
+    });
+  });
 });
