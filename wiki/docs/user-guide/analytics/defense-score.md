@@ -138,8 +138,11 @@ wide right column carrying the shapes you read.
   that also raised Defender or CrowdStrike alerts
 - **How deep attack chains get** — for each multi-stage (non-cyber-hygiene)
   chain, the latest run on each host: the stage where it was blocked (1, 2, 3,
-  or 4+), or "ran end to end". An amber segment means an EDR alerted on an
-  earlier stage but did not block. Chains whose latest run had a stage error or
+  or 4+), or that nothing blocked it. Chains nothing blocked are split into
+  "End to end · detected" (an EDR alerted but did not block) and "End to end ·
+  undetected" (no alert at all), because the Defense Score counts a detection
+  as protected while chain depth counts only a block. On a stage row, an amber
+  segment means an EDR alerted on an earlier stage. Chains whose latest run had a stage error or
   a pre-execution block (for example exit 999 or 260) are counted as
   "inconclusive" in the footer, not in the rows. It follows the filter bar, and
   clicking a row filters Executions to those bundles. It relies on chains

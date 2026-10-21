@@ -321,7 +321,8 @@ export default function AnalyticsDashboardPage() {
           console.error('Failed to load chain depth:', err);
           return null;
         }),
-        analyticsApi.getPaginatedExecutions({ ...params, pageSize: 3, sortField: 'routing.event_time', sortOrder: 'desc' }),
+        // 12 = TestActivityCard's FitList max; the card shows as many as fit its row
+        analyticsApi.getPaginatedExecutions({ ...params, pageSize: 12, sortField: 'routing.event_time', sortOrder: 'desc' }),
         analyticsApi.getDefenseScoreByHostname(scoreParams),
         analyticsApi.getErrorRate(params),
         analyticsApi.getErrorRateTrend({ ...params, interval: 'day' }),

@@ -261,6 +261,10 @@ export interface ChainDepthResponse {
   endToEnd: number;
   endToEndAlerted: number;
   endToEndBundleNames: string[];
+  /** End-to-end chains where an EDR alerted; a bundle can also be in the undetected list. */
+  endToEndAlertedBundleNames: string[];
+  /** End-to-end chains with no alert. */
+  endToEndUndetectedBundleNames: string[];
   /** Latest run had an errored / pre-execution-blocked stage: in no row. */
   inconclusive: number;
 }

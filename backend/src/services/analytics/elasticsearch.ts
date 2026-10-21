@@ -3052,6 +3052,8 @@ export class ElasticsearchService {
     const stages = [1, 2, 3, 4] as const;
     const buckets = stages.map(stage => ({ stage, blocked: 0, alertedNotBlocked: 0, names: new Set<string>() }));
     const endToEndNames = new Set<string>();
+    const endToEndAlertedNames = new Set<string>();
+    const endToEndUndetectedNames = new Set<string>();
     let chains = 0;
     let endToEnd = 0;
     let endToEndAlerted = 0;
@@ -3066,7 +3068,10 @@ export class ElasticsearchService {
       } else {
         endToEnd++;
         if (p.alertedUnblocked) endToEndAlerted++;
-        if (p.testName) endToEndNames.add(p.testName);
+        if (p.testName) {
+          endToEndNames.add(p.testName);
+          (p.alertedUnblocked ? endToEndAlertedNames : endToEndUndetectedNames).add(p.testName);
+        }
       }
     }
     const sorted = (names: Set<string>) => [...names].sort((a, b) => a.localeCompare(b));
@@ -3081,6 +3086,8 @@ export class ElasticsearchService {
       endToEnd,
       endToEndAlerted,
       endToEndBundleNames: sorted(endToEndNames),
+      endToEndAlertedBundleNames: sorted(endToEndAlertedNames),
+      endToEndUndetectedBundleNames: sorted(endToEndUndetectedNames),
       inconclusive: showInconclusive ? inconclusiveKeys.size : 0,
     };
   }

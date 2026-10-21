@@ -15,11 +15,13 @@ const data: ChainDepthResponse = {
   endToEnd: 3,
   endToEndAlerted: 1,
   endToEndBundleNames: ['APT29 Chain', 'FIN7 Chain'],
+  endToEndAlertedBundleNames: ['FIN7 Chain'],
+  endToEndUndetectedBundleNames: ['APT29 Chain', 'FIN7 Chain'],
   inconclusive: 0,
 };
 
 describe('ChainDepthCard', () => {
-  it('renders one row per stage plus end to end, with chain counts', () => {
+  it('renders one row per stage plus detected and undetected end-to-end rows', () => {
     render(<ChainDepthCard data={data} />);
     expect(screen.getByText('How deep attack chains get')).toBeInTheDocument();
     expect(screen.getByText('8 chains')).toBeInTheDocument();
@@ -29,11 +31,13 @@ describe('ChainDepthCard', () => {
       'Stage 2',
       'Stage 3',
       'Stage 4+',
-      'Ran end to end',
+      'End to end',
+      'End to end',
     ]);
     expect(within(rows[0]).getByText('1 chain')).toBeInTheDocument();
     expect(within(rows[3]).getByText('3 chains')).toBeInTheDocument();
-    expect(within(rows[4]).getByText('3 chains')).toBeInTheDocument();
+    expect(within(rows[4]).getByText('1 chain')).toBeInTheDocument();
+    expect(within(rows[5]).getByText('2 chains')).toBeInTheDocument();
   });
 
   it('rows are buttons with accessible names that include the alerted count', () => {
@@ -42,7 +46,10 @@ describe('ChainDepthCard', () => {
       screen.getByRole('button', { name: 'Stage 3: 1 chain blocked, 1 after an earlier EDR alert. Show these runs' }),
     ).toBeInTheDocument();
     expect(
-      screen.getByRole('button', { name: 'Ran end to end: 3 chains, 1 with an EDR alert. Show these runs' }),
+      screen.getByRole('button', { name: 'End to end · detected: 1 chain ran every stage, an EDR alerted. Show these runs' }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: 'End to end · undetected: 2 chains ran every stage, no alert. Show these runs' }),
     ).toBeInTheDocument();
   });
 
@@ -51,7 +58,9 @@ describe('ChainDepthCard', () => {
     render(<ChainDepthCard data={data} onRowClick={onRowClick} />);
     await userEvent.click(screen.getByRole('button', { name: /^Stage 4\+/ }));
     expect(onRowClick).toHaveBeenLastCalledWith(['FIN7 Chain', 'Lazarus Chain']);
-    await userEvent.click(screen.getByRole('button', { name: /^Ran end to end/ }));
+    await userEvent.click(screen.getByRole('button', { name: /^End to end · detected/ }));
+    expect(onRowClick).toHaveBeenLastCalledWith(['FIN7 Chain']);
+    await userEvent.click(screen.getByRole('button', { name: /^End to end · undetected/ }));
     expect(onRowClick).toHaveBeenLastCalledWith(['APT29 Chain', 'FIN7 Chain']);
   });
 
@@ -71,8 +80,10 @@ describe('ChainDepthCard', () => {
     expect(stage3.querySelector<HTMLElement>('[data-segment="alerted"]')?.style.width).toBe(`${(1 / 3) * 100}%`);
     const stage4 = screen.getByRole('button', { name: /^Stage 4\+/ });
     expect(stage4.querySelector<HTMLElement>('[data-segment="main"]')?.style.width).toBe('100%');
-    const e2e = screen.getByRole('button', { name: /^Ran end to end/ });
-    expect(e2e.querySelector<HTMLElement>('[data-segment="main"]')?.style.backgroundColor).toBe('var(--chart-bypassed)');
+    const detected = screen.getByRole('button', { name: /^End to end · detected/ });
+    expect(detected.querySelector<HTMLElement>('[data-segment="main"]')?.style.backgroundColor).toBe('var(--chart-warn)');
+    const undetected = screen.getByRole('button', { name: /^End to end · undetected/ });
+    expect(undetected.querySelector<HTMLElement>('[data-segment="main"]')?.style.backgroundColor).toBe('var(--chart-bypassed)');
   });
 
   it('shows the empty state when there are no chains', () => {
@@ -84,6 +95,8 @@ describe('ChainDepthCard', () => {
           endToEnd: 0,
           endToEndAlerted: 0,
           endToEndBundleNames: [],
+          endToEndAlertedBundleNames: [],
+          endToEndUndetectedBundleNames: [],
           inconclusive: 0,
         }}
       />,
@@ -109,6 +122,8 @@ describe('ChainDepthCard', () => {
           endToEnd: 0,
           endToEndAlerted: 0,
           endToEndBundleNames: [],
+          endToEndAlertedBundleNames: [],
+          endToEndUndetectedBundleNames: [],
           inconclusive: 1,
         }}
       />,
@@ -133,5 +148,20 @@ describe('ChainDepthCard', () => {
     const { container } = render(<ChainDepthCard data={null} loading />);
     expect(screen.queryByText('How deep attack chains get')).not.toBeInTheDocument();
     expect(container.firstElementChild).toHaveAttribute('aria-hidden', 'true');
+  });
+
+  it('survives an older backend without the detected/undetected bundle lists', () => {
+    const legacy = { ...data } as Partial<ChainDepthResponse>;
+    delete legacy.endToEndAlertedBundleNames;
+    delete legacy.endToEndUndetectedBundleNames;
+    render(<ChainDepthCard data={legacy as ChainDepthResponse} />);
+    expect(screen.getByRole('button', { name: /^End to end · undetected/ })).toBeInTheDocument();
+  });
+
+  it('keeps the label column narrow, with detected/undetected as a sub-label', () => {
+    render(<ChainDepthCard data={data} />);
+    const row = screen.getByRole('button', { name: /^End to end · detected/ });
+    expect(row.className).toContain('grid-cols-[92px_');
+    expect(within(row).getByText('detected')).toBeInTheDocument();
   });
 });

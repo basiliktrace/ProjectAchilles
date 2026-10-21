@@ -17,10 +17,13 @@ const DESCRIPTION = "Stage where each chain's latest run was blocked";
 
 interface Row {
   label: string;
+  /** Second label line for the end-to-end rows: detected / undetected. */
+  sub?: string;
   count: number;
+  /** Stage rows only: chains blocked here after an earlier EDR alert. */
   alerted: number;
   bundleNames: string[];
-  endToEnd: boolean;
+  kind: 'stage' | 'detected' | 'undetected';
 }
 
 const chainCount = (n: number) => `${n} ${n === 1 ? 'chain' : 'chains'}`;
@@ -31,25 +34,48 @@ function rowsOf(data: ChainDepthResponse): Row[] {
     count: b.blocked,
     alerted: b.alertedNotBlocked,
     bundleNames: b.bundleNames,
-    endToEnd: false,
+    kind: 'stage' as const,
   }));
-  rows.push({
-    label: 'Ran end to end',
-    count: data.endToEnd,
-    alerted: data.endToEndAlerted,
-    bundleNames: data.endToEndBundleNames,
-    endToEnd: true,
-  });
+  // Chains nothing blocked, split by whether an EDR at least alerted: the
+  // Defense Score counts a detection as protected, chain depth only a block
+  rows.push(
+    // The two name lists are newer than the counts: during a deploy the
+    // frontend can be ahead of the backend, so never assume they exist
+    {
+      label: 'End to end',
+      sub: 'detected',
+      count: data.endToEndAlerted,
+      alerted: 0,
+      bundleNames: data.endToEndAlertedBundleNames ?? [],
+      kind: 'detected',
+    },
+    {
+      label: 'End to end',
+      sub: 'undetected',
+      count: data.endToEnd - data.endToEndAlerted,
+      alerted: 0,
+      bundleNames: data.endToEndUndetectedBundleNames ?? data.endToEndBundleNames ?? [],
+      kind: 'undetected',
+    },
+  );
   return rows;
 }
 
 function rowName(row: Row): string {
-  const alerted = row.endToEnd
-    ? `${row.alerted} with an EDR alert`
-    : `${row.alerted} after an earlier EDR alert`;
-  const counted = row.endToEnd ? chainCount(row.count) : `${chainCount(row.count)} blocked`;
-  return row.count > 0 ? `${row.label}: ${counted}, ${alerted}. Show these runs` : `${row.label}: no chains`;
+  const name = row.sub ? `${row.label} · ${row.sub}` : row.label;
+  if (row.count === 0) return `${name}: no chains`;
+  if (row.kind === 'stage') {
+    return `${name}: ${chainCount(row.count)} blocked, ${row.alerted} after an earlier EDR alert. Show these runs`;
+  }
+  const how = row.kind === 'detected' ? 'an EDR alerted' : 'no alert';
+  return `${name}: ${chainCount(row.count)} ran every stage, ${how}. Show these runs`;
 }
+
+const MAIN_COLOR: Record<Row['kind'], string> = {
+  stage: 'var(--chart-protected)',
+  detected: 'var(--chart-warn)',
+  undetected: 'var(--chart-bypassed)',
+};
 
 function Frame({ chip, children }: { chip?: string; children: ReactNode }) {
   return (
@@ -102,7 +128,7 @@ function ChainDepthCard({ data, loading, onRowClick }: ChainDepthCardProps) {
             const alerted = Math.min(row.alerted, row.count);
             return (
               <button
-                key={row.label}
+                key={row.sub ? `${row.label}-${row.sub}` : row.label}
                 type="button"
                 disabled={row.count === 0}
                 onClick={() => onRowClick?.(row.bundleNames)}
@@ -110,14 +136,23 @@ function ChainDepthCard({ data, loading, onRowClick }: ChainDepthCardProps) {
                 title={row.bundleNames.length > 0 ? row.bundleNames.join(', ') : undefined}
                 className="grid w-full grid-cols-[92px_minmax(0,1fr)_64px] items-center gap-x-2.5 rounded px-1 py-1 text-left transition-colors enabled:hover:bg-raised disabled:cursor-default"
               >
-                <span className={cn('truncate text-xs', row.endToEnd && 'text-danger')}>{row.label}</span>
+                <span
+                  className={cn(
+                    'flex min-w-0 flex-col text-xs leading-tight',
+                    row.kind === 'detected' && 'text-warning',
+                    row.kind === 'undetected' && 'text-danger',
+                  )}
+                >
+                  <span className="truncate">{row.label}</span>
+                  {row.sub && <span className="truncate text-[10.5px] opacity-80">{row.sub}</span>}
+                </span>
                 <span className="flex h-2.5 overflow-hidden rounded-sm bg-raised">
                   <span
                     data-segment="main"
                     className="h-full"
                     style={{
                       width: `${((row.count - alerted) / max) * 100}%`,
-                      backgroundColor: row.endToEnd ? 'var(--chart-bypassed)' : 'var(--chart-protected)',
+                      backgroundColor: MAIN_COLOR[row.kind],
                     }}
                   />
                   <span
@@ -129,7 +164,11 @@ function ChainDepthCard({ data, loading, onRowClick }: ChainDepthCardProps) {
                 <span
                   className={cn(
                     'text-right font-mono text-[11px]',
-                    row.endToEnd && row.count > 0 ? 'text-danger' : 'text-muted',
+                    row.count > 0 && row.kind === 'undetected'
+                      ? 'text-danger'
+                      : row.count > 0 && row.kind === 'detected'
+                        ? 'text-warning'
+                        : 'text-muted',
                   )}
                 >
                   {chainCount(row.count)}
@@ -154,7 +193,7 @@ function ChainDepthCard({ data, loading, onRowClick }: ChainDepthCardProps) {
                 style={{ backgroundColor: 'var(--chart-warn)' }}
                 aria-hidden="true"
               />
-              EDR alerted earlier, didn't block
+              EDR alerted, didn't block
             </span>
           </div>
           {data.inconclusive > 0 && (

@@ -3104,7 +3104,7 @@ describe('elasticsearch.ts', () => {
           bundleMeta: { b1: { name: 'Chain One' } },
         });
         const res = await createService().getChainDepth(params);
-        expect(res).toEqual({ chains: 1, buckets: emptyBuckets, endToEnd: 1, endToEndAlerted: 0, endToEndBundleNames: ['Chain One'], inconclusive: 0 });
+        expect(res).toEqual({ chains: 1, buckets: emptyBuckets, endToEnd: 1, endToEndAlerted: 0, endToEndBundleNames: ['Chain One'], endToEndAlertedBundleNames: [], endToEndUndetectedBundleNames: ['Chain One'], inconclusive: 0 });
       });
 
       it('a detection-only stage does not stop the chain: end to end, alerted', async () => {
@@ -3116,6 +3116,21 @@ describe('elasticsearch.ts', () => {
         expect(res.endToEnd).toBe(1);
         expect(res.endToEndAlerted).toBe(1);
         expect(res.buckets.every(b => b.blocked === 0)).toBe(true);
+      });
+
+      it('lists end-to-end bundles by whether an EDR alerted (a bundle can be in both)', async () => {
+        routeSearch({
+          bundlePages: [[
+            chain({ bundle: 'b1', host: 'h1', ts: '2025-01-20T09:00:00Z', stagesRun: 4, alertedUnblocked: 1 }),
+            chain({ bundle: 'b1', host: 'h2', ts: '2025-01-20T09:00:00Z', stagesRun: 4 }),
+            chain({ bundle: 'b2', host: 'h1', ts: '2025-01-20T09:00:00Z', stagesRun: 3 }),
+          ]],
+          bundleMeta: { b1: { name: 'Chain One' }, b2: { name: 'Chain Two' } },
+        });
+        const res = await createService().getChainDepth(params);
+        expect(res.endToEndAlertedBundleNames).toEqual(['Chain One']);
+        expect(res.endToEndUndetectedBundleNames).toEqual(['Chain One', 'Chain Two']);
+        expect(res.endToEndBundleNames).toEqual(['Chain One', 'Chain Two']);
       });
 
       it('a blocked chain with a detected, unblocked stage before the block counts as alertedNotBlocked', async () => {
@@ -3173,7 +3188,7 @@ describe('elasticsearch.ts', () => {
           meta: { 'standalone-1': { name: 'Standalone' }, 'ch-bundle::CH-DEF-001': { name: 'Defender on', category: 'cyber-hygiene' } },
         });
         const res = await createService().getChainDepth(params);
-        expect(res).toEqual({ chains: 0, buckets: emptyBuckets, endToEnd: 0, endToEndAlerted: 0, endToEndBundleNames: [], inconclusive: 0 });
+        expect(res).toEqual({ chains: 0, buckets: emptyBuckets, endToEnd: 0, endToEndAlerted: 0, endToEndBundleNames: [], endToEndAlertedBundleNames: [], endToEndUndetectedBundleNames: [], inconclusive: 0 });
         // Chains come from the non-cyber-hygiene bundle composite only.
         const bundleQuery = searchesWith('bundle_runs')[0];
         expect(bundleQuery.query.bool.filter).toContainEqual((createService() as any).PER_BUNDLE_FILTER);
@@ -3218,7 +3233,7 @@ describe('elasticsearch.ts', () => {
             bundleMeta: { b1: { name: 'Chain One' } },
           });
           const res = await createService().getChainDepth(params);
-          expect(res).toEqual({ chains: 0, buckets: emptyBuckets, endToEnd: 0, endToEndAlerted: 0, endToEndBundleNames: [], inconclusive: 1 });
+          expect(res).toEqual({ chains: 0, buckets: emptyBuckets, endToEnd: 0, endToEndAlerted: 0, endToEndBundleNames: [], endToEndAlertedBundleNames: [], endToEndUndetectedBundleNames: [], inconclusive: 1 });
         });
 
         it('stage 1 = 101, stage 2 = 260 (ASR blocked pre-execution): inconclusive, not end to end', async () => {

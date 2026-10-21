@@ -348,6 +348,8 @@ export interface ChainDepthResponse {
   endToEnd: number;              // chains no stage blocked
   endToEndAlerted: number;       // of those, some stage was detected
   endToEndBundleNames: string[];
+  endToEndAlertedBundleNames: string[];    // end-to-end chains where an EDR alerted
+  endToEndUndetectedBundleNames: string[]; // end-to-end chains with no alert (a bundle can be in both)
   inconclusive: number;          // chains whose latest run had an errored / pre-execution-blocked stage; in no bucket
 }
 

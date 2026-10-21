@@ -2,6 +2,8 @@ import { memo } from 'react';
 import { CheckCircle2, XCircle } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import type { EnrichedTestExecution } from '@/services/api/analytics';
+import { FitList } from '@/components/shared/FitList';
+import { cn } from '@/lib/utils';
 
 interface TestActivityCardProps {
   /** Recent executions, newest first. */
@@ -64,35 +66,41 @@ function TestActivityCard({
       : 'Latest executions in window';
 
   return (
-    <Card className={className}>
+    <Card className={cn('h-full', className)}>
       <CardHeader>
         <CardTitle>{title}</CardTitle>
         <CardDescription>{description}</CardDescription>
       </CardHeader>
-      <CardContent className="flex flex-col gap-2">
+      <CardContent className="flex flex-1 flex-col">
         {recentTests.length === 0 ? (
           <div className="flex h-32 items-center justify-center text-sm text-faint">
             Nothing recorded yet.
           </div>
         ) : (
-          recentTests.slice(0, 4).map((execution, index) => (
-            <div
-              key={`${execution.test_uuid}-${execution.timestamp}-${index}`}
-              className="flex items-center gap-2.5 rounded-md border border-border bg-raised px-3 py-2.5 text-xs"
-            >
-              <span className="min-w-0 flex-1 truncate" title={execution.test_name}>
-                {execution.test_name || 'Unknown Test'}
-              </span>
-              {execution.is_protected ? (
-                <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-accent" />
-              ) : (
-                <XCircle className="h-3.5 w-3.5 shrink-0 text-danger" />
-              )}
-              <span className="shrink-0 whitespace-nowrap text-faint">
-                {getRelativeTime(execution.timestamp)}
-              </span>
-            </div>
-          ))
+          <FitList
+            items={recentTests}
+            min={3}
+            max={12}
+            fallback={4}
+            gap={8}
+            getKey={(execution, index) => `${execution.test_uuid}-${execution.timestamp}-${index}`}
+          >
+            {(execution) => (
+              <div className="flex items-center gap-2.5 rounded-md border border-border bg-raised px-3 py-2.5 text-xs">
+                <span className="min-w-0 flex-1 truncate" title={execution.test_name}>
+                  {execution.test_name || 'Unknown Test'}
+                </span>
+                {execution.is_protected ? (
+                  <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-accent" />
+                ) : (
+                  <XCircle className="h-3.5 w-3.5 shrink-0 text-danger" />
+                )}
+                <span className="shrink-0 whitespace-nowrap text-faint">
+                  {getRelativeTime(execution.timestamp)}
+                </span>
+              </div>
+            )}
+          </FitList>
         )}
       </CardContent>
     </Card>

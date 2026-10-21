@@ -9,6 +9,7 @@ import { AttentionBanner } from './components/AttentionBanner';
 import { AttackOutcomeMatrix } from './components/AttackOutcomeMatrix';
 import { FleetHealthCard } from './components/FleetHealthCard';
 import { KpiCard, type KpiCardProps } from './components/KpiCard';
+import { KpiGrid } from './components/KpiGrid';
 import { RecentExecutionsCard } from './components/RecentExecutionsCard';
 import { SyncChip } from './components/SyncChip';
 import { TestingCadenceCard } from './components/TestingCadenceCard';
@@ -179,11 +180,11 @@ export default function DashboardPage() {
       <AttentionBanner items={data.attentionItems} loading={data.loading} />
 
       {/* KPI row */}
-      <div className="grid auto-rows-fr grid-cols-2 gap-4 md:grid-cols-3 lg:grid-cols-5 max-lg:[&>*]:min-w-0">
+      <KpiGrid>
         {kpis.map((kpi) => (
           <KpiCard key={kpi.label} {...kpi} loading={data.loading} />
         ))}
-      </div>
+      </KpiGrid>
 
       {/* Trend + cadence */}
       <div className="grid gap-4 lg:grid-cols-3 max-lg:[&>*]:min-w-0">
@@ -224,7 +225,14 @@ export default function DashboardPage() {
           configured={data.defenderConfigured}
           loading={data.loading}
         />
-        <FleetHealthCard stats={fleetStats} rows={fleetRows} loading={data.loading} />
+        <FleetHealthCard
+          stats={fleetStats}
+          rows={fleetRows}
+          staleAgents={data.fleetHealth?.stale_agent_count}
+          outdatedAgents={data.metrics ? data.outdatedAgents : undefined}
+          totalAgents={data.metrics?.total}
+          loading={data.loading}
+        />
         <RecentExecutionsCard
           executions={data.recentExecutions}
           configured
