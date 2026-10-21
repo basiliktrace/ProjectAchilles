@@ -248,6 +248,34 @@ export interface ThreatActorCoverageItem {
   testCount: number;
   protectedCount: number;
   totalExecutions: number;
+  /** basis=latest only: test x endpoint pairs. */
+  pairCount?: number;
+  /** basis=latest only: ISO time of the actor's most recent pair result. */
+  lastTestedAt?: string;
+}
+
+/** Per-technique latest-result outcomes (per-stage test x endpoint pairs). */
+export interface TechniqueOutcomeItem {
+  technique: string;
+  protected: number;
+  detected: number;
+  unprotected: number;
+  lastTestedAt: string;
+}
+
+export interface ExecutionActivityDay {
+  date: string;
+  protected: number;
+  unprotected: number;
+  inconclusive: number;
+}
+
+export interface ExecutionActivityResponse {
+  days: ExecutionActivityDay[];
+  lastExecutionAt: string | null;
+  executions7d: number;
+  protectedPct7d: number | null;
+  endpointsTested7d: number;
 }
 
 export interface DefenseScoreByHostItem {
@@ -626,8 +654,24 @@ export const analyticsApi = {
     return response.data;
   },
 
-  async getThreatActorCoverage(params?: { org?: string; from?: string; to?: string }): Promise<ThreatActorCoverageItem[]> {
+  async getThreatActorCoverage(params?: {
+    org?: string;
+    from?: string;
+    to?: string;
+    scoringMode?: 'all-stages' | 'any-stage';
+    basis?: 'latest' | 'executions';
+  }): Promise<ThreatActorCoverageItem[]> {
     const response = await apiClient.get('/analytics/threat-actor-coverage', { params });
+    return response.data;
+  },
+
+  async getTechniqueOutcomes(params?: { org?: string; from?: string; to?: string }): Promise<TechniqueOutcomeItem[]> {
+    const response = await apiClient.get('/analytics/technique-outcomes', { params });
+    return response.data;
+  },
+
+  async getExecutionActivity(params?: { org?: string; days?: number }): Promise<ExecutionActivityResponse> {
+    const response = await apiClient.get('/analytics/execution-activity', { params });
     return response.data;
   },
 

@@ -4,6 +4,9 @@ import {
   type DefenseScore,
   type ErrorRateResponse,
   type ErrorRateTrendDataPoint,
+  type ExecutionActivityResponse,
+  type TechniqueOutcomeItem,
+  type ThreatActorCoverageItem,
   type TrendDataPoint,
 } from '@/services/api/analytics';
 import {
@@ -18,7 +21,7 @@ import {
   type ZtaScoreTrendPoint,
 } from '@/services/api/crowdstrike';
 import { agentApi } from '@/services/api/agent';
-import type { AgentMetrics, AgentTask, FleetHealthMetrics } from '@/types/agent';
+import type { AgentMetrics, AgentTask, FleetHealthMetrics, Schedule } from '@/types/agent';
 import { browserApi, type SyncStatus } from '@/services/api/browser';
 import type { TestMetadata } from '@/types/test';
 import { useAnalyticsAuth } from '@/hooks/useAnalyticsAuth';
@@ -32,10 +35,19 @@ import { pickCurrentErrorRate, pickCurrentScore, seriesDelta } from '@/lib/postu
 import {
   DEFAULT_TIME_RANGE,
   getDateRangeFilter,
+  timeRangeButtonLabel,
   timeRangeDays,
   type DateRangeValue,
 } from '@/lib/timeRange';
 import { computeTestStats, type TestStats } from './computeTestStats';
+import {
+  buildActorReadiness,
+  buildAttackMatrix,
+  buildCadence,
+  type ActorReadinessView,
+  type AttackMatrixView,
+  type CadenceView,
+} from './dashboardViews';
 import { deriveAttentionItems } from './deriveAttentionItems';
 import type { AttentionItem } from './components/AttentionBanner';
 import type { TrendPoint } from './components/TrendOverviewChart';
@@ -45,6 +57,14 @@ import type { RecentExecution } from './components/RecentExecutionsCard';
 const TOP_CONTROLS = 5;
 const RECENT_TASKS = 6;
 const AGENT_POLL_MS = 15_000;
+const CADENCE_DAYS = 14;
+
+/** Phrase for "not tested in <range>". */
+function rangeLabelFor(range: DateRangeValue): string {
+  if (range.preset === 'all') return 'all time';
+  if (range.preset === 'custom') return 'this range';
+  return `the last ${timeRangeButtonLabel(range.preset)}`;
+}
 
 function settle<T>(result: PromiseSettledResult<T>): T | null {
   return result.status === 'fulfilled' ? result.value : null;
@@ -117,6 +137,9 @@ export interface DashboardData {
   /** Last minus first scored point of the defense trend. */
   defenseDelta: number | null;
   defense7: DefenseScore | null;
+  cadence: CadenceView | null;
+  actorReadiness: ActorReadinessView | null;
+  attackMatrix: AttackMatrixView | null;
   errorRate: ErrorRateResponse | null;
   secureScore: SecureScoreSummary | null;
   ztaScore: ZtaScoreSummary | null;
@@ -149,6 +172,10 @@ export function useDashboardData(range: DateRangeValue = DEFAULT_TIME_RANGE): Da
   const [syncStatus, setSyncStatus] = useState<SyncStatus | null>(null);
   const [defenseScore, setDefenseScore] = useState<DefenseScore | null>(null);
   const [defense7, setDefense7] = useState<DefenseScore | null>(null);
+  const [activity, setActivity] = useState<ExecutionActivityResponse | null>(null);
+  const [actorCoverage, setActorCoverage] = useState<ThreatActorCoverageItem[] | null>(null);
+  const [techniqueOutcomes, setTechniqueOutcomes] = useState<TechniqueOutcomeItem[] | null>(null);
+  const [schedules, setSchedules] = useState<Schedule[] | null>(null);
   const [errorRate, setErrorRate] = useState<ErrorRateResponse | null>(null);
   const [defenseTrend, setDefenseTrend] = useState<TrendDataPoint[] | null>(null);
   const [errorTrend, setErrorTrend] = useState<ErrorRateTrendDataPoint[] | null>(null);
@@ -163,11 +190,14 @@ export function useDashboardData(range: DateRangeValue = DEFAULT_TIME_RANGE): Da
 
   // Agent fleet slice — cheap SQLite queries, polled every 15s
   const loadAgentData = useCallback(async () => {
-    const [m, fh, t] = await Promise.allSettled([
+    const [m, fh, t, sch] = await Promise.allSettled([
       agentApi.getMetrics(),
       agentApi.getFleetHealthMetrics(),
       agentApi.listTasks({ limit: RECENT_TASKS + 4 }),
+      // 403 for roles without endpoints:schedules:read -> null
+      agentApi.listSchedules({ status: 'active' }),
     ]);
+    setSchedules(settle(sch));
     setMetrics(settle(m));
     setFleetHealth(settle(fh));
     setRecentTasks(settle(t)?.tasks ?? null);
@@ -187,18 +217,24 @@ export function useDashboardData(range: DateRangeValue = DEFAULT_TIME_RANGE): Da
   const loadAnalyticsData = useCallback(async () => {
     if (!analyticsConfigured) return;
     const bounds = getDateRangeFilter({ preset, from: customFrom, to: customTo });
-    const [dRange, d7, er, dTrend, eTrend] = await Promise.allSettled([
+    const [dRange, d7, er, dTrend, eTrend, act, actors, outcomes] = await Promise.allSettled([
       analyticsApi.getDefenseScore({ ...bounds, scoringMode, basis: 'latest' }),
       analyticsApi.getDefenseScore({ from: 'now-7d', scoringMode }),
       analyticsApi.getErrorRate(bounds),
       analyticsApi.getDefenseScoreTrend({ ...bounds, interval: 'day', scoringMode, basis: 'latest' }),
       analyticsApi.getErrorRateTrend({ ...bounds, interval: 'day' }),
+      analyticsApi.getExecutionActivity({ days: CADENCE_DAYS }),
+      analyticsApi.getThreatActorCoverage({ ...bounds, scoringMode, basis: 'latest' }),
+      analyticsApi.getTechniqueOutcomes({ ...bounds }),
     ]);
     setDefenseScore(settle(dRange));
     setDefense7(settle(d7));
     setErrorRate(settle(er));
     setDefenseTrend(settle(dTrend));
     setErrorTrend(settle(eTrend));
+    setActivity(settle(act));
+    setActorCoverage(settle(actors));
+    setTechniqueOutcomes(settle(outcomes));
   }, [analyticsConfigured, scoringMode, preset, customFrom, customTo]);
 
   const trendDays = timeRangeDays({ preset, from: customFrom, to: customTo });
@@ -255,6 +291,22 @@ export function useDashboardData(range: DateRangeValue = DEFAULT_TIME_RANGE): Da
   }, [loadTestData]);
 
   const testStats = useMemo(() => (tests ? computeTestStats(tests) : null), [tests]);
+
+  const cadence = useMemo(
+    () => (activity ? buildCadence(activity, metrics, schedules, metrics?.total ?? 0) : null),
+    [activity, metrics, schedules],
+  );
+  const actorReadiness = useMemo(
+    () =>
+      actorCoverage
+        ? buildActorReadiness(actorCoverage, tests ?? [], rangeLabelFor({ preset, from: customFrom, to: customTo }))
+        : null,
+    [actorCoverage, tests, preset, customFrom, customTo],
+  );
+  const attackMatrix = useMemo(
+    () => (techniqueOutcomes ? buildAttackMatrix(techniqueOutcomes, tests ?? []) : null),
+    [techniqueOutcomes, tests],
+  );
 
   const trend = useMemo<TrendPoint[]>(
     () => buildTrendPoints(defenseTrend, errorTrend, secureTrend, ztaTrend),
@@ -328,6 +380,9 @@ export function useDashboardData(range: DateRangeValue = DEFAULT_TIME_RANGE): Da
     defensePairCount: current.pairCount,
     defenseDelta,
     defense7,
+    cadence,
+    actorReadiness,
+    attackMatrix,
     errorRate,
     secureScore,
     ztaScore,

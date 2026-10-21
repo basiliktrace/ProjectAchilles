@@ -62,4 +62,13 @@ describe('computeTestStats', () => {
     expect(stats.mitre.totalTactics).toBe(14);
     expect(stats.mitre.tactics).toHaveLength(12); // bars show IA→IM only
   });
+
+  it('counts intel-driven tests', () => {
+    const stats = computeTestStats([
+      makeTest({ category: 'intel-driven' }),
+      makeTest({ category: 'intel-driven' }),
+      makeTest({ category: 'cyber-hygiene' }),
+    ]);
+    expect(stats.intelDriven).toBe(2);
+  });
 });

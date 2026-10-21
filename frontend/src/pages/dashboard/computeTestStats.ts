@@ -18,6 +18,8 @@ export interface TestStats {
   criticalHigh: number;
   severityMix: SeverityMix;
   categories: CategoryRow[];
+  /** Tests in the intel-driven category (threat-actor emulations). */
+  intelDriven: number;
   avgScore: number;
   scoredTests: number;
   mitre: MitreCoverage;
@@ -79,6 +81,7 @@ export function computeTestStats(tests: TestMetadata[]): TestStats {
     criticalHigh,
     severityMix,
     categories,
+    intelDriven: tests.filter((t) => t.category === 'intel-driven').length,
     avgScore,
     scoredTests: scores.length,
     mitre: {
