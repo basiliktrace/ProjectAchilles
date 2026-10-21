@@ -193,7 +193,9 @@ const POSTURE_SHAPES: Record<PostureShape, PostureShapeSpec> = {
  * 30 s from settle. Weight = runs + rawRuns, measured at ~450 B per PairRun
  * (V8, ~140-char pair keys). A snapshot over 500k runs is served but not
  * kept, and all cached snapshots together hold at most 500k runs (~225 MB),
- * so the cache adds at most the footprint of one maximal snapshot.
+ * so the cache adds at most the footprint of one maximal snapshot. The
+ * chain-depth inconclusive-runs cache is separate and much smaller
+ * (INCONCLUSIVE_CACHE_MAX_ENTRIES pair entries in total).
  * Fewer entries than backend/ (16): a warm Vercel function instance keeps
  * the cache across invocations.
  */
@@ -204,6 +206,14 @@ const POSTURE_CACHE_OPTIONS: TtlCacheOptions<PostureSnapshot> = {
   maxTotalWeight: 500_000,
   weigh: (s) => s.runs.length + (s.rawRuns?.length ?? 0),
 };
+
+/**
+ * Budget of the chain-depth inconclusive-runs cache, in pair entries across
+ * all cached maps (one pair key + one timestamp each, ~200 B, so ~10 MB at
+ * most). It holds only the sparse errored chain runs; a map over this is
+ * served but not kept.
+ */
+const INCONCLUSIVE_CACHE_MAX_ENTRIES = 50_000;
 
 const DAY_MS = 86_400_000;
 const RANGE_UNIT_MS: Record<string, number> = { h: 3_600_000, d: DAY_MS, w: 7 * DAY_MS, m: 30 * DAY_MS, M: 30 * DAY_MS };
@@ -1004,12 +1014,12 @@ export class ElasticsearchService {
    */
   private readonly CHAIN_SETTLED_CODES = [0, 101, 105, 126, 127, 200];
 
-  /** Latest inconclusive bundle run per pair (chain depth), cached like the posture snapshots. */
+  /** Latest inconclusive bundle run per pair (chain depth): same TTL as the posture snapshots, own small budget. */
   private readonly inconclusiveCache = new TtlPromiseCache<Map<string, number>>({
     ttlMs: POSTURE_CACHE_OPTIONS.ttlMs,
     maxEntries: POSTURE_CACHE_OPTIONS.maxEntries,
-    maxEntryWeight: POSTURE_CACHE_OPTIONS.maxEntryWeight,
-    maxTotalWeight: POSTURE_CACHE_OPTIONS.maxTotalWeight,
+    maxEntryWeight: INCONCLUSIVE_CACHE_MAX_ENTRIES,
+    maxTotalWeight: INCONCLUSIVE_CACHE_MAX_ENTRIES,
     weigh: (m) => m.size,
   });
 
@@ -3289,6 +3299,14 @@ export class ElasticsearchService {
    * (protected / got through / inconclusive) plus 7-day headline numbers.
    * Fixed recent window, counted per result document (bundle stages count
    * individually). Days are zero-filled, oldest first.
+   *
+   * Counted documents are real test results only: the test-data filter, no
+   * upload confirmations (exit 200) and no skipped bundle stages (exit 0 on a
+   * bundle-control document — a chain stopped at stage 1 must not draw its
+   * unreached stages as inconclusive). Protected = conclusive AND (blocked OR
+   * detected); got through = conclusive AND NOT protected; inconclusive = the
+   * rest. The 7-day numbers cover the last 7 UTC days (today included), i.e.
+   * exactly the last 7 bars.
    */
   async getExecutionActivity(params: { org?: string; days?: number } = {}): Promise<ExecutionActivityResponse> {
     const requested = Number.isFinite(params.days) ? Math.trunc(params.days as number) : 14;
@@ -3301,11 +3319,28 @@ export class ElasticsearchService {
       dayKeys.push(new Date(todayMs - i * DAY_MS).toISOString().slice(0, 10));
     }
 
+    const orgFilter = this.buildOrgFilter(params.org);
+    // Real test results only (see the doc comment above).
+    const countedFilter = {
+      bool: {
+        filter: [this.buildTestDataFilter(), ...(orgFilter ? [orgFilter] : [])],
+        must_not: [
+          { term: { 'event.ERROR': this.UPLOAD_CONFIRMATION_CODE } },
+          {
+            bool: {
+              filter: [
+                { term: { 'f0rtika.is_bundle_control': true } },
+                { term: { 'event.ERROR': 0 } },
+              ],
+            },
+          },
+        ],
+      },
+    };
     const filters: any[] = [
       { range: { 'routing.event_time': { gte: `now-${spanDays - 1}d/d` } } },
+      countedFilter,
     ];
-    const orgFilter = this.buildOrgFilter(params.org);
-    if (orgFilter) filters.push(orgFilter);
 
     const conclusive = { terms: { 'event.ERROR': this.CONCLUSIVE_ERROR_CODES } };
     const detected = {
@@ -3319,9 +3354,7 @@ export class ElasticsearchService {
       },
     };
     const protectedFilter = { bool: { filter: [conclusive, detected] } };
-    const unprotectedFilter = {
-      bool: { filter: [{ term: { 'event.ERROR': 101 } }], must_not: [detected] },
-    };
+    const unprotectedFilter = { bool: { filter: [conclusive], must_not: [detected] } };
     const inconclusiveFilter = { bool: { must_not: [conclusive] } };
 
     const response = await this.client.search({
@@ -3343,18 +3376,18 @@ export class ElasticsearchService {
           },
         },
         // All-time newest result for the org: global ignores the window filter above
-        // (the query's only other filter is org, re-applied here).
+        // (the query's only other filter is the counted filter, re-applied here).
         all_time: {
           global: {},
           aggs: {
             org: {
-              filter: orgFilter ?? { match_all: {} },
+              filter: countedFilter,
               aggs: { last: { max: { field: 'routing.event_time' } } },
             },
           },
         },
         last_7d: {
-          filter: { range: { 'routing.event_time': { gte: 'now-7d' } } },
+          filter: { range: { 'routing.event_time': { gte: 'now-6d/d' } } },
           aggs: {
             endpoints: { cardinality: { field: 'routing.hostname' } },
             conclusive: { filter: conclusive },

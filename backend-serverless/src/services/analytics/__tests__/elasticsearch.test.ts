@@ -1559,7 +1559,10 @@ describe('elasticsearch.ts', () => {
       const result = await createService().getExecutionActivity({});
       expect(result.lastExecutionAt).toBe('2026-09-24T08:00:00.000Z');
       expect(result.executions7d).toBe(0);
-      expect(mockSearch.mock.calls[0][0].aggs.all_time.aggs.org.filter).toEqual({ match_all: {} });
+      // No org: the all-time filter is the counted filter without an org term.
+      const allTimeFilter = mockSearch.mock.calls[0][0].aggs.all_time.aggs.org.filter;
+      expect(JSON.stringify(allTimeFilter)).not.toContain('routing.oid');
+      expect(JSON.stringify(allTimeFilter)).toContain('f0rtika.test_uuid');
     });
 
     it('sends one size:0 search with org + date filters and the expected aggs', async () => {
@@ -1570,18 +1573,47 @@ describe('elasticsearch.ts', () => {
       expect(arg.size).toBe(0);
       const filters = arg.query.bool.filter;
       expect(filters).toContainEqual({ range: { 'routing.event_time': { gte: 'now-13d/d' } } });
-      expect(filters).toContainEqual({ term: { 'routing.oid': 'org-1' } });
+      expect(JSON.stringify(filters)).toContain('{"term":{"routing.oid":"org-1"}}');
       const dh = arg.aggs.per_day.date_histogram;
       expect(dh.calendar_interval).toBe('day');
       expect(dh.min_doc_count).toBe(0);
       expect(dh.extended_bounds).toEqual({ min: '2026-10-07', max: '2026-10-20' });
       expect(JSON.stringify(arg.aggs.per_day.aggs.protected)).toContain('f0rtika.crowdstrike_detected');
-      expect(JSON.stringify(arg.aggs.per_day.aggs.unprotected)).toContain('"event.ERROR":101');
       expect(arg.aggs.per_day.aggs.inconclusive.filter.bool.must_not[0].terms['event.ERROR']).toEqual([101, 105, 126, 127]);
       expect(arg.aggs.all_time.global).toEqual({});
-      expect(arg.aggs.all_time.aggs.org.filter).toEqual({ term: { 'routing.oid': 'org-1' } });
+      expect(JSON.stringify(arg.aggs.all_time.aggs.org.filter)).toContain('{"term":{"routing.oid":"org-1"}}');
       expect(arg.aggs.all_time.aggs.org.aggs.last.max.field).toBe('routing.event_time');
       expect(arg.aggs.last_7d.aggs.endpoints.cardinality.field).toBe('routing.hostname');
+    });
+
+    it('counts only real test results: test data, no upload confirmations, no skipped bundle stages', async () => {
+      mockSearch.mockResolvedValue(esSearchResponse({ aggs: {} }));
+      await createService().getExecutionActivity({ org: 'org-1', days: 14 });
+      const arg = mockSearch.mock.calls[0][0];
+      const counted = arg.query.bool.filter.find((f: any) => f.bool?.must_not);
+      expect(counted).toBeDefined();
+      expect(counted.bool.filter).toContainEqual({
+        bool: { must: [{ exists: { field: 'f0rtika.test_uuid' } }, { exists: { field: 'f0rtika.test_name' } }] },
+      });
+      expect(counted.bool.filter).toContainEqual({ term: { 'routing.oid': 'org-1' } });
+      expect(counted.bool.must_not).toContainEqual({ term: { 'event.ERROR': 200 } });
+      expect(counted.bool.must_not).toContainEqual({
+        bool: { filter: [{ term: { 'f0rtika.is_bundle_control': true } }, { term: { 'event.ERROR': 0 } }] },
+      });
+      // lastExecutionAt ignores the window but applies the same counted filter.
+      expect(arg.aggs.all_time.aggs.org.filter).toEqual(counted);
+    });
+
+    it('defines got-through as conclusive and not protected, and the 7d window as the last 7 UTC days', async () => {
+      mockSearch.mockResolvedValue(esSearchResponse({ aggs: {} }));
+      await createService().getExecutionActivity({ days: 14 });
+      const arg = mockSearch.mock.calls[0][0];
+      const unprotected = arg.aggs.per_day.aggs.unprotected.filter.bool;
+      expect(unprotected.filter).toEqual([{ terms: { 'event.ERROR': [101, 105, 126, 127] } }]);
+      expect(JSON.stringify(unprotected.must_not)).toContain('f0rtika.is_protected');
+      expect(JSON.stringify(unprotected.must_not)).toContain('f0rtika.defender_detected');
+      expect(JSON.stringify(unprotected.must_not)).toContain('f0rtika.crowdstrike_detected');
+      expect(arg.aggs.last_7d.filter).toEqual({ range: { 'routing.event_time': { gte: 'now-6d/d' } } });
     });
 
     it('clamps days to 1-90 and falls back to 14 for non-finite input', async () => {
