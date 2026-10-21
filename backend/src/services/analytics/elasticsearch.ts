@@ -3119,7 +3119,17 @@ export class ElasticsearchService {
             inconclusive: { filter: inconclusiveFilter },
           },
         },
-        last_execution: { max: { field: 'routing.event_time' } },
+        // All-time newest result for the org: global ignores the window filter above
+        // (the query's only other filter is org, re-applied here).
+        all_time: {
+          global: {},
+          aggs: {
+            org: {
+              filter: orgFilter ?? { match_all: {} },
+              aggs: { last: { max: { field: 'routing.event_time' } } },
+            },
+          },
+        },
         last_7d: {
           filter: { range: { 'routing.event_time': { gte: 'now-7d' } } },
           aggs: {
@@ -3148,7 +3158,7 @@ export class ElasticsearchService {
       ...(byDay.get(date) ?? { protected: 0, unprotected: 0, inconclusive: 0 }),
     }));
 
-    const last = aggs?.last_execution;
+    const last = aggs?.all_time?.org?.last;
     const lastExecutionAt: string | null =
       last?.value != null ? (last.value_as_string ?? new Date(last.value).toISOString()) : null;
 

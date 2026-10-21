@@ -1537,7 +1537,7 @@ describe('elasticsearch.ts', () => {
             dayBucket('2026-10-18T00:00:00.000Z', 3, 1, 2),
             dayBucket('2026-10-20T00:00:00.000Z', 5, 0, 0),
           ] },
-          last_execution: { value: Date.parse('2026-10-20T09:30:00Z'), value_as_string: '2026-10-20T09:30:00.000Z' },
+          all_time: { org: { last: { value: Date.parse('2026-10-20T09:30:00Z'), value_as_string: '2026-10-20T09:30:00.000Z' } } },
           last_7d: {
             doc_count: 40, endpoints: { value: 6 },
             conclusive: { doc_count: 20 }, protected: { doc_count: 15 },
@@ -1561,7 +1561,7 @@ describe('elasticsearch.ts', () => {
       mockSearch.mockResolvedValue(esSearchResponse({
         aggs: {
           per_day: { buckets: [] },
-          last_execution: { value: null },
+          all_time: { org: { last: { value: null } } },
           last_7d: { doc_count: 0, endpoints: { value: 0 }, conclusive: { doc_count: 0 }, protected: { doc_count: 0 } },
         },
       }));
@@ -1572,6 +1572,20 @@ describe('elasticsearch.ts', () => {
       expect(result.lastExecutionAt).toBeNull();
       expect(result.executions7d).toBe(0);
       expect(result.endpointsTested7d).toBe(0);
+    });
+
+    it('reports an all-time lastExecutionAt even when the window is empty', async () => {
+      mockSearch.mockResolvedValue(esSearchResponse({
+        aggs: {
+          per_day: { buckets: [] },
+          all_time: { org: { last: { value: Date.parse('2026-09-24T08:00:00Z'), value_as_string: '2026-09-24T08:00:00.000Z' } } },
+          last_7d: { doc_count: 0, endpoints: { value: 0 }, conclusive: { doc_count: 0 }, protected: { doc_count: 0 } },
+        },
+      }));
+      const result = await createService().getExecutionActivity({});
+      expect(result.lastExecutionAt).toBe('2026-09-24T08:00:00.000Z');
+      expect(result.executions7d).toBe(0);
+      expect(mockSearch.mock.calls[0][0].aggs.all_time.aggs.org.filter).toEqual({ match_all: {} });
     });
 
     it('sends one size:0 search with org + date filters and the expected aggs', async () => {
@@ -1590,7 +1604,9 @@ describe('elasticsearch.ts', () => {
       expect(JSON.stringify(arg.aggs.per_day.aggs.protected)).toContain('f0rtika.crowdstrike_detected');
       expect(JSON.stringify(arg.aggs.per_day.aggs.unprotected)).toContain('"event.ERROR":101');
       expect(arg.aggs.per_day.aggs.inconclusive.filter.bool.must_not[0].terms['event.ERROR']).toEqual([101, 105, 126, 127]);
-      expect(arg.aggs.last_execution.max.field).toBe('routing.event_time');
+      expect(arg.aggs.all_time.global).toEqual({});
+      expect(arg.aggs.all_time.aggs.org.filter).toEqual({ term: { 'routing.oid': 'org-1' } });
+      expect(arg.aggs.all_time.aggs.org.aggs.last.max.field).toBe('routing.event_time');
       expect(arg.aggs.last_7d.aggs.endpoints.cardinality.field).toBe('routing.hostname');
     });
 

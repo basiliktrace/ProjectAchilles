@@ -358,7 +358,7 @@ export interface ExecutionActivityDay {
 
 export interface ExecutionActivityResponse {
   days: ExecutionActivityDay[];    // one per UTC day, oldest first, zero-filled
-  lastExecutionAt: string | null;  // newest result in the window
+  lastExecutionAt: string | null;  // newest result for the org, all-time (not window-bound)
   executions7d: number;            // all result docs, last 7 days
   protectedPct7d: number | null;   // combined-protected / conclusive, last 7 days
   endpointsTested7d: number;       // distinct hostnames, last 7 days
