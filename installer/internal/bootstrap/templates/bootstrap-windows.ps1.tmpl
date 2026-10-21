@@ -1,0 +1,55 @@
+<#
+  ProjectAchilles endpoint bootstrap (Windows PowerShell 5.1+) -- generated, do not edit.
+  Server: {{.Host}}
+
+  Run from an elevated PowerShell:
+      .\bootstrap-windows.ps1 -Token <enrollment-token>
+
+  1. Downloads the server root CA over HTTP and aborts unless its SHA-256
+     matches the value pinned below (the pin, not the transport, is the trust anchor).
+  2. Trusts it in Cert:\LocalMachine\Root (skipped if already present, e.g. via GPO).
+  3. Downloads the agent over HTTPS and enrolls it.
+#>
+param([Parameter(Mandatory)][string]$Token)
+
+$ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'
+
+$PinnedRootSha256 = '{{.RootSHA256}}'
+
+$isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+if (-not $isAdmin) { throw 'This script must run as Administrator (elevated PowerShell).' }
+
+[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+
+$cer = Join-Path $env:TEMP 'achilles-root-ca.cer'
+$exe = Join-Path $env:TEMP 'achilles-agent.exe'
+
+Write-Host "Downloading root CA from http://{{.Host}}/ca/root.cer"
+Invoke-WebRequest -UseBasicParsing -Uri "http://{{.Host}}/ca/root.cer" -OutFile $cer
+
+$actual = (Get-FileHash -Algorithm SHA256 -Path $cer).Hash
+if ($actual.ToLowerInvariant() -ne $PinnedRootSha256.ToLowerInvariant()) {
+    Remove-Item -Force $cer -ErrorAction SilentlyContinue
+    throw "Root CA fingerprint mismatch: expected $PinnedRootSha256, got $actual. Aborting; nothing was trusted."
+}
+Write-Host "Root CA SHA-256 verified: $actual"
+
+$thumb = (New-Object System.Security.Cryptography.X509Certificates.X509Certificate2 $cer).Thumbprint
+if (Test-Path "Cert:\LocalMachine\Root\$thumb") {
+    Write-Host 'Root CA already trusted (e.g. via GPO); skipping import.'
+} else {
+    certutil.exe -addstore -f Root $cer | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "certutil -addstore failed with exit code $LASTEXITCODE" }
+    Write-Host 'Root CA added to Cert:\LocalMachine\Root.'
+}
+Remove-Item -Force $cer -ErrorAction SilentlyContinue
+
+Write-Host "Downloading agent from https://{{.Host}}"
+Invoke-WebRequest -UseBasicParsing -Uri "https://{{.Host}}/api/agent/download?os=windows&arch=amd64" -OutFile $exe
+
+& $exe --enroll $Token --server https://{{.Host}} --install
+$code = $LASTEXITCODE
+Remove-Item -Force $exe -ErrorAction SilentlyContinue
+if ($code -ne 0) { Write-Host "Agent enrollment failed (exit code $code)." }
+exit $code

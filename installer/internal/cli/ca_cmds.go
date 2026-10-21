@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/projectachilles/ProjectAchilles/installer/internal/bootstrap"
 	"github.com/projectachilles/ProjectAchilles/installer/internal/ca"
 )
 
@@ -27,6 +28,7 @@ func registerCA(r *Registry, stdout, stderr io.Writer) {
 	r.Register("ca init", caInit(stdout, stderr))
 	r.Register("ca renew", caRenew(stdout, stderr))
 	r.Register("ca export", caExport(stdout, stderr))
+	r.Register("ca bootstrap", caBootstrap(stdout, stderr))
 }
 
 // parseFlags parses args and rejects positional leftovers. A help request
@@ -170,6 +172,37 @@ func caExport(stdout, stderr io.Writer) Handler {
 		}
 		fmt.Fprintf(stdout, "Wrote %s and %s\n", filepath.Join(*out, "root.crt"), filepath.Join(*out, "root.cer"))
 		printFingerprints(stdout, root)
+		return nil
+	}
+}
+
+func caBootstrap(stdout, stderr io.Writer) Handler {
+	return func(_ context.Context, args []string) error {
+		fs := newFlagSet("ca bootstrap", stderr)
+		dir := fs.String("dir", defaultCADir, "CA directory")
+		host := fs.String("host", "", "server DNS name pinned into the scripts (required)")
+		out := fs.String("out", "", "directory to write the bootstrap scripts into (required)")
+		if err := parseFlags(fs, args); err != nil {
+			return helpOK(err)
+		}
+		if *host == "" {
+			return errors.New("--host is required")
+		}
+		if *out == "" {
+			return errors.New("--out is required")
+		}
+		b, err := ca.Load(*dir)
+		if err != nil {
+			return err
+		}
+		s256, _ := ca.Fingerprints(b.Root)
+		pin := strings.ToLower(strings.ReplaceAll(s256, ":", ""))
+		win, unix, err := bootstrap.Render(bootstrap.Params{Host: *host, RootSHA256: pin}, *out)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(stdout, "Wrote %s and %s\n", win, unix)
+		printFingerprints(stdout, b.Root)
 		return nil
 	}
 }

@@ -1,0 +1,81 @@
+#!/usr/bin/env bash
+# ProjectAchilles endpoint bootstrap (Linux/macOS) -- generated, do not edit.
+# Server: {{.Host}}
+#
+# Usage (as root):  sudo ./bootstrap-unix.sh <enrollment-token>
+#                   (or ACHILLES_TOKEN=<token> sudo -E ./bootstrap-unix.sh)
+#
+# Downloads the root CA over HTTP and aborts unless its SHA-256 matches the
+# pinned value, trusts it system-wide, then downloads and enrolls the agent
+# over HTTPS.
+set -euo pipefail
+
+PINNED_SHA256='{{.RootSHA256}}'
+TOKEN="${1:-${ACHILLES_TOKEN:-}}"
+
+die() { echo "error: $*" >&2; exit 1; }
+
+[ -n "$TOKEN" ] || die "enrollment token required: $0 <token>"
+[ "$(id -u)" -eq 0 ] || die "must run as root (use sudo)"
+command -v curl >/dev/null 2>&1 || die "curl is required"
+
+case "$(uname -s)" in
+  Linux) OS=linux ;;
+  Darwin) OS=darwin ;;
+  *) die "unsupported OS: $(uname -s)" ;;
+esac
+case "$(uname -m)" in
+  x86_64|amd64) ARCH=amd64 ;;
+  aarch64|arm64) ARCH=arm64 ;;
+  *) die "unsupported architecture: $(uname -m)" ;;
+esac
+
+sha256_of() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" | awk '{print $1}'
+  elif command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$1" | awk '{print $1}'
+  else
+    die "sha256sum or shasum is required"
+  fi
+}
+
+WORK="$(mktemp -d)"
+trap 'rm -rf "$WORK"' EXIT
+
+echo "Downloading root CA from http://{{.Host}}/ca/root.cer"
+curl -fsS -o "$WORK/root.cer" "http://{{.Host}}/ca/root.cer"
+
+ACTUAL="$(sha256_of "$WORK/root.cer" | tr 'A-F' 'a-f')"
+if [ "$ACTUAL" != "$PINNED_SHA256" ]; then
+  die "root CA fingerprint mismatch: expected $PINNED_SHA256, got $ACTUAL. Aborting; nothing was trusted."
+fi
+echo "Root CA SHA-256 verified: $ACTUAL"
+
+pem_from_der() {
+  command -v openssl >/dev/null 2>&1 || die "openssl is required to convert the root CA to PEM"
+  openssl x509 -inform der -in "$WORK/root.cer" -out "$1"
+}
+
+if [ "$OS" = darwin ]; then
+  security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain "$WORK/root.cer"
+  echo "Root CA added to the System keychain."
+elif command -v update-ca-certificates >/dev/null 2>&1; then
+  mkdir -p /usr/local/share/ca-certificates
+  pem_from_der /usr/local/share/ca-certificates/achilles-root-ca.crt
+  update-ca-certificates
+  echo "Root CA trusted (Debian/Ubuntu)."
+elif command -v update-ca-trust >/dev/null 2>&1; then
+  mkdir -p /etc/pki/ca-trust/source/anchors
+  pem_from_der /etc/pki/ca-trust/source/anchors/achilles-root-ca.crt
+  update-ca-trust
+  echo "Root CA trusted (Fedora/RHEL)."
+else
+  die "no supported trust tool found (update-ca-certificates, update-ca-trust, security)"
+fi
+
+echo "Downloading agent from https://{{.Host}}"
+curl -fsS -o "$WORK/achilles-agent" "https://{{.Host}}/api/agent/download?os=$OS&arch=$ARCH"
+chmod 755 "$WORK/achilles-agent"
+
+"$WORK/achilles-agent" --enroll "$TOKEN" --server "https://{{.Host}}" --install

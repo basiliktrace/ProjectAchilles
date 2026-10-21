@@ -140,3 +140,30 @@ func TestCACommandsRegisteredOnDefaultRegistry(t *testing.T) {
 		}
 	}
 }
+
+func TestCLICaBootstrapWritesBothFiles(t *testing.T) {
+	r, out, errb := caRegistry()
+	dir := filepath.Join(t.TempDir(), "ca")
+	if code := r.Run([]string{"ca", "init", "--dir", dir, "--zone", "corp.example.com", "--label", "Acme"}, out, errb); code != 0 {
+		t.Fatalf("init exit %d, %q", code, errb)
+	}
+	outDir := filepath.Join(t.TempDir(), "onprem")
+	code := r.Run([]string{"ca", "bootstrap", "--dir", dir, "--host", "achilles.corp.example.com", "--out", outDir}, out, errb)
+	if code != 0 {
+		t.Fatalf("bootstrap exit %d, %q", code, errb)
+	}
+	m := regexp.MustCompile(`SHA-256: ([0-9A-F:]{95})`).FindStringSubmatch(out.String())
+	if m == nil {
+		t.Fatalf("no fingerprint printed: %q", out)
+	}
+	want := strings.ToLower(strings.ReplaceAll(m[1], ":", ""))
+	for _, f := range []string{"bootstrap-windows.ps1", "bootstrap-unix.sh"} {
+		b, err := os.ReadFile(filepath.Join(outDir, f))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(b), want) {
+			t.Errorf("%s lacks fingerprint %s", f, want)
+		}
+	}
+}
