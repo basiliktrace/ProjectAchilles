@@ -17,6 +17,8 @@ const DESCRIPTION = "Stage where each chain's latest run was blocked";
 
 interface Row {
   label: string;
+  /** Second label line for the end-to-end rows: detected / undetected. */
+  sub?: string;
   count: number;
   /** Stage rows only: chains blocked here after an earlier EDR alert. */
   alerted: number;
@@ -37,18 +39,22 @@ function rowsOf(data: ChainDepthResponse): Row[] {
   // Chains nothing blocked, split by whether an EDR at least alerted: the
   // Defense Score counts a detection as protected, chain depth only a block
   rows.push(
+    // The two name lists are newer than the counts: during a deploy the
+    // frontend can be ahead of the backend, so never assume they exist
     {
-      label: 'End to end · detected',
+      label: 'End to end',
+      sub: 'detected',
       count: data.endToEndAlerted,
       alerted: 0,
-      bundleNames: data.endToEndAlertedBundleNames,
+      bundleNames: data.endToEndAlertedBundleNames ?? [],
       kind: 'detected',
     },
     {
-      label: 'End to end · undetected',
+      label: 'End to end',
+      sub: 'undetected',
       count: data.endToEnd - data.endToEndAlerted,
       alerted: 0,
-      bundleNames: data.endToEndUndetectedBundleNames,
+      bundleNames: data.endToEndUndetectedBundleNames ?? data.endToEndBundleNames ?? [],
       kind: 'undetected',
     },
   );
@@ -56,12 +62,13 @@ function rowsOf(data: ChainDepthResponse): Row[] {
 }
 
 function rowName(row: Row): string {
-  if (row.count === 0) return `${row.label}: no chains`;
+  const name = row.sub ? `${row.label} · ${row.sub}` : row.label;
+  if (row.count === 0) return `${name}: no chains`;
   if (row.kind === 'stage') {
-    return `${row.label}: ${chainCount(row.count)} blocked, ${row.alerted} after an earlier EDR alert. Show these runs`;
+    return `${name}: ${chainCount(row.count)} blocked, ${row.alerted} after an earlier EDR alert. Show these runs`;
   }
   const how = row.kind === 'detected' ? 'an EDR alerted' : 'no alert';
-  return `${row.label}: ${chainCount(row.count)} ran every stage, ${how}. Show these runs`;
+  return `${name}: ${chainCount(row.count)} ran every stage, ${how}. Show these runs`;
 }
 
 const MAIN_COLOR: Record<Row['kind'], string> = {
@@ -121,22 +128,23 @@ function ChainDepthCard({ data, loading, onRowClick }: ChainDepthCardProps) {
             const alerted = Math.min(row.alerted, row.count);
             return (
               <button
-                key={row.label}
+                key={row.sub ? `${row.label}-${row.sub}` : row.label}
                 type="button"
                 disabled={row.count === 0}
                 onClick={() => onRowClick?.(row.bundleNames)}
                 aria-label={rowName(row)}
                 title={row.bundleNames.length > 0 ? row.bundleNames.join(', ') : undefined}
-                className="grid w-full grid-cols-[148px_minmax(0,1fr)_64px] items-center gap-x-2.5 rounded px-1 py-1 text-left transition-colors enabled:hover:bg-raised disabled:cursor-default"
+                className="grid w-full grid-cols-[92px_minmax(0,1fr)_64px] items-center gap-x-2.5 rounded px-1 py-1 text-left transition-colors enabled:hover:bg-raised disabled:cursor-default"
               >
                 <span
                   className={cn(
-                    'truncate text-xs',
+                    'flex min-w-0 flex-col text-xs leading-tight',
                     row.kind === 'detected' && 'text-warning',
                     row.kind === 'undetected' && 'text-danger',
                   )}
                 >
-                  {row.label}
+                  <span className="truncate">{row.label}</span>
+                  {row.sub && <span className="truncate text-[10.5px] opacity-80">{row.sub}</span>}
                 </span>
                 <span className="flex h-2.5 overflow-hidden rounded-sm bg-raised">
                   <span

@@ -31,8 +31,8 @@ describe('ChainDepthCard', () => {
       'Stage 2',
       'Stage 3',
       'Stage 4+',
-      'End to end · detected',
-      'End to end · undetected',
+      'End to end',
+      'End to end',
     ]);
     expect(within(rows[0]).getByText('1 chain')).toBeInTheDocument();
     expect(within(rows[3]).getByText('3 chains')).toBeInTheDocument();
@@ -148,5 +148,20 @@ describe('ChainDepthCard', () => {
     const { container } = render(<ChainDepthCard data={null} loading />);
     expect(screen.queryByText('How deep attack chains get')).not.toBeInTheDocument();
     expect(container.firstElementChild).toHaveAttribute('aria-hidden', 'true');
+  });
+
+  it('survives an older backend without the detected/undetected bundle lists', () => {
+    const legacy = { ...data } as Partial<ChainDepthResponse>;
+    delete legacy.endToEndAlertedBundleNames;
+    delete legacy.endToEndUndetectedBundleNames;
+    render(<ChainDepthCard data={legacy as ChainDepthResponse} />);
+    expect(screen.getByRole('button', { name: /^End to end · undetected/ })).toBeInTheDocument();
+  });
+
+  it('keeps the label column narrow, with detected/undetected as a sub-label', () => {
+    render(<ChainDepthCard data={data} />);
+    const row = screen.getByRole('button', { name: /^End to end · detected/ });
+    expect(row.className).toContain('grid-cols-[92px_');
+    expect(within(row).getByText('detected')).toBeInTheDocument();
   });
 });

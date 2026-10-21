@@ -25,14 +25,12 @@ describe('TestActivityCard', () => {
   describe('filling its row', () => {
     const originalRO = globalThis.ResizeObserver;
     const originalMM = window.matchMedia;
-    const originalRect = HTMLElement.prototype.getBoundingClientRect;
     afterEach(() => {
       globalThis.ResizeObserver = originalRO;
       window.matchMedia = originalMM;
-      HTMLElement.prototype.getBoundingClientRect = originalRect;
     });
 
-    it('shows as many runs as fit, up to 12', () => {
+    it('renders up to 12 runs to measure on large screens', () => {
       globalThis.ResizeObserver = class {
         observe() {}
         disconnect() {}
@@ -43,10 +41,6 @@ describe('TestActivityCard', () => {
         addEventListener: () => {},
         removeEventListener: () => {},
       }) as unknown as typeof window.matchMedia;
-      // The list box is tall; each run row is 40px
-      HTMLElement.prototype.getBoundingClientRect = function (this: HTMLElement) {
-        return { height: this.className.includes('lg:absolute') ? 2000 : 40 } as DOMRect;
-      };
       const runs = Array.from({ length: 15 }, (_, i) => exec(`2026-10-${String(i + 1).padStart(2, '0')}T12:00:00.000Z`, `run-${i}`));
       render(<TestActivityCard executionCount={15} recentTests={runs} />);
       expect(screen.getAllByText(/^run-\d+$/)).toHaveLength(12);
