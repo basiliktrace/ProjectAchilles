@@ -22,11 +22,13 @@ services:
     image: ${CADDY_IMAGE:-caddy:2.10.0-alpine}
     restart: unless-stopped
     # CADDY_BIND_IP pins the published ports to one host address (the LAN IP
-    # for an on-prem install). Unset = all interfaces (public-server default).
+    # for an on-prem install). Unset or empty = no host IP at all, so Docker
+    # publishes on every IPv4 AND IPv6 address exactly as before (an explicit
+    # 0.0.0.0 would drop the [::] listeners). Bracket an IPv6 address: [fd00::1].
     ports:
-      - "${CADDY_BIND_IP:-0.0.0.0}:80:80"
-      - "${CADDY_BIND_IP:-0.0.0.0}:443:443"
-      - "${CADDY_BIND_IP:-0.0.0.0}:443:443/udp"   # HTTP/3
+      - "${CADDY_BIND_IP:+${CADDY_BIND_IP}:}80:80"
+      - "${CADDY_BIND_IP:+${CADDY_BIND_IP}:}443:443"
+      - "${CADDY_BIND_IP:+${CADDY_BIND_IP}:}443:443/udp"   # HTTP/3
     environment:
       - ACHILLES_DOMAIN=${ACHILLES_DOMAIN:?set ACHILLES_DOMAIN in .env}
       - ACME_EMAIL=${ACME_EMAIL:-}
