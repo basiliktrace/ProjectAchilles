@@ -665,7 +665,7 @@ export default function AnalyticsDashboardPage() {
       <div>
         <PageHeader
           title="Analytics"
-          description="Detection depth across error types, techniques, and categories"
+          description="Detection depth across error types, techniques, and attack chains"
         >
           <Button
             variant={filterState.isExpanded || filterState.activeFilterCount > 0 ? 'secondary' : 'outline'}

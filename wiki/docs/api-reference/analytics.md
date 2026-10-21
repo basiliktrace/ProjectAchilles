@@ -218,7 +218,31 @@ GET /api/analytics/error-rate/trend       — error rate over time (rolling wind
 GET /api/analytics/results-by-error-type  — breakdown by error code/name
 ```
 
-All accept the shared filter parameters. `technique-distribution` and `test-coverage` also accept `basis=latest`.
+All accept the shared filter parameters. `technique-distribution`, `test-coverage` and `threat-actor-coverage` also accept `basis=latest`. Under `latest`, `threat-actor-coverage` also returns `pairCount` and `lastTestedAt` per actor.
+
+### Technique Outcomes
+
+```
+GET /api/analytics/technique-outcomes
+```
+
+Accepts the shared filter parameters. Returns one entry per technique with `protected`, `detected`, `unprotected` and `lastTestedAt`. It always uses the latest-result basis, scores each stage on its own (like `technique-distribution`), and is not capped. The `basis` parameter is ignored. It feeds the ATT&CK outcome matrix on the Security Dashboard.
+
+### Chain Depth
+
+```
+GET /api/analytics/chain-depth
+```
+
+Accepts the shared filter parameters. For each multi-stage (non-cyber-hygiene) chain, it takes the latest run on each host and reports the stage where it was blocked. Response fields: `chains`, `buckets` (`[{ stage, blocked, alertedNotBlocked, bundleNames }]`), `endToEnd`, `endToEndAlerted`, `endToEndBundleNames`, and `inconclusive`. Chains whose latest run had a stage error or a pre-execution block are counted in `inconclusive` only. It assumes chains stop at the first blocked stage, with later stages ingested as Skipped.
+
+### Execution Activity
+
+```
+GET /api/analytics/execution-activity?days=14
+```
+
+Takes the organization and `days` (1 to 90, default 14); it does not use the shared filters. Returns `days[]` (daily protected, got-through and inconclusive counts per result document), `lastExecutionAt` (all time), `executions7d`, `protectedPct7d` and `endpointsTested7d`. It feeds the testing cadence card.
 
 ### Counts and Catalogs
 

@@ -48,7 +48,7 @@ A *pair* is one test on one endpoint (within one organization). Only the most re
 
 **Trend.** The trend line is the same calculation as of each day. Day labels are UTC, ranges over 90 days use weekly points, and the last point always equals the headline score. A window with no pairs is drawn as a gap, not 0%.
 
-The execution-count formula above still applies where noted: the PDF execution report, score-drop alerts, the Executions 7d tile, and the test-vs-alert timeline cards stay on executions. Breakdowns by test, technique, severity, category, and organization also count executions. API users select the basis with `basis=latest|executions`; see the [Analytics API](../../api-reference/analytics#score-basis).
+The execution-count formula above still applies where noted: the PDF execution report, score-drop alerts, and the test-vs-alert timeline cards stay on executions. Breakdowns by test, technique, severity, category, and organization also count executions. API users select the basis with `basis=latest|executions`; see the [Analytics API](../../api-reference/analytics#score-basis).
 
 ## Breakdowns
 
@@ -112,7 +112,7 @@ graph TB
     ADP --> RT
     ADP --> DefT
 
-    DT --> TRIO[Error Types · ATT&CK Distribution · Score by Category]
+    DT --> TRIO[Error Types · ATT&CK Distribution · Chain Depth]
     DT --> LED[Defense Score Ledger]
     DT --> SEC[Secure Score]
     DT --> TREND[Trend Overview]
@@ -124,7 +124,7 @@ graph TB
 
 ### Dashboard Tab
 
-![Analytics dashboard — results by error type, ATT&CK technique distribution, score by category, Defense Score ledger, and trend overview](/img/screenshots/analytics-dashboard.png)
+![Analytics dashboard — results by error type, ATT&CK technique distribution, chain depth, Defense Score ledger, and trend overview](/img/screenshots/analytics-dashboard.png)
 
 The **Dashboard** tab is the primary visualization hub. Since 2.1 it is laid out
 in analyst columns: a narrow left column carrying the numbers you quote, and a
@@ -136,8 +136,14 @@ wide right column carrying the shapes you read.
 - **ATT&CK technique distribution** — one row per technique with a stacked
   protected/unprotected bar and a percentage; a warning chip counts techniques
   that also raised Defender or CrowdStrike alerts
-- **Score by category** — bar list of defense score per category, with
-  subcategories nested underneath
+- **How deep attack chains get** — for each multi-stage (non-cyber-hygiene)
+  chain, the latest run on each host: the stage where it was blocked (1, 2, 3,
+  or 4+), or "ran end to end". An amber segment means an EDR alerted on an
+  earlier stage but did not block. Chains whose latest run had a stage error or
+  a pre-execution block (for example exit 999 or 260) are counted as
+  "inconclusive" in the footer, not in the rows. It follows the filter bar, and
+  clicking a row filters Executions to those bundles. It relies on chains
+  stopping at the first blocked stage, with later stages ingested as Skipped.
 
 **Posture row — left column**
 

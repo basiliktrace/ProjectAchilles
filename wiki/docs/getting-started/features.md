@@ -14,15 +14,16 @@ ProjectAchilles is built around three pillars — **develop tests**, **execute t
 test library, the endpoint fleet, and Elasticsearch analytics. It replaced the
 three separate module dashboards in 2.1.
 
-![Security Dashboard — attention banner, KPI strip, trend overview, severity mix, ATT&CK coverage and category breakdown](/img/screenshots/security-dashboard.png)
+![Security Dashboard — attention banner, KPI strip, trend overview, testing cadence, threat actor readiness and ATT&CK outcome matrix](/img/screenshots/security-dashboard.png)
 
 - **Attention banner** — derived, not stored: offline agents, stale agents,
   failed tasks in the last 24 h, outdated binaries, and git sync failures, each
   linking to the page that resolves it
 - **KPI strip** — Defense Score, Secure Score, total tests, average score,
-  agents online, and executions in the window
-- **Trend overview**, **severity mix**, **ATT&CK coverage**, **category
-  breakdown**, **fleet health**, and **recent executions**
+  and agents online
+- **Trend overview**, **testing cadence** (14-day activity, last run, next
+  scheduled run), **threat actor readiness**, **ATT&CK outcome matrix**,
+  **fleet health**, and **recent executions**
 - **24h / 7d / 30d / 90d / All** range selector, defaulting to 30 days and
   shared with Analytics
 - **Per-card degradation** — an unconfigured integration greys out its own card
