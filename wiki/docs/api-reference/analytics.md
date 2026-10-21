@@ -238,6 +238,14 @@ GET /api/analytics/chain-depth
 
 Accepts the shared filter parameters. For each multi-stage (non-cyber-hygiene) chain, it takes the latest run on each host and reports the stage where it was blocked. Response fields: `chains`, `buckets` (`[{ stage, blocked, alertedNotBlocked, bundleNames }]`), `endToEnd`, `endToEndAlerted`, `endToEndBundleNames`, `endToEndAlertedBundleNames`, `endToEndUndetectedBundleNames`, `inconclusive`, `blockedBeforeRun`, `blockedBeforeRunBundleNames`, and `stageErrors`. There are always four buckets, `stage` 1, 2, 3 and 4, where 4 means "4+" (blocked at stage 4 or later). `alertedNotBlocked` counts the bucket's chains where an EDR (Defender or CrowdStrike) detected a stage without blocking it. `endToEndAlerted` has the same alerted-not-blocked meaning for the chains that ran end to end. `endToEndAlertedBundleNames` and `endToEndUndetectedBundleNames` list the bundles behind those two groups; a bundle appears in both when its chains differ by host. Chains whose latest run had a stage error or a pre-execution block are counted in `inconclusive` only, which splits into `blockedBeforeRun` (a stage was blocked before it ran, exit 260; the technique was not evaluated; `blockedBeforeRunBundleNames` lists the bundles) and `stageErrors` (for example exit 999). A run with both counts as `blockedBeforeRun`. It assumes chains stop at the first blocked stage, with later stages ingested as Skipped.
 
+### Test Results
+
+```
+GET /api/analytics/test-results
+```
+
+Accepts the shared filter parameters, except that the date range, `basis` and `scoringMode` are fixed. For each test (or bundle) it takes the latest result on each host over the last 90 days and scores it like the Defense Score tile in any-stage mode (blocked or detected counts as protected). Returns an array of `{ testUuid, pairCount, protectedCount, hostCount, lastRunAt }`. `pairCount` is the number of test x host pairs, `protectedCount` how many of them are protected, and `hostCount` the distinct hosts. Cyber-hygiene control results are folded into their bundle's `testUuid`. It feeds the Fleet result column of the test library.
+
 ### Execution Activity
 
 ```

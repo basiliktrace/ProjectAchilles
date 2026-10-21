@@ -1,22 +1,12 @@
 import type { TestMetadata } from '@/types/test';
 
-export type SortField = 'name' | 'createdDate' | 'score' | 'severity' | 'lastModifiedDate';
+export type SortField = 'name' | 'createdDate' | 'score' | 'lastModifiedDate';
 export type SortDirection = 'asc' | 'desc';
 export type ViewFilter = 'all' | 'favorites' | 'recent';
-
-const SEVERITY_ORDER: Record<string, number> = {
-  critical: 5,
-  high: 4,
-  medium: 3,
-  low: 2,
-  informational: 1,
-};
 
 export interface TestFilters {
   query: string;
   category: string | null;
-  /** Multi-select severity set; empty = all. */
-  severities: Set<string>;
   /** Platform/target value; null = all. */
   target: string | null;
   threatActor: string | null;
@@ -32,7 +22,6 @@ export interface TestFilters {
 export const DEFAULT_FILTERS: TestFilters = {
   query: '',
   category: null,
-  severities: new Set(),
   target: null,
   threatActor: null,
   tacticSlug: null,
@@ -84,10 +73,6 @@ export function filterTests(
 
   if (filters.category) {
     filtered = filtered.filter((test) => test.category === filters.category);
-  }
-
-  if (filters.severities.size > 0) {
-    filtered = filtered.filter((test) => filters.severities.has((test.severity || '').toLowerCase()));
   }
 
   if (filters.target) {
@@ -143,10 +128,6 @@ export function sortTests(
       case 'score':
         cmp = (a.score ?? 0) - (b.score ?? 0);
         break;
-      case 'severity':
-        cmp =
-          (SEVERITY_ORDER[a.severity || ''] ?? 0) - (SEVERITY_ORDER[b.severity || ''] ?? 0);
-        break;
     }
     return direction === 'asc' ? cmp : -cmp;
   });
@@ -175,7 +156,6 @@ export function groupByCategory(tests: TestMetadata[]): TestGroup[] {
 export interface FacetCounts {
   total: number;
   categories: Array<{ value: string; count: number }>;
-  severities: Array<{ value: string; count: number }>;
   targets: Array<{ value: string; count: number }>;
   threatActors: Array<{ value: string; count: number }>;
 }
@@ -210,9 +190,6 @@ export function computeFacetCounts(
   return {
     total: without({}).length,
     categories: countBy(without({ category: null }), (t) => t.category),
-    severities: countBy(without({ severities: new Set() }), (t) =>
-      (t.severity || 'info').toLowerCase(),
-    ),
     targets: countBy(without({ target: null }), (t) => t.target),
     threatActors: countBy(without({ threatActor: null }), (t) => t.threatActor),
   };

@@ -324,6 +324,15 @@ export interface ThreatActorCoverageItem {
   lastTestedAt?: string;
 }
 
+// Fleet result of one test (or bundle) over the last 90 days, latest pair per host
+export interface TestResultItem {
+  testUuid: string; // test UUID, or bundle UUID for bundles / cyber-hygiene controls
+  pairCount: number;
+  protectedCount: number; // combined rule (blocked or detected)
+  hostCount: number;
+  lastRunAt: string; // ISO time of the newest pair
+}
+
 // Per-technique latest-result outcomes (per-stage test x endpoint pairs)
 export interface TechniqueOutcomeItem {
   technique: string;

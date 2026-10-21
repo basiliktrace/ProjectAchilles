@@ -9,7 +9,7 @@ import {
   X,
 } from 'lucide-react';
 import { browserApi } from '@/services/api/browser';
-import { analyticsApi } from '@/services/api/analytics';
+import { analyticsApi, type TestResultItem } from '@/services/api/analytics';
 import type { TestMetadata } from '@/types/test';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { Button } from '@/components/ui/button';
@@ -30,7 +30,8 @@ import { Sheet, SheetContent, SheetTitle } from '@/components/ui/sheet';
 import { targetLabel } from '@/utils/platformLabels';
 import { cn } from '@/lib/utils';
 import { tacticLabel, tacticToSlug } from '@/lib/mitreTactics';
-import { CompactTestCard } from './components/CompactTestCard';
+import { TestListHeader, TestListRow } from './components/TestListRow';
+import { fleetResultText, type FleetState } from './components/fleetResult';
 import { FacetRail } from './components/FacetRail';
 import {
   DEFAULT_FILTERS,
@@ -45,7 +46,6 @@ import {
 
 const SORT_OPTIONS: Array<{ value: SortField; label: string }> = [
   { value: 'name', label: 'Name' },
-  { value: 'severity', label: 'Severity' },
   { value: 'score', label: 'Score' },
   { value: 'createdDate', label: 'Created' },
   { value: 'lastModifiedDate', label: 'Modified' },
@@ -84,6 +84,8 @@ export default function TestsPage() {
   const [executedUuids, setExecutedUuids] = useState<Set<string> | null>(null);
   const [builtUuids, setBuiltUuids] = useState<Set<string> | null>(null);
   const fetchedRef = useRef(false);
+  const [fleetFetchState, setFleetFetchState] = useState<FleetState>('loading');
+  const [fleetResults, setFleetResults] = useState<Map<string, TestResultItem>>(() => new Map());
 
   const [selectMode, setSelectMode] = useState(false);
   const [selectedUuids, setSelectedUuids] = useState<Set<string>>(new Set());
@@ -92,13 +94,9 @@ export default function TestsPage() {
   const isDesktop = useIsDesktop();
   const [filtersOpen, setFiltersOpen] = useState(false);
 
-  // Deep-linkable facets live in the URL (?category= &severity= &tactic= &view=)
+  // Deep-linkable facets live in the URL (?category= &tactic= &view=); a legacy ?severity= is ignored
   const view = (searchParams.get('view') as ViewFilter) || 'all';
   const category = searchParams.get('category');
-  const severities = useMemo(
-    () => new Set((searchParams.get('severity') || '').split(',').filter(Boolean)),
-    [searchParams],
-  );
   const tacticSlug = useMemo(() => {
     const raw = searchParams.get('tactic');
     return raw ? tacticToSlug(raw) : null;
@@ -113,8 +111,6 @@ export default function TestsPage() {
       };
       if ('view' in patch) apply('view', patch.view === 'all' ? null : (patch.view as string));
       if ('category' in patch) apply('category', patch.category ?? null);
-      if ('severities' in patch)
-        apply('severity', patch.severities?.size ? [...patch.severities].join(',') : null);
       if ('tacticSlug' in patch) apply('tactic', patch.tacticSlug ?? null);
       setSearchParams(next, { replace: true });
     },
@@ -126,7 +122,6 @@ export default function TestsPage() {
       ...DEFAULT_FILTERS,
       query,
       category,
-      severities,
       tacticSlug,
       target: searchParams.get('platform'),
       threatActor: searchParams.get('actor'),
@@ -136,13 +131,12 @@ export default function TestsPage() {
       sortField,
       sortDirection,
     }),
-    [query, category, severities, tacticSlug, searchParams, notRunYet, hasBinary, view, sortField, sortDirection],
+    [query, category, tacticSlug, searchParams, notRunYet, hasBinary, view, sortField, sortDirection],
   );
 
   const activeFacetCount =
     (filters.view !== 'all' ? 1 : 0) +
     (filters.category ? 1 : 0) +
-    filters.severities.size +
     (filters.target ? 1 : 0) +
     (filters.threatActor ? 1 : 0) +
     (filters.tacticSlug ? 1 : 0) +
@@ -204,6 +198,29 @@ export default function TestsPage() {
       .then((uuids) => setBuiltUuids(new Set(uuids)))
       .catch(() => setBuiltUuids(null));
   }, [esConfigured]);
+
+  // Fleet results get their own effect (not behind fetchedRef) so they load once
+  // analytics turns out to be configured; a failure leaves the cells neutral.
+  useEffect(() => {
+    if (!esConfigured) return;
+    let cancelled = false;
+    setFleetFetchState('loading');
+    analyticsApi
+      .getTestResults()
+      .then((items) => {
+        if (cancelled) return;
+        setFleetResults(new Map(items.map((item) => [item.testUuid, item])));
+        setFleetFetchState('ready');
+      })
+      .catch(() => {
+        if (!cancelled) setFleetFetchState('error');
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [esConfigured]);
+
+  const fleetState: FleetState = esConfigured ? fleetFetchState : 'error';
 
   const ctx = useMemo(
     () => ({
@@ -337,18 +354,6 @@ export default function TestsPage() {
           {!isDesktop && filters.category && (
             <FacetChip label={filters.category} onClear={() => handleFilterChange({ category: null })} />
           )}
-          {!isDesktop &&
-            [...filters.severities].map((s) => (
-              <FacetChip
-                key={s}
-                label={s}
-                onClear={() => {
-                  const next = new Set(filters.severities);
-                  next.delete(s);
-                  handleFilterChange({ severities: next });
-                }}
-              />
-            ))}
           {!isDesktop && filters.target && (
             <FacetChip label={targetLabel(filters.target)} onClear={() => handleFilterChange({ target: null })} />
           )}
@@ -377,9 +382,9 @@ export default function TestsPage() {
 
         <div className="flex flex-col gap-6">
           {loading ? (
-            <div className="grid gap-2.5 sm:grid-cols-[repeat(auto-fill,minmax(280px,1fr))]">
+            <div className="overflow-hidden rounded-[10px] border border-border bg-surface">
               {Array.from({ length: 9 }).map((_, i) => (
-                <div key={i} className="h-20 animate-pulse rounded-lg border border-border bg-raised" />
+                <div key={i} className="h-16 animate-pulse border-b border-border bg-raised/40 last:border-b-0" />
               ))}
             </div>
           ) : groups.length === 0 ? (
@@ -392,26 +397,35 @@ export default function TestsPage() {
             </div>
           ) : (
             groups.map((group) => (
-              <section key={group.category}>
+              <section key={group.category} aria-label={group.category}>
                 <div className="mb-2.5 flex items-center gap-2.5">
                   <h2 className="font-mono text-xs text-accent">{group.category}</h2>
                   <span className="text-[11px] text-faint">{group.tests.length} tests</span>
                   <div className="h-px flex-1 bg-border" />
                 </div>
-                <div className="grid gap-2.5 sm:grid-cols-[repeat(auto-fill,minmax(280px,1fr))]">
-                  {group.tests.map((test) => (
-                    <CompactTestCard
-                      key={test.uuid}
-                      test={test}
-                      onOpen={() => navigate(`/tests/${test.uuid}`)}
-                      isFavorite={isFavorite(test.uuid)}
-                      onToggleFavorite={() => toggleFavorite(test.uuid)}
-                      onExecute={canCreateTasks ? () => openDrawer([test]) : undefined}
-                      selectMode={selectMode}
-                      selected={selectedUuids.has(test.uuid)}
-                      onToggleSelect={() => toggleSelect(test.uuid)}
-                    />
-                  ))}
+                <div className="overflow-hidden rounded-[10px] border border-border bg-surface">
+                  <TestListHeader />
+                  <ul>
+                    {group.tests.map((test) => (
+                      <TestListRow
+                        key={test.uuid}
+                        test={test}
+                        fleet={fleetResultText(
+                          test,
+                          fleetResults.get(test.uuid),
+                          fleetState,
+                          executedUuids ? executedUuids.has(test.uuid) : null,
+                        )}
+                        onOpen={() => navigate(`/tests/${test.uuid}`)}
+                        isFavorite={isFavorite(test.uuid)}
+                        onToggleFavorite={() => toggleFavorite(test.uuid)}
+                        onExecute={canCreateTasks ? () => openDrawer([test]) : undefined}
+                        selectMode={selectMode}
+                        selected={selectedUuids.has(test.uuid)}
+                        onToggleSelect={() => toggleSelect(test.uuid)}
+                      />
+                    ))}
+                  </ul>
                 </div>
               </section>
             ))
