@@ -25,10 +25,16 @@ interface AlertsHeroTileProps {
   window: TimeWindow;
   loading: boolean;
   failed: boolean;
+  windowLabel: string;
+}
+
+/** "in last 30 days" / "in selected range"; "all time" stands alone. */
+function windowPhrase(windowLabel: string): string {
+  return windowLabel === 'all time' ? windowLabel : `in ${windowLabel}`;
 }
 
 /** In-window alert count, severity micro-bar, linked/organic split, 7-day delta. Click scrolls to the feed. */
-export function AlertsHeroTile({ vendor, summary, trend, window, loading, failed }: AlertsHeroTileProps) {
+export function AlertsHeroTile({ vendor, summary, trend, window, loading, failed, windowLabel }: AlertsHeroTileProps) {
   const counts = summary?.counts;
   const groups = counts
     ? groupSeverities(counts.bySeverity, vendor.knownSeverities).filter((g) => g.count > 0)
@@ -42,9 +48,12 @@ export function AlertsHeroTile({ vendor, summary, trend, window, loading, failed
       value={counts ? counts.bySource.all.toLocaleString() : '—'}
       subValue={
         counts ? (
-          <span>
-            <span style={{ color: LINKED }}>{counts.bySource.test.toLocaleString()} linked to tests</span>
-            {` · ${counts.bySource.organic.toLocaleString()} organic`}
+          <span className="flex flex-col gap-0.5">
+            <span>{windowPhrase(windowLabel)}</span>
+            <span>
+              <span style={{ color: LINKED }}>{counts.bySource.test.toLocaleString()} linked to tests</span>
+              {` · ${counts.bySource.organic.toLocaleString()} organic`}
+            </span>
           </span>
         ) : undefined
       }
@@ -107,9 +116,14 @@ export function CoverageHeroTile({ coverage, loading, failed, windowLabel }: Cov
         ) : undefined
       }
       subValue={
-        o
-          ? `${(o.prevented + o.detectedOnly).toLocaleString()} / ${o.executions.toLocaleString()} executions raised an alert · ${o.prevented.toLocaleString()} were stopped`
-          : undefined
+        o ? (
+          <span className="flex flex-col gap-0.5">
+            <span>{windowPhrase(windowLabel)}</span>
+            <span>
+              {`${(o.prevented + o.detectedOnly).toLocaleString()} / ${o.executions.toLocaleString()} executions raised an alert · ${o.prevented.toLocaleString()} were stopped`}
+            </span>
+          </span>
+        ) : undefined
       }
       chartSlot={
         pips.length > 0 ? (

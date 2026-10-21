@@ -34,6 +34,11 @@ interface Props {
   vendor: IntegrationVendor;
   window: TimeWindow;
   windowLabel: string;
+  /**
+   * Bump to re-request the current page and filters with the same window
+   * (Sync Now on a custom range). Unlike a window change, it keeps the page.
+   */
+  refreshKey?: number;
 }
 
 function SummaryItem({ label, value }: { label: string; value: number }) {
@@ -61,7 +66,7 @@ function LinkedTestCell({ alert }: { alert: IntegrationAlertItem }) {
   return <span>{alert.achilles_test_uuid?.slice(0, 8) ?? '—'}</span>;
 }
 
-export default function IntegrationAlertFeed({ vendor, window, windowLabel }: Props) {
+export default function IntegrationAlertFeed({ vendor, window, windowLabel, refreshKey = 0 }: Props) {
   const isCs = vendor.id === 'crowdstrike';
   const [source, setSource] = useState<AlertSource>('all');
   const [severityKey, setSeverityKey] = useState(vendor.defaultSeverityKey);
@@ -121,7 +126,7 @@ export default function IntegrationAlertFeed({ vendor, window, windowLabel }: Pr
     return () => {
       cancelled = true;
     };
-  }, [vendor, page, source, segment, search, window.from, window.to, reloadKey]);
+  }, [vendor, page, source, segment, search, window.from, window.to, reloadKey, refreshKey]);
 
   const changeSource = (s: AlertSource) => {
     setSource(s);

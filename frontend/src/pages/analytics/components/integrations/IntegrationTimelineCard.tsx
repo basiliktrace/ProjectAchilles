@@ -22,9 +22,11 @@ const EXEC = 'var(--chart-series-exec)';
 interface Props {
   vendor: IntegrationVendor;
   window: TimeWindow;
+  /** Bump to re-request with the same window (Sync Now on a custom range). */
+  refreshKey?: number;
 }
 
-export default function IntegrationTimelineCard({ vendor, window }: Props) {
+export default function IntegrationTimelineCard({ vendor, window, refreshKey = 0 }: Props) {
   const [data, setData] = useState<TimelinePoint[] | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -66,7 +68,7 @@ export default function IntegrationTimelineCard({ vendor, window }: Props) {
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [vendor.id, window.from, window.to]);
+  }, [vendor.id, window.from, window.to, refreshKey]);
 
   const tick = { fontSize: 11, fill: 'var(--muted-foreground)' };
 

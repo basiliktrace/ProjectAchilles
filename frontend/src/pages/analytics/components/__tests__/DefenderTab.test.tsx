@@ -289,8 +289,39 @@ describe('DefenderTab', () => {
     });
     renderTab();
     await waitFor(() => expect(df.getTechniqueCoverage).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(df.getAlerts).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(mockGetDefenseScoreTrend).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(df.getAlertTrend).toHaveBeenCalledTimes(2));
     await userEvent.click(screen.getByRole('button', { name: /sync now/i }));
     await waitFor(() => expect(df.getTechniqueCoverage).toHaveBeenCalledTimes(2));
     expect(df.getAlertSummary).toHaveBeenCalledTimes(2);
+    // Custom range: same from/to, but the feed and timeline still re-request.
+    await waitFor(() => expect(df.getAlerts).toHaveBeenCalledTimes(2));
+    expect(df.getAlerts).toHaveBeenLastCalledWith(expect.objectContaining({ from: WINDOW.from, to: WINDOW.to, page: 1 }));
+    await waitFor(() => expect(mockGetDefenseScoreTrend).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(df.getAlertTrend).toHaveBeenCalledTimes(4));
+  });
+
+  it('alerts and detection tiles state the window', async () => {
+    renderTab({ preset: '7d' });
+    const tile = await screen.findByRole('button', { name: /Defender Alerts/ });
+    await waitFor(() => expect(within(tile).getByText('in last 7 days')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getAllByText('in last 7 days')).toHaveLength(2));
+  });
+
+  it('opens the control-badge drawer with NO from/to (badge counts its own 30 days)', async () => {
+    df.getControlCorrelation.mockResolvedValue({ alertCount: 3, coveredTechniques: ['T1566', 'T1204'] });
+    renderTab();
+    const badge = await screen.findByRole('button', { name: 'View 3 Defender alerts addressed by this control' });
+    await userEvent.click(badge);
+    await waitFor(() =>
+      expect(df.getAlerts).toHaveBeenCalledWith(expect.objectContaining({ techniques: ['T1566', 'T1204'] })),
+    );
+    const drawerCall = df.getAlerts.mock.calls
+      .map((c) => c[0] as Record<string, unknown>)
+      .find((a) => Array.isArray(a.techniques));
+    expect(drawerCall).not.toHaveProperty('from');
+    expect(drawerCall).not.toHaveProperty('to');
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
   });
 });

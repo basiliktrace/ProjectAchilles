@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
@@ -141,10 +141,16 @@ function renderTab(range: DateRangeValue = RANGE) {
   );
 }
 
+const originalScrollIntoView = Element.prototype.scrollIntoView;
+
 describe('CrowdStrikeTab', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockHappyPath();
+  });
+
+  afterEach(() => {
+    Element.prototype.scrollIntoView = originalScrollIntoView;
   });
 
   it('requests summary, trend and coverage with the window resolved from the dateRange prop', async () => {
@@ -339,8 +345,33 @@ describe('CrowdStrikeTab', () => {
     });
     renderTab();
     await waitFor(() => expect(cs.getTechniqueCoverage).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(cs.getAlerts).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(mockGetDefenseScoreTrend).toHaveBeenCalledTimes(1));
+    // Two trend calls per load: the tab's tile and the timeline card
+    await waitFor(() => expect(cs.getAlertTrend).toHaveBeenCalledTimes(2));
     await userEvent.click(screen.getByRole('button', { name: /sync now/i }));
     await waitFor(() => expect(cs.getTechniqueCoverage).toHaveBeenCalledTimes(2));
     expect(cs.getAlertSummary).toHaveBeenCalledTimes(2);
+    // A custom range resolves to the same from/to, yet the feed and the
+    // timeline must re-request too, or they disagree with the refreshed tiles.
+    await waitFor(() => expect(cs.getAlerts).toHaveBeenCalledTimes(2));
+    expect(cs.getAlerts).toHaveBeenLastCalledWith(expect.objectContaining({ from: WINDOW.from, to: WINDOW.to, page: 1 }));
+    await waitFor(() => expect(mockGetDefenseScoreTrend).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(cs.getAlertTrend).toHaveBeenCalledTimes(4));
+  });
+
+  it('labels the ZTA delta with the trend span it actually covers (all time = last 365d)', async () => {
+    renderTab({ preset: 'all' });
+    await waitFor(() => expect(screen.getByText('+2.50')).toBeInTheDocument());
+    expect(cs.getZtaScoreTrend).toHaveBeenCalledWith(365);
+    expect(screen.getByText('pts over last 365d')).toBeInTheDocument();
+    expect(screen.queryByText(/pts over all time/)).toBeNull();
+  });
+
+  it('alerts and detection tiles state the window', async () => {
+    renderTab();
+    const tile = await screen.findByRole('button', { name: /Falcon Alerts/ });
+    await waitFor(() => expect(within(tile).getByText('in selected range')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getAllByText('in selected range')).toHaveLength(2));
   });
 });

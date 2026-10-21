@@ -56,7 +56,7 @@ interface DefenderTabProps {
 }
 
 export default function DefenderTab({ dateRange }: DefenderTabProps) {
-  const { window, windowLabel, refresh } = useTabWindow(dateRange);
+  const { window, windowLabel, refreshKey, refresh } = useTabWindow(dateRange);
   const [loading, setLoading] = useState(true);
   const [data, setData] = useState<TabData | null>(null);
   const [syncing, setSyncing] = useState(false);
@@ -185,6 +185,7 @@ export default function DefenderTab({ dateRange }: DefenderTabProps) {
             window={window}
             loading={loading}
             failed={!!data?.summaryFailed}
+            windowLabel={windowLabel}
           />
         </div>
         <div className="col-span-12 sm:col-span-6 md:col-span-3">
@@ -200,9 +201,15 @@ export default function DefenderTab({ dateRange }: DefenderTabProps) {
         </div>
       </div>
 
-      <IntegrationTimelineCard vendor={vendor} window={window} />
+      <IntegrationTimelineCard vendor={vendor} window={window} refreshKey={refreshKey} />
 
-      <IntegrationAlertFeed key={vendor.id} vendor={vendor} window={window} windowLabel={windowLabel} />
+      <IntegrationAlertFeed
+        key={vendor.id}
+        vendor={vendor}
+        window={window}
+        windowLabel={windowLabel}
+        refreshKey={refreshKey}
+      />
 
       <TechniqueCoverageCard
         vendor={vendor}

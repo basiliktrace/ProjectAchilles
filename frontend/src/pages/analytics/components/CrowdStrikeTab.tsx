@@ -63,7 +63,7 @@ interface CrowdStrikeTabProps {
 }
 
 export default function CrowdStrikeTab({ dateRange }: CrowdStrikeTabProps) {
-  const { window, windowLabel, refresh } = useTabWindow(dateRange);
+  const { window, windowLabel, refreshKey, refresh } = useTabWindow(dateRange);
   const [loading, setLoading] = useState(true);
   const [data, setData] = useState<TabData | null>(null);
   const [syncing, setSyncing] = useState(false);
@@ -161,6 +161,8 @@ export default function CrowdStrikeTab({ dateRange }: CrowdStrikeTabProps) {
       ? 'Posture score requires Falcon Insight licensing'
       : 'No posture score data yet — scores appear after the next sync';
   const ztaDelta = ztaUnavailable ? undefined : firstToLastDelta(ztaSeries);
+  // The ZTA trend is "the last N days to now", not the page window: label that span.
+  const ztaDays = ztaTrendDays(window);
   const ztaSubValue =
     zta && Number.isFinite(zta.deviceCount)
       ? `${zta.deviceCount.toLocaleString()} hosts${Number.isFinite(zta.minScore) ? ` · lowest ${formatScore(zta.minScore)}` : ''}`
@@ -193,7 +195,7 @@ export default function CrowdStrikeTab({ dateRange }: CrowdStrikeTabProps) {
               ) : undefined
             }
             delta={ztaDelta}
-            deltaLabel={`pts over ${windowLabel}`}
+            deltaLabel={`pts over last ${ztaDays}d`}
             loading={loading}
             emptyState={ztaUnavailable ? ztaEmptyState : undefined}
           />
@@ -206,6 +208,7 @@ export default function CrowdStrikeTab({ dateRange }: CrowdStrikeTabProps) {
             window={window}
             loading={loading}
             failed={!!data?.summaryFailed}
+            windowLabel={windowLabel}
           />
         </div>
         <div className="col-span-12 sm:col-span-6 md:col-span-3">
@@ -221,9 +224,15 @@ export default function CrowdStrikeTab({ dateRange }: CrowdStrikeTabProps) {
         </div>
       </div>
 
-      <IntegrationTimelineCard vendor={vendor} window={window} />
+      <IntegrationTimelineCard vendor={vendor} window={window} refreshKey={refreshKey} />
 
-      <IntegrationAlertFeed key={vendor.id} vendor={vendor} window={window} windowLabel={windowLabel} />
+      <IntegrationAlertFeed
+        key={vendor.id}
+        vendor={vendor}
+        window={window}
+        windowLabel={windowLabel}
+        refreshKey={refreshKey}
+      />
 
       <TechniqueCoverageCard
         vendor={vendor}
