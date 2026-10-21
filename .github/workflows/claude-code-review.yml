@@ -48,8 +48,9 @@ jobs:
           EXECUTION_FILE: ${{ steps.claude-review.outputs.execution_file }}
         # Bash denials show the first two words of each part of a compound command
         # (split on ; && || |, at most 4 parts), so "cd /tmp; gh pr diff" reads
-        # "cd /tmp → gh pr". Lines after a heredoc start are dropped, and
-        # VAR=value words are masked.
+        # "cd /tmp → gh pr". Everything from the first quote or backtick on is
+        # dropped, so quoted text is never shown; so are lines after a heredoc
+        # start. VAR=value words are masked.
         run: |
           denials=$(jq -r '
             def words2: split(" ") | map(select(. != "")) as $w
@@ -59,7 +60,7 @@ jobs:
               | join(" ");
             .[] | select(.type == "result") | .permission_denials[]? |
             if .tool_name == "Bash" then
-              "Bash: " + ((.tool_input.command // "") | split("\n")
+              "Bash: " + ((.tool_input.command // "") | sub("[\"\u0027`][\\s\\S]*"; "") | split("\n")
                 | (map(test("<<")) | index(true)) as $h | (if $h == null then . else .[0:$h + 1] end)
                 | join("; ") | [splits("\\s*(?:;|&&|\\|\\||\\|)\\s*")] | map(select(. != "")) | .[0:4]
                 | map(words2) | join(" → "))
