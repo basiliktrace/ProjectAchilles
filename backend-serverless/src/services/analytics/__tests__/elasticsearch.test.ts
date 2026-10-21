@@ -116,6 +116,11 @@ describe('elasticsearch.ts', () => {
       expect(validators(out)).toEqual(['Stage 1', 'Stage 2', 'Stage 5', 'Stage 10']);
     });
 
+    it('breaks duplicate stage numbers on control_id', () => {
+      const out = sortBundleMembers([m('Stage 3', 'B'), m('Stage 3', 'A'), m('Stage 1', 'Z')]);
+      expect(out.map(x => x.control_id)).toEqual(['Z', 'A', 'B']);
+    });
+
     it('puts non-stage validators after stages, alphabetically', () => {
       const out = sortBundleMembers([m('Firewall'), m('Stage 2'), m('BitLocker')]);
       expect(validators(out)).toEqual(['Stage 2', 'BitLocker', 'Firewall']);

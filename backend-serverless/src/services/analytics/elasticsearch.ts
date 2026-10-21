@@ -304,7 +304,7 @@ export function sortBundleMembers(members: EnrichedTestExecution[]): EnrichedTes
   return [...members].sort((a, b) => {
     const sa = stageNo(a);
     const sb = stageNo(b);
-    if (sa !== null && sb !== null) return sa - sb;
+    if (sa !== null && sb !== null) return sa - sb || (a.control_id ?? '').localeCompare(b.control_id ?? '');
     if (sa !== null) return -1;
     if (sb !== null) return 1;
     return (a.control_validator ?? '').localeCompare(b.control_validator ?? '')
