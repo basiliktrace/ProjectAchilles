@@ -29,6 +29,33 @@ Tests that produce per-control results (cyber-hygiene bundles, multi-stage tests
 - **Skipped stages** (non-cyber-hygiene with exit code 0) show a "Skipped" label
 - **Standalone tests** render as flat rows
 
+### Multi-stage run detail
+
+Selecting a multi-stage run (any non-cyber-hygiene bundle, such as an intel-driven attack chain) opens a run detail built around the chain:
+
+- **Run header** — Test UUID, score, target, complexity and tags appear once, with a results line such as "1 protected · 1 detected · 2 unprotected · 1 inconclusive" (zero counts are omitted).
+- **Attack chain strip** — one node per stage, coloured by outcome. Click a node to open that stage.
+- **Stage rows** — numbered in stage order, showing technique ID · ATT&CK technique name · tactic. An **MDE** or **CS** chip appears when a Defender or CrowdStrike alert names that stage's binary.
+- **Stage detail** — a plain-language verdict, the result code, a link to the ATT&CK technique, **What this stage does** (when available), **EDR evidence for this stage**, **View test details** and **Accept risk**.
+
+Stage verdicts:
+
+| Outcome | Verdict |
+|---------|---------|
+| Protected | Stopped by endpoint protection: blocked or quarantined before the stage could finish. |
+| Ran, then an EDR stopped it | The EDR (Defender, CrowdStrike or both) reports a quarantine, process kill or block after the stage ran. |
+| Detected | Ran to completion; an EDR alerted but did not stop it. |
+| Unprotected | Ran to completion with no block and no alert. |
+| Stage not run (exit 260) | A control, usually an ASR prevalence rule, blocked the test binary before it ran. The technique was not tested and is not scored as protected. |
+| Inconclusive | The stage ended with an error and counts as neither protected nor unprotected. If the stage's EDR reports a prevention action, that vendor and action are named as the likely cause; scoring is unchanged. |
+| Did not run | The chain stopped at an earlier protected stage. |
+
+The verdicts are explanatory only; they do not change scoring. The exact rules and wording live in `frontend/src/pages/analytics/components/executions/stageVerdict.ts`.
+
+**"What this stage does"** needs three things: the test library change that writes a `description` per stage must be merged and the tests rebuilt, endpoints must run an agent release that includes it (the release after 0.6.7), and the run must be new. Older runs simply show no description.
+
+Cyber-hygiene bundles keep the per-control ratio bar and rows described above.
+
 ## Archiving
 
 Use the **Archive** button to move old execution results out of active views. Archived results are still queryable but hidden from the default view.

@@ -201,6 +201,7 @@ Both cyber-hygiene bundle tests and multi-stage intel-driven tests produce per-c
 | `f0rtika.bundle_name` | keyword | Bundle human-readable name |
 | `f0rtika.control_id` | keyword | Individual control ID (e.g., `CH-DEF-001`) |
 | `f0rtika.control_validator` | keyword | Parent validator name |
+| `f0rtika.control_description` | text | Plain-language "what this stage does" from the control's `description` in `bundle_results.json`; optional, omitted when empty (API: `control_description`) |
 | `f0rtika.is_bundle_control` | boolean | `true` for fan-out bundle control documents |
 
 Each control uses its own `exit_code`/`severity`/`techniques`, so the Defense Score counts each control independently.
