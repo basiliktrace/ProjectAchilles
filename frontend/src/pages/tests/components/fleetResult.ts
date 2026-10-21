@@ -15,13 +15,17 @@ export interface FleetResult {
 const PLACEHOLDER = '—';
 
 /**
- * Format a test's fleet result cell. "Not run in 90 days" is only claimed once the
- * fetch has succeeded; while it is pending or has failed the cell stays neutral.
+ * Format a test's fleet result cell. The fleet fetch only counts conclusive results
+ * (protected/unprotected) from the last 90 days, so a missing item does not mean the
+ * test never ran. `executed` says whether the all-time, any-outcome executed set
+ * contains the test: true/false when that set loaded, null when unknown. While the
+ * fleet fetch is pending or has failed the cell stays neutral.
  */
 export function fleetResultText(
   test: TestMetadata,
   item: TestResultItem | undefined,
   state: FleetState,
+  executed: boolean | null,
 ): FleetResult {
   if (state === 'loading') {
     return { text: PLACEHOLDER, share: null, title: 'Loading fleet results' };
@@ -30,7 +34,15 @@ export function fleetResultText(
     return { text: PLACEHOLDER, share: null, title: 'Fleet results unavailable' };
   }
   if (!item || item.pairCount <= 0) {
-    return { text: 'Not run in 90 days', share: null, title: 'No results from any endpoint in the last 90 days' };
+    if (executed === false) {
+      return { text: 'Not run yet', share: null, title: 'No results from any endpoint' };
+    }
+    return {
+      text: 'No conclusive result in 90 days',
+      share: null,
+      title:
+        "No endpoint returned protected or unprotected in the last 90 days. Errors, blocks before execution, skipped stages and risk-accepted results don't count.",
+    };
   }
 
   const noun = test.category === 'cyber-hygiene' ? 'checks passed' : 'endpoints protected';

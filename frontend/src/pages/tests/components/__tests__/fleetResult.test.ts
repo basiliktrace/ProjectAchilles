@@ -28,26 +28,36 @@ describe('fleetResultText', () => {
   afterEach(() => vi.useRealTimers());
 
   it('reports protected endpoints with the protected share', () => {
-    const r = fleetResultText(test(), item(9, 12), 'ready');
+    const r = fleetResultText(test(), item(9, 12), 'ready', true);
     expect(r.text).toBe('9 / 12 endpoints protected');
     expect(r.share).toBe(0.75);
     expect(r.title).toBe('Latest result per endpoint, last 90 days · last run 3d ago');
   });
 
   it('reports cyber-hygiene results as checks passed', () => {
-    const r = fleetResultText(test('cyber-hygiene'), item(34, 40), 'ready');
+    const r = fleetResultText(test('cyber-hygiene'), item(34, 40), 'ready', true);
     expect(r.text).toBe('34 / 40 checks passed');
     expect(r.share).toBe(0.85);
   });
 
-  it('says "Not run in 90 days" only once the fetch succeeded with no item', () => {
-    const r = fleetResultText(test(), undefined, 'ready');
-    expect(r.text).toBe('Not run in 90 days');
+  it('says "Not run yet" when executed is false and there is no item', () => {
+    const r = fleetResultText(test(), undefined, 'ready', false);
+    expect(r.text).toBe('Not run yet');
     expect(r.share).toBeNull();
+    expect(r.title).toBe('No results from any endpoint');
+  });
+
+  it.each([true, null])('says "No conclusive result in 90 days" when executed is %s and there is no item', (executed) => {
+    const r = fleetResultText(test(), undefined, 'ready', executed);
+    expect(r.text).toBe('No conclusive result in 90 days');
+    expect(r.share).toBeNull();
+    expect(r.title).toBe(
+      "No endpoint returned protected or unprotected in the last 90 days. Errors, blocks before execution, skipped stages and risk-accepted results don't count.",
+    );
   });
 
   it.each(['loading', 'error'] as const)('shows a neutral placeholder while %s', (state) => {
-    const r = fleetResultText(test(), item(9, 12), state);
+    const r = fleetResultText(test(), item(9, 12), state, true);
     expect(r.text).toBe('—');
     expect(r.share).toBeNull();
     expect(r.text).not.toMatch(/not run/i);

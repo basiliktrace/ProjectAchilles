@@ -410,7 +410,12 @@ export default function TestsPage() {
                       <TestListRow
                         key={test.uuid}
                         test={test}
-                        fleet={fleetResultText(test, fleetResults.get(test.uuid), fleetState)}
+                        fleet={fleetResultText(
+                          test,
+                          fleetResults.get(test.uuid),
+                          fleetState,
+                          executedUuids ? executedUuids.has(test.uuid) : null,
+                        )}
                         onOpen={() => navigate(`/tests/${test.uuid}`)}
                         isFavorite={isFavorite(test.uuid)}
                         onToggleFavorite={() => toggleFavorite(test.uuid)}

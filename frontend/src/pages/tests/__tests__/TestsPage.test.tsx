@@ -92,7 +92,8 @@ describe('TestsPage', () => {
     renderPage();
     await screen.findByRole('button', { name: 'test a' });
     expect(analyticsApi.getTestResults).not.toHaveBeenCalled();
-    expect(screen.queryByText('Not run in 90 days')).toBeNull();
+    expect(screen.queryByText('Not run yet', { selector: '[data-fleet-text]' })).toBeNull();
+    expect(screen.queryByText('No conclusive result in 90 days')).toBeNull();
   });
 
   it('shows fleet results from getTestResults when analytics is configured', async () => {
@@ -104,8 +105,19 @@ describe('TestsPage', () => {
     renderPage();
     expect(await screen.findByText('9 / 12 endpoints protected')).toBeTruthy();
     expect(screen.getByText('34 / 40 checks passed')).toBeTruthy();
-    expect(screen.getByText('Not run in 90 days')).toBeTruthy();
+    expect(screen.getByText('Not run yet', { selector: '[data-fleet-text]' })).toBeTruthy();
     expect(analyticsApi.getTestResults).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not call an executed test with no conclusive fleet result "not run"', async () => {
+    analytics.configured = true;
+    vi.mocked(analyticsApi.getExecutedTestUuids).mockResolvedValueOnce(['b']);
+    vi.mocked(analyticsApi.getTestResults).mockResolvedValueOnce([
+      { testUuid: 'a', pairCount: 12, protectedCount: 9, hostCount: 12, lastRunAt: '2026-10-20T00:00:00.000Z' },
+    ]);
+    renderPage();
+    expect(await screen.findByText('No conclusive result in 90 days')).toBeTruthy();
+    expect(screen.queryByText(/not run in 90 days/i)).toBeNull();
   });
 
   it('still renders every row with "—" when getTestResults rejects', async () => {
@@ -118,7 +130,8 @@ describe('TestsPage', () => {
     for (const row of screen.getAllByRole('listitem')) {
       expect(within(row).getByText('—', { selector: '[data-fleet-text]' })).toBeTruthy();
     }
-    expect(screen.queryByText('Not run in 90 days')).toBeNull();
+    expect(screen.queryByText('Not run yet', { selector: '[data-fleet-text]' })).toBeNull();
+    expect(screen.queryByText('No conclusive result in 90 days')).toBeNull();
     expect(screen.queryByText(/failed/i)).toBeNull();
   });
 });
