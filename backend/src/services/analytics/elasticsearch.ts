@@ -18,6 +18,7 @@ import type { OutcomeFilters, PairRun, PostureWindow } from './posture.js';
 import { TtlPromiseCache } from './postureCache.js';
 import type { TtlCacheOptions } from './postureCache.js';
 import type {
+  ExecutionActivityResponse,
   AnalyticsSettings,
   AnalyticsQueryParams,
   DefenseScoreResponse,
@@ -3057,6 +3058,110 @@ export class ElasticsearchService {
       errorCount,
       conclusiveCount,
       totalTestActivity,
+    };
+  }
+
+  /**
+   * Execution activity for the dashboard cadence card: per-UTC-day counts
+   * (protected / got through / inconclusive) plus 7-day headline numbers.
+   * Fixed recent window, counted per result document (bundle stages count
+   * individually). Days are zero-filled, oldest first.
+   */
+  async getExecutionActivity(params: { org?: string; days?: number } = {}): Promise<ExecutionActivityResponse> {
+    const requested = Number.isFinite(params.days) ? Math.trunc(params.days as number) : 14;
+    const days = Math.max(1, Math.min(90, requested));
+    // The query window must also cover the 7-day headline numbers.
+    const spanDays = Math.max(days, 7);
+    const todayMs = Math.floor(Date.now() / DAY_MS) * DAY_MS;
+    const dayKeys: string[] = [];
+    for (let i = spanDays - 1; i >= 0; i--) {
+      dayKeys.push(new Date(todayMs - i * DAY_MS).toISOString().slice(0, 10));
+    }
+
+    const filters: any[] = [
+      { range: { 'routing.event_time': { gte: `now-${spanDays - 1}d/d` } } },
+    ];
+    const orgFilter = this.buildOrgFilter(params.org);
+    if (orgFilter) filters.push(orgFilter);
+
+    const conclusive = { terms: { 'event.ERROR': this.CONCLUSIVE_ERROR_CODES } };
+    const detected = {
+      bool: {
+        should: [
+          { term: { 'f0rtika.is_protected': true } },
+          { term: { 'f0rtika.defender_detected': true } },
+          { term: { 'f0rtika.crowdstrike_detected': true } },
+        ],
+        minimum_should_match: 1,
+      },
+    };
+    const protectedFilter = { bool: { filter: [conclusive, detected] } };
+    const unprotectedFilter = {
+      bool: { filter: [{ term: { 'event.ERROR': 101 } }], must_not: [detected] },
+    };
+    const inconclusiveFilter = { bool: { must_not: [conclusive] } };
+
+    const response = await this.client.search({
+      index: this.settings.indexPattern,
+      size: 0,
+      query: { bool: { filter: filters } },
+      aggs: {
+        per_day: {
+          date_histogram: {
+            field: 'routing.event_time',
+            calendar_interval: 'day',
+            min_doc_count: 0,
+            extended_bounds: { min: dayKeys[0], max: dayKeys[dayKeys.length - 1] },
+          },
+          aggs: {
+            protected: { filter: protectedFilter },
+            unprotected: { filter: unprotectedFilter },
+            inconclusive: { filter: inconclusiveFilter },
+          },
+        },
+        last_execution: { max: { field: 'routing.event_time' } },
+        last_7d: {
+          filter: { range: { 'routing.event_time': { gte: 'now-7d' } } },
+          aggs: {
+            endpoints: { cardinality: { field: 'routing.hostname' } },
+            conclusive: { filter: conclusive },
+            protected: { filter: protectedFilter },
+          },
+        },
+      },
+    });
+
+    const aggs = response.aggregations as any;
+    const byDay = new Map<string, { protected: number; unprotected: number; inconclusive: number }>();
+    for (const b of (aggs?.per_day?.buckets ?? []) as any[]) {
+      const key = typeof b.key === 'number'
+        ? new Date(b.key).toISOString().slice(0, 10)
+        : String(b.key_as_string ?? b.key).slice(0, 10);
+      byDay.set(key, {
+        protected: b.protected?.doc_count ?? 0,
+        unprotected: b.unprotected?.doc_count ?? 0,
+        inconclusive: b.inconclusive?.doc_count ?? 0,
+      });
+    }
+    const dayRows = dayKeys.slice(-days).map((date) => ({
+      date,
+      ...(byDay.get(date) ?? { protected: 0, unprotected: 0, inconclusive: 0 }),
+    }));
+
+    const last = aggs?.last_execution;
+    const lastExecutionAt: string | null =
+      last?.value != null ? (last.value_as_string ?? new Date(last.value).toISOString()) : null;
+
+    const w = aggs?.last_7d;
+    const conclusive7d: number = w?.conclusive?.doc_count ?? 0;
+    const protected7d: number = w?.protected?.doc_count ?? 0;
+
+    return {
+      days: dayRows,
+      lastExecutionAt,
+      executions7d: w?.doc_count ?? 0,
+      protectedPct7d: conclusive7d > 0 ? Math.round((protected7d / conclusive7d) * 1000) / 10 : null,
+      endpointsTested7d: w?.endpoints?.value ?? 0,
     };
   }
 

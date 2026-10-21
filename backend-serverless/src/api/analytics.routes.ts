@@ -604,6 +604,15 @@ router.get('/error-rate', asyncHandler(async (req, res) => {
   res.json(result);
 }));
 
+// GET /api/analytics/execution-activity - Recent per-day execution counts for the cadence card
+router.get('/execution-activity', asyncHandler(async (req, res) => {
+  const es = await getEsService();
+  const parsed = parseInt(req.query.days as string, 10);
+  const days = Number.isFinite(parsed) ? Math.max(1, Math.min(90, parsed)) : 14;
+  const result = await es.getExecutionActivity({ org: req.query.org as string | undefined, days });
+  res.json(result);
+}));
+
 // GET /api/analytics/canonical-test-count - Stable test count for coverage denominators
 router.get('/canonical-test-count', asyncHandler(async (req, res) => {
   const es = await getEsService();

@@ -1515,6 +1515,98 @@ describe('elasticsearch.ts', () => {
     });
   });
 
+  describe('getExecutionActivity', () => {
+    const FIXED_NOW = Date.UTC(2026, 9, 20, 15, 0, 0);
+    const dayBucket = (iso: string, p: number, u: number, i: number) => ({
+      key: Date.parse(iso), key_as_string: iso, doc_count: p + u + i,
+      protected: { doc_count: p }, unprotected: { doc_count: u }, inconclusive: { doc_count: i },
+    });
+
+    beforeEach(() => {
+      vi.useFakeTimers();
+      vi.setSystemTime(FIXED_NOW);
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('maps buckets to zero-filled UTC days, oldest first, and computes 7d headlines', async () => {
+      mockSearch.mockResolvedValue(esSearchResponse({
+        aggs: {
+          per_day: { buckets: [
+            dayBucket('2026-10-18T00:00:00.000Z', 3, 1, 2),
+            dayBucket('2026-10-20T00:00:00.000Z', 5, 0, 0),
+          ] },
+          last_execution: { value: Date.parse('2026-10-20T09:30:00Z'), value_as_string: '2026-10-20T09:30:00.000Z' },
+          last_7d: {
+            doc_count: 40, endpoints: { value: 6 },
+            conclusive: { doc_count: 20 }, protected: { doc_count: 15 },
+          },
+        },
+      }));
+      const result = await createService().getExecutionActivity({ days: 14 });
+      expect(result.days).toHaveLength(14);
+      expect(result.days[0].date).toBe('2026-10-07');
+      expect(result.days[13].date).toBe('2026-10-20');
+      expect(result.days[11]).toEqual({ date: '2026-10-18', protected: 3, unprotected: 1, inconclusive: 2 });
+      expect(result.days[12]).toEqual({ date: '2026-10-19', protected: 0, unprotected: 0, inconclusive: 0 });
+      expect(result.days[13]).toEqual({ date: '2026-10-20', protected: 5, unprotected: 0, inconclusive: 0 });
+      expect(result.lastExecutionAt).toBe('2026-10-20T09:30:00.000Z');
+      expect(result.executions7d).toBe(40);
+      expect(result.protectedPct7d).toBe(75);
+      expect(result.endpointsTested7d).toBe(6);
+    });
+
+    it('returns null protectedPct7d with no conclusive results, and null lastExecutionAt on an empty index', async () => {
+      mockSearch.mockResolvedValue(esSearchResponse({
+        aggs: {
+          per_day: { buckets: [] },
+          last_execution: { value: null },
+          last_7d: { doc_count: 0, endpoints: { value: 0 }, conclusive: { doc_count: 0 }, protected: { doc_count: 0 } },
+        },
+      }));
+      const result = await createService().getExecutionActivity({});
+      expect(result.days).toHaveLength(14);
+      expect(result.days.every(d => d.protected === 0 && d.unprotected === 0 && d.inconclusive === 0)).toBe(true);
+      expect(result.protectedPct7d).toBeNull();
+      expect(result.lastExecutionAt).toBeNull();
+      expect(result.executions7d).toBe(0);
+      expect(result.endpointsTested7d).toBe(0);
+    });
+
+    it('sends one size:0 search with org + date filters and the expected aggs', async () => {
+      mockSearch.mockResolvedValue(esSearchResponse({ aggs: {} }));
+      await createService().getExecutionActivity({ org: 'org-1', days: 14 });
+      expect(mockSearch).toHaveBeenCalledTimes(1);
+      const arg = mockSearch.mock.calls[0][0];
+      expect(arg.size).toBe(0);
+      const filters = arg.query.bool.filter;
+      expect(filters).toContainEqual({ range: { 'routing.event_time': { gte: 'now-13d/d' } } });
+      expect(filters).toContainEqual({ term: { 'routing.oid': 'org-1' } });
+      const dh = arg.aggs.per_day.date_histogram;
+      expect(dh.calendar_interval).toBe('day');
+      expect(dh.min_doc_count).toBe(0);
+      expect(dh.extended_bounds).toEqual({ min: '2026-10-07', max: '2026-10-20' });
+      expect(JSON.stringify(arg.aggs.per_day.aggs.protected)).toContain('f0rtika.crowdstrike_detected');
+      expect(JSON.stringify(arg.aggs.per_day.aggs.unprotected)).toContain('"event.ERROR":101');
+      expect(arg.aggs.per_day.aggs.inconclusive.filter.bool.must_not[0].terms['event.ERROR']).toEqual([101, 105, 126, 127]);
+      expect(arg.aggs.last_execution.max.field).toBe('routing.event_time');
+      expect(arg.aggs.last_7d.aggs.endpoints.cardinality.field).toBe('routing.hostname');
+    });
+
+    it('clamps days to 1-90 and falls back to 14 for non-finite input', async () => {
+      mockSearch.mockResolvedValue(esSearchResponse({ aggs: {} }));
+      const svc = createService();
+      expect((await svc.getExecutionActivity({ days: 500 })).days).toHaveLength(90);
+      expect((await svc.getExecutionActivity({ days: 0 })).days).toHaveLength(1);
+      expect((await svc.getExecutionActivity({ days: Number.NaN })).days).toHaveLength(14);
+      // days < 7 still queries 7 days so the 7d headline numbers are complete
+      mockSearch.mockClear();
+      await svc.getExecutionActivity({ days: 3 });
+      expect(mockSearch.mock.calls[0][0].query.bool.filter).toContainEqual({ range: { 'routing.event_time': { gte: 'now-6d/d' } } });
+    });
+  });
+
   // ================================================================
   // Group 13: Smoke Tests
   // ================================================================
