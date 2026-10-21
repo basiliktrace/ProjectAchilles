@@ -49,6 +49,7 @@ const mockThreatActorLatest = vi.fn();
 const mockThreatActor = vi.fn();
 const mockTechniqueOutcomes = vi.fn();
 const mockChainDepth = vi.fn();
+const mockTestResults = vi.fn();
 vi.mock('../../services/analytics/elasticsearch.js', () => ({
   ElasticsearchService: class MockElasticsearchService {
     testConnection = mockTestConnection;
@@ -70,6 +71,7 @@ vi.mock('../../services/analytics/elasticsearch.js', () => ({
     getThreatActorCoverage = mockThreatActor;
     getTechniqueOutcomes = mockTechniqueOutcomes;
     getChainDepth = mockChainDepth;
+    getTestResults = mockTestResults;
   },
 }));
 
@@ -274,6 +276,15 @@ describe('analytics routes', () => {
         expect(r.status).toBe(200);
       }
       expect(mockTechniqueOutcomes).toHaveBeenCalledTimes(3);
+    });
+
+    it('/test-results returns the per-test fleet results for the org', async () => {
+      const body = [{ testUuid: 'b1', pairCount: 2, protectedCount: 1, hostCount: 2, lastRunAt: '2025-01-12T00:00:00.000Z' }];
+      mockTestResults.mockResolvedValue(body);
+      const res = await request(createApp()).get('/api/analytics/test-results?org=o1');
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual(body);
+      expect(mockTestResults).toHaveBeenCalledWith(expect.objectContaining({ org: 'o1' }));
     });
 
     it('/chain-depth always uses the latest chain-depth method and ignores basis', async () => {

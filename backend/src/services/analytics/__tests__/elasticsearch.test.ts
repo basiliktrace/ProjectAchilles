@@ -34,7 +34,7 @@ vi.mock('../../risk-acceptance/risk-acceptance.service.js', () => ({
   }),
 }));
 
-const { ElasticsearchService, resolveErrorName, ERROR_CODE_MAP, sortBundleMembers } =
+const { ElasticsearchService, resolveErrorName, ERROR_CODE_MAP, sortBundleMembers, pairTestUuid } =
   await import('../elasticsearch.js');
 
 // ─── Helpers ──────────────────────────────────────────────────────
@@ -3486,6 +3486,54 @@ describe('elasticsearch.ts', () => {
         expect(searchesWith('test_meta')).toHaveLength(1);
         const daySources = pairs.map((r: any) => r.aggs.pairs.composite.sources.some((src: any) => 'day' in src));
         expect(daySources.sort()).toEqual([false, true]);
+      });
+    });
+
+    describe('pairTestUuid', () => {
+      it('decodes plain, bundle and cyber-hygiene control pair keys', () => {
+        expect(pairTestUuid('o|abc|h')).toBe('abc');
+        expect(pairTestUuid('o|bundle:b1|h')).toBe('b1');
+        expect(pairTestUuid('o|b1::CH-1|h')).toBe('b1');
+      });
+    });
+
+    describe('getTestResults', () => {
+      const pair = (pairKey: string, ts: string, isProtected: boolean, hostname: string) => ({
+        pairKey, ts: Date.parse(ts), protected: isProtected, strictProtected: isProtected,
+        errorCodes: [], errorNames: [], hostname, testName: 't', techniques: [],
+      });
+      const stub = (pairs: unknown[]) => {
+        const svc = createService();
+        const spy = vi.spyOn(svc, 'getLatestPairs').mockResolvedValue(pairs as any);
+        return { svc, spy };
+      };
+
+      it('counts pairs, protected pairs and hosts per bundle', async () => {
+        const { svc } = stub([
+          pair('o|bundle:b1|h1', '2025-01-10T00:00:00Z', true, 'h1'),
+          pair('o|bundle:b1|h2', '2025-01-12T00:00:00Z', false, 'h2'),
+        ]);
+        const res = await svc.getTestResults({ org: 'o' });
+        expect(res).toEqual([{
+          testUuid: 'b1', pairCount: 2, protectedCount: 1, hostCount: 2,
+          lastRunAt: '2025-01-12T00:00:00.000Z',
+        }]);
+      });
+
+      it('folds cyber-hygiene control pairs into one item per bundle', async () => {
+        const { svc } = stub([
+          pair('o|b2::CH-1|h1', '2025-01-10T00:00:00Z', true, 'h1'),
+          pair('o|b2::CH-2|h1', '2025-01-11T00:00:00Z', false, 'h1'),
+        ]);
+        const res = await svc.getTestResults({});
+        expect(res).toHaveLength(1);
+        expect(res[0]).toMatchObject({ testUuid: 'b2', pairCount: 2, protectedCount: 1, hostCount: 1 });
+      });
+
+      it('queries the last 90 days with any-stage scoring', async () => {
+        const { svc, spy } = stub([]);
+        await svc.getTestResults({ org: 'o1' });
+        expect(spy).toHaveBeenCalledWith(expect.objectContaining({ org: 'o1', from: 'now-90d', scoringMode: 'any-stage' }));
       });
     });
 

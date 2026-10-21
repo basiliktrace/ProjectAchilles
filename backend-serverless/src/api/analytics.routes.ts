@@ -548,6 +548,14 @@ router.get('/threat-actor-coverage', asyncHandler(async (req, res) => {
   res.json(result);
 }));
 
+// GET /api/analytics/test-results - Per-test fleet results (last 90 days,
+// latest pair per host) for the test library. Only org is honoured.
+router.get('/test-results', asyncHandler(async (req, res) => {
+  const es = await getEsService();
+  const result = await es.getTestResults({ org: req.query.org as string });
+  res.json(result);
+}));
+
 // GET /api/analytics/technique-outcomes - Blocked / detected-only / got-through
 // per technique. Always latest-result posture (per-stage pairs); basis is ignored.
 router.get('/technique-outcomes', asyncHandler(async (req, res) => {

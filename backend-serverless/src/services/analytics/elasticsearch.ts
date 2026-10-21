@@ -42,6 +42,7 @@ import type {
   SubcategoryBreakdownItem,
   ThreatActorCoverageItem,
   TechniqueOutcomeItem,
+  TestResultItem,
   ChainDepthBucket,
   ChainDepthResponse,
   DefenseScoreByHostItem,
@@ -157,6 +158,15 @@ function isChainRun(run: PairRun): run is ChainRun {
 /** Pair key of an any-stage bundle pair: one per (oid, bundle_id, hostname). */
 function bundlePairKey(oid: unknown, bundleId: string, hostname: string): string {
   return `${oid ?? ''}|bundle:${bundleId}|${hostname}`;
+}
+
+/**
+ * Test (or bundle) UUID behind a pair key: plain `oid|<uuid>|host`, any-stage
+ * bundle `oid|bundle:<id>|host`, cyber-hygiene control `oid|<bundle>::<control>|host`.
+ */
+export function pairTestUuid(pairKey: string): string {
+  const id = pairKey.split('|')[1] ?? '';
+  return (id.startsWith('bundle:') ? id.slice('bundle:'.length) : id).split('::')[0];
 }
 
 /**
@@ -3015,6 +3025,42 @@ export class ElasticsearchService {
     }
     return items.sort((a, b) =>
       a.coverage - b.coverage || b.totalExecutions - a.totalExecutions || a.threatActor.localeCompare(b.threatActor));
+  }
+
+  /**
+   * Fleet result per test for the test library: over the last 90 days, each
+   * test's (or bundle's) latest pairs, scored like the Defense Score tile
+   * (any-stage, combined protected rule). Cyber-hygiene control pairs fold
+   * into their bundle. Only the org is honoured; no other filters.
+   */
+  async getTestResults(params: AnalyticsQueryParams & Partial<ExtendedAnalyticsQueryParams>): Promise<TestResultItem[]> {
+    const pairs = await this.getLatestPairs({
+      org: params.org,
+      from: 'now-90d',
+      to: 'now',
+      basis: 'latest',
+      scoringMode: 'any-stage',
+    });
+    const byTest = new Map<string, { pairs: number; protected: number; hosts: Set<string>; lastTs: number }>();
+    for (const p of pairs) {
+      const id = pairTestUuid(p.pairKey);
+      let t = byTest.get(id);
+      if (!t) {
+        t = { pairs: 0, protected: 0, hosts: new Set(), lastTs: Number.NEGATIVE_INFINITY };
+        byTest.set(id, t);
+      }
+      t.pairs++;
+      if (p.protected) t.protected++;
+      t.hosts.add(p.hostname);
+      if (p.ts > t.lastTs) t.lastTs = p.ts;
+    }
+    return [...byTest].map(([testUuid, t]) => ({
+      testUuid,
+      pairCount: t.pairs,
+      protectedCount: t.protected,
+      hostCount: t.hosts.size,
+      lastRunAt: new Date(t.lastTs).toISOString(),
+    }));
   }
 
   /**
