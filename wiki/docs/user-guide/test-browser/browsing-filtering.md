@@ -1,7 +1,7 @@
 ---
 sidebar_position: 1
 title: "Browsing & Filtering"
-description: "Navigate the ProjectAchilles test browser — grid/list views, search, filters, favorites, and categories."
+description: "Navigate the ProjectAchilles test browser — list view, search, filters, favorites, and categories."
 ---
 
 # Browsing & Filtering
@@ -13,36 +13,56 @@ The Test Browser is the primary interface for discovering and managing security 
 The browser page opens with a 2-tab layout:
 
 1. **Overview** — MITRE ATT&CK coverage chart, category legend, and summary statistics
-2. **Browse** — Filterable test grid/list
+2. **Browse** — Filterable test list
 
 ![Security Dashboard — ATT&CK coverage, severity mix and category breakdown across the whole library](/img/screenshots/security-dashboard.png)
 
-## Views
+## Test Library List
 
-Toggle between **Grid** and **List** views using the view selector in the top-right corner.
+The Tests page is a list with a filter rail on the left. Each row shows the test name, then `actor · subcategory` (or "No attributed actor" when the test has none), the fleet result, the test score, and the favorite and run actions. The score shows "—" when it is missing or zero.
 
-- **Grid view** — Card-based layout showing test name, category, severity, and platform badges
-- **List view** — Compact table with sortable columns
+![Tests — facet rail beside the test list (screenshot predates the list view)](/img/screenshots/tests.png)
 
-![Tests — facet rail beside category-grouped test cards with severity badges, platform tags and test scores](/img/screenshots/tests.png)
+Columns appear as the window gets wider:
+
+| Width | Layout |
+|-------|--------|
+| Below 1280px | Two-line rows, no header |
+| 1280px and up | Adds **Platform**, **Fleet result** and **Score** columns |
+| 1536px and up | Adds **Techniques** (the first two unique ATT&CK IDs, then `+n`) and **Stages** |
+
+### Fleet result
+
+The fleet result is the latest result per endpoint over the last 90 days, the same rule the Defense Score uses.
+
+| Shows | Meaning |
+|-------|---------|
+| `N / M endpoints protected` | N of M endpoints protected on their latest result |
+| `N / M checks passed` | The same count for cyber-hygiene tests, where each control is a check |
+| `Not run in 90 days` | No endpoint reported a result in the window |
+| `—` | Analytics is not configured or unavailable |
+
+Hover the cell for the window and the time of the last run. The data comes from `GET /api/analytics/test-results`; see the [Analytics API reference](../../api-reference/analytics).
 
 ## Filtering
 
-The filter bar supports multiple simultaneous filters:
+The filter rail holds the facets as plain rows with counts, and the search box sits above the list. Filters are additive: combining several narrows the results.
 
 | Filter | Description |
 |--------|-------------|
-| **Search** | Free-text search across test names and descriptions |
-| **Category** | Filter by test category (e.g., defense-evasion, persistence) |
-| **Technique** | Filter by MITRE ATT&CK technique ID (e.g., T1059) |
+| **Search** | Free-text search across test names, UUIDs, technique IDs and descriptions |
+| **View** | All tests, Favorites, or Recently viewed |
+| **Category** | Filter by test category (e.g., intel-driven, cyber-hygiene) |
 | **Platform** | Filter by target platform (Windows, Linux, macOS) |
-| **Severity** | Filter by severity level (Critical, High, Medium, Low) |
+| **Threat actor** | Filter by attributed threat actor |
+| **Not run yet** | Tests with no recorded executions (requires Elasticsearch) |
+| **Has binary** | Tests that already have a compiled binary |
 
-Filters are additive — combining multiple filters narrows the results.
+There is no severity facet. An old `?severity=` link still loads; the parameter is ignored.
 
 ## Favorites
 
-Click the star icon on any test card to favorite it. Favorites are stored per-user in the browser's local storage. Use the **Favorites** filter to show only starred tests.
+Click the heart icon on any test row to favorite it. Favorites are stored per-user in the browser's local storage. Use the **Favorites** filter to show only starred tests.
 
 ## Categories
 
@@ -57,7 +77,7 @@ Tests are organized into categories that map to MITRE ATT&CK tactics:
 - Exfiltration
 - And more...
 
-Each category has a color-coded badge in the test cards.
+Each category has a color-coded badge in the test list.
 
 ## Browser Architecture
 
@@ -73,7 +93,7 @@ graph TD
     B --> F[MITRE ATT&CK Coverage]
     B --> G[Statistics & Analytics]
 
-    C --> H[Test Grid / List]
+    C --> H[Test List]
     C --> I[Advanced Filters]
     C --> J[Batch Operations]
 
@@ -131,7 +151,6 @@ The search box matches across multiple fields simultaneously:
 | Filter | Options |
 |--------|---------|
 | **Category** | intel-driven, MITRE top 10, cyber hygiene, and more |
-| **Severity** | Critical, High, Medium, Low, Informational |
 | **Platform** | Windows, Linux, macOS, Cloud |
 | **Threat Actor** | Specific threat actor groups |
 | **Not Run Yet** | Tests that have never been executed (requires Elasticsearch connection) |
@@ -154,7 +173,6 @@ toggle has no effect — the filter degrades gracefully rather than erroring.
 Sort the test list by any of these dimensions:
 
 - **Name** -- Alphabetical
-- **Severity** -- By criticality level
 - **Score** -- By test quality rating
 - **Created** / **Modified** -- By date
 - Ascending or descending direction for each option
@@ -193,13 +211,13 @@ The page starts in full-header mode showing the test title, metadata badges, and
 From the Browse tab, select multiple tests using checkboxes, then:
 
 - **Execute selected** -- Opens the execution drawer to run all selected tests on chosen agents
-- **Batch operations** are useful for running an entire test category or severity level at once
+- **Batch operations** are useful for running an entire test category at once
 
 ## Favorites and Recent Tests
 
 ### Favorites
 
-- Click the **star icon** on any test card to add it to your favorites
+- Click the **heart icon** on any test row to add it to your favorites
 - Favorites are stored per-user in browser local storage
 - Switch to **Favorites** mode to see only your starred tests
 
