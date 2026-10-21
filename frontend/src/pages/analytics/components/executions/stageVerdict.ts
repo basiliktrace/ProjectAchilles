@@ -36,15 +36,24 @@ export function stageVendors(exec: EnrichedTestExecution): { label: string; shor
   return { label, short: defender && crowdstrike ? 'MDE + CS' : defender ? 'MDE' : 'CS' };
 }
 
-/** "<V> reports it <action>." text, or null without a recognised prevention action. */
+/** "<vendor> reports it <action>." naming only the vendor whose action is used (CrowdStrike wins). */
 function preventionSentence(exec: EnrichedTestExecution): string | null {
   const { defender, crowdstrike } = stageEdr(exec);
   const csAction = crowdstrike ? ACTION_COPY[exec.crowdstrike_prevention_action ?? ''] : undefined;
+  if (csAction) return `CrowdStrike reports it ${csAction}.`;
   const defAction = defender ? ACTION_COPY[exec.defender_prevention_action ?? ''] : undefined;
-  const action = csAction ?? defAction;
-  const label = vendorLabel(defender, crowdstrike);
-  if (!action || !label) return null;
-  return `${label} reports it ${action}.`;
+  if (defAction) return `Defender reports it ${defAction}.`;
+  return null;
+}
+
+/** Boolean-only fallback: name the vendor(s) whose *_prevented flag is set. */
+function preventedFallback(exec: EnrichedTestExecution): string {
+  const def = Boolean(exec.defender_prevented);
+  const cs = Boolean(exec.crowdstrike_prevented);
+  if (def && cs) return 'Defender and CrowdStrike report it stopped it.';
+  if (def) return 'Defender reports it stopped it.';
+  if (cs) return 'CrowdStrike reports it stopped it.';
+  return 'An EDR reports it stopped it.';
 }
 
 function nearestBlockedStageNumber(exec: EnrichedTestExecution, siblings: EnrichedTestExecution[]): string | null {
@@ -77,13 +86,10 @@ export function stageVerdict(exec: EnrichedTestExecution, siblings: EnrichedTest
         body: 'The stage was blocked or quarantined before it could finish.',
       };
     case 'prevented': {
-      const sentence = preventionSentence(exec);
-      const { defender, crowdstrike } = stageEdr(exec);
-      const label = vendorLabel(defender, crowdstrike) ?? 'An EDR';
       return {
         kind,
         title: 'Ran, then an EDR stopped it.',
-        body: sentence ?? `${label} reports it stopped it.`,
+        body: preventionSentence(exec) ?? preventedFallback(exec),
       };
     }
     case 'detected': {

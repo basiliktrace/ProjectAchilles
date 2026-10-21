@@ -32,7 +32,32 @@ describe('stageVerdict', () => {
     });
   });
 
-  it('prevented by both vendors', () => {
+  it('both detected, only CrowdStrike acted: names only CrowdStrike', () => {
+    const v = stageVerdict(
+      mk({
+        defender_stage_detected: true,
+        crowdstrike_stage_detected: true,
+        crowdstrike_prevention_action: 'process_killed',
+      }),
+      [],
+    );
+    expect(v.kind).toBe('prevented');
+    expect(v.body).toBe('CrowdStrike reports it killed the process.');
+  });
+
+  it('both detected, only Defender acted: names only Defender', () => {
+    const v = stageVerdict(
+      mk({
+        defender_stage_detected: true,
+        crowdstrike_stage_detected: true,
+        defender_prevention_action: 'quarantined',
+      }),
+      [],
+    );
+    expect(v.body).toBe('Defender reports it quarantined the file.');
+  });
+
+  it('both acted: CrowdStrike precedence', () => {
     const v = stageVerdict(
       mk({
         defender_stage_detected: true,
@@ -42,8 +67,29 @@ describe('stageVerdict', () => {
       }),
       [],
     );
-    expect(v.kind).toBe('prevented');
-    expect(v.body).toMatch(/^Defender and CrowdStrike reports it /);
+    expect(v.body).toBe('CrowdStrike reports it killed the process.');
+  });
+
+  it('inconclusive, both detected, only CrowdStrike acted', () => {
+    const v = stageVerdict(
+      mk({
+        error_code: 999,
+        error_name: 'Unexpected',
+        defender_stage_detected: true,
+        crowdstrike_stage_detected: true,
+        crowdstrike_prevention_action: 'process_killed',
+      }),
+      [],
+    );
+    expect(v.kind).toBe('inconclusive');
+    expect(v.body.endsWith('CrowdStrike reports it killed the process, which is the likely cause.')).toBe(true);
+  });
+
+  it('boolean-only prevention names the flagged vendor(s)', () => {
+    expect(stageVerdict(mk({ defender_prevented: true }), []).body).toBe('Defender reports it stopped it.');
+    expect(
+      stageVerdict(mk({ defender_prevented: true, crowdstrike_prevented: true }), []).body,
+    ).toBe('Defender and CrowdStrike report it stopped it.');
   });
 
   it('detected', () => {
