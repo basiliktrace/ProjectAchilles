@@ -3558,15 +3558,19 @@ describe('elasticsearch.ts', () => {
       function chain(r: {
         bundle: string; host: string; ts: string; stagesRun: number;
         blocked?: boolean; alertedUnblocked?: number; oid?: string;
+        /** control_validator of each blocked / detected-unblocked stage doc (sets the counts). */
+        blockedValidators?: string[]; alertedValidators?: string[];
       }) {
-        const strict = r.blocked ? 1 : 0;
-        const alerted = r.alertedUnblocked ?? 0;
+        const strict = r.blockedValidators?.length ?? (r.blocked ? 1 : 0);
+        const alerted = r.alertedValidators?.length ?? r.alertedUnblocked ?? 0;
+        const stages = (validators?: string[]) =>
+          validators ? { stages: { buckets: validators.map(key => ({ key, doc_count: 1 })) } } : {};
         return {
           key: { oid: r.oid ?? 'org-a', bundle: r.bundle, host: r.host, ts: Date.parse(r.ts) },
           doc_count: r.stagesRun,
           combined: { doc_count: strict + alerted },
-          strict: { doc_count: strict },
-          alerted_unblocked: { doc_count: alerted },
+          strict: { doc_count: strict, ...stages(r.blockedValidators) },
+          alerted_unblocked: { doc_count: alerted, ...stages(r.alertedValidators) },
           codes: { buckets: (r.blocked ? [101, 126] : [101]).map(c => ({ key: c, doc_count: 1 })) },
           names: { buckets: [] },
         };
@@ -3654,6 +3658,58 @@ describe('elasticsearch.ts', () => {
         expect(res.chains).toBe(3);
       });
 
+      describe('chains that keep running after a block (LockBit 298cc137)', () => {
+        it('a run blocked at Stage 2 with all 5 stages run lands in bucket 2, not 4+', async () => {
+          routeSearch({
+            bundlePages: [[chain({ bundle: 'lb', host: 'h1', ts: '2025-01-20T09:00:00Z', stagesRun: 5, blockedValidators: ['Stage 2'] })]],
+            bundleMeta: { lb: { name: 'LockBit' } },
+          });
+          const res = await createService().getChainDepth(params);
+          expect(res.buckets[1]).toEqual({ stage: 2, blocked: 1, alertedNotBlocked: 0, bundleNames: ['LockBit'] });
+          expect(res.buckets[3].blocked).toBe(0);
+        });
+
+        it('several blocked stages: the chain stopped at the lowest-numbered one', async () => {
+          routeSearch({
+            bundlePages: [[chain({ bundle: 'lb', host: 'h1', ts: '2025-01-20T09:00:00Z', stagesRun: 5, blockedValidators: ['Stage 4', 'Stage 1', 'Stage 5'] })]],
+            bundleMeta: { lb: { name: 'LockBit' } },
+          });
+          const res = await createService().getChainDepth(params);
+          expect(res.buckets[0]).toMatchObject({ stage: 1, blocked: 1 });
+          expect(res.buckets[3].blocked).toBe(0);
+        });
+
+        it('only a detection on a stage before the stop counts as alertedNotBlocked', async () => {
+          routeSearch({
+            bundlePages: [[
+              chain({ bundle: 'lb', host: 'h1', ts: '2025-01-20T09:00:00Z', stagesRun: 5, blockedValidators: ['Stage 2'], alertedValidators: ['Stage 4'] }),
+              chain({ bundle: 'lb', host: 'h2', ts: '2025-01-20T09:00:00Z', stagesRun: 5, blockedValidators: ['Stage 2'], alertedValidators: ['Stage 1', 'Stage 5'] }),
+            ]],
+            bundleMeta: { lb: { name: 'LockBit' } },
+          });
+          const res = await createService().getChainDepth(params);
+          expect(res.buckets[1]).toEqual({ stage: 2, blocked: 2, alertedNotBlocked: 1, bundleNames: ['LockBit'] });
+        });
+      });
+
+      it('a stop-at-first-block chain gives the same bucket from stage numbers as from the stage count', async () => {
+        routeSearch({
+          bundlePages: [[chain({ bundle: 'b1', host: 'h1', ts: '2025-01-20T09:00:00Z', stagesRun: 3, blockedValidators: ['Stage 3'], alertedValidators: ['Stage 1'] })]],
+          bundleMeta: { b1: { name: 'Chain One' } },
+        });
+        const res = await createService().getChainDepth(params);
+        expect(res.buckets[2]).toEqual({ stage: 3, blocked: 1, alertedNotBlocked: 1, bundleNames: ['Chain One'] });
+      });
+
+      it('falls back to the stage count when a blocked stage has no "Stage N" validator', async () => {
+        routeSearch({
+          bundlePages: [[chain({ bundle: 'b1', host: 'h1', ts: '2025-01-20T09:00:00Z', stagesRun: 3, blockedValidators: ['Defender check'] })]],
+          bundleMeta: { b1: { name: 'Chain One' } },
+        });
+        const res = await createService().getChainDepth(params);
+        expect(res.buckets[2]).toMatchObject({ stage: 3, blocked: 1 });
+      });
+
       it('scores the latest run per (org, bundle, host); bundle names are distinct per bucket', async () => {
         routeSearch({
           bundlePages: [[
@@ -3700,6 +3756,7 @@ describe('elasticsearch.ts', () => {
         routeSearch({ bundlePages: [[]] });
         await createService().getChainDepth(params);
         const sub = searchesWith('bundle_runs')[0].aggs.bundle_runs.aggs;
+        const stages = { stages: { terms: { field: 'f0rtika.control_validator', size: 20 } } };
         expect(sub.alerted_unblocked).toEqual({
           filter: {
             bool: {
@@ -3711,7 +3768,9 @@ describe('elasticsearch.ts', () => {
               must_not: [{ term: { 'f0rtika.is_protected': true } }],
             },
           },
+          aggs: stages,
         });
+        expect(sub.strict).toEqual({ filter: { term: { 'f0rtika.is_protected': true } }, aggs: stages });
       });
 
       /** A run with a non-conclusive, non-skipped stage (999 error, 260 ASR pre-execution block…). */
