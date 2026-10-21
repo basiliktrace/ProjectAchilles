@@ -549,10 +549,11 @@ router.get('/threat-actor-coverage', asyncHandler(async (req, res) => {
 }));
 
 // GET /api/analytics/test-results - Per-test fleet results (last 90 days,
-// latest pair per host) for the test library. Only org is honoured.
+// latest pair per host) for the test library. Takes the usual filters; the
+// window and scoring rule are fixed by the service.
 router.get('/test-results', asyncHandler(async (req, res) => {
   const es = await getEsService();
-  const result = await es.getTestResults({ org: req.query.org as string });
+  const result = await es.getTestResults(extractFilterParams(req.query));
   res.json(result);
 }));
 

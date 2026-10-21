@@ -239,7 +239,6 @@ export interface ThreatActorCoverageItem {
   lastTestedAt?: string;
 }
 
-/** Per-technique latest-result outcomes (per-stage test x endpoint pairs). */
 /** Fleet result of one test (or bundle) over the last 90 days, latest pair per host. */
 export interface TestResultItem {
   testUuid: string;
@@ -249,6 +248,7 @@ export interface TestResultItem {
   lastRunAt: string;
 }
 
+/** Per-technique latest-result outcomes (per-stage test x endpoint pairs). */
 export interface TechniqueOutcomeItem {
   technique: string;
   protected: number;
@@ -677,7 +677,7 @@ export const analyticsApi = {
   },
 
   /** Per-test fleet results (last 90 days, latest pair per host) for the test library. */
-  async getTestResults(params?: { org?: string }): Promise<TestResultItem[]> {
+  async getTestResults(params?: ExtendedFilterParams): Promise<TestResultItem[]> {
     const response = await apiClient.get('/analytics/test-results', { params });
     return response.data;
   },

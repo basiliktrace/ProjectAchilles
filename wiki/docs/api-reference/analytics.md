@@ -244,7 +244,7 @@ Accepts the shared filter parameters. For each multi-stage (non-cyber-hygiene) c
 GET /api/analytics/test-results
 ```
 
-Takes only the optional `org` parameter; the shared filters are ignored. For each test (or bundle) it takes the latest result on each host over the last 90 days and scores it like the Defense Score tile in any-stage mode (blocked or detected counts as protected). Returns an array of `{ testUuid, pairCount, protectedCount, hostCount, lastRunAt }`. `pairCount` is the number of test x host pairs, `protectedCount` how many of them are protected, and `hostCount` the distinct hosts. Cyber-hygiene control results are folded into their bundle's `testUuid`. It feeds the Fleet result column of the test library.
+Accepts the shared filter parameters, except that the date range, `basis` and `scoringMode` are fixed. For each test (or bundle) it takes the latest result on each host over the last 90 days and scores it like the Defense Score tile in any-stage mode (blocked or detected counts as protected). Returns an array of `{ testUuid, pairCount, protectedCount, hostCount, lastRunAt }`. `pairCount` is the number of test x host pairs, `protectedCount` how many of them are protected, and `hostCount` the distinct hosts. Cyber-hygiene control results are folded into their bundle's `testUuid`. It feeds the Fleet result column of the test library.
 
 ### Execution Activity
 

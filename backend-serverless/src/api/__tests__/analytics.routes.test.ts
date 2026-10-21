@@ -278,6 +278,13 @@ describe('analytics routes', () => {
       expect(mockTechniqueOutcomes).toHaveBeenCalledTimes(3);
     });
 
+    it('/test-results forwards the usual filters (not just org)', async () => {
+      mockTestResults.mockResolvedValue([]);
+      const res = await request(createApp()).get('/api/analytics/test-results?org=o1&threatActors=APT29&categories=intel-driven');
+      expect(res.status).toBe(200);
+      expect(mockTestResults).toHaveBeenCalledWith(expect.objectContaining({ org: 'o1', threatActors: 'APT29', categories: 'intel-driven' }));
+    });
+
     it('/test-results returns the per-test fleet results for the org', async () => {
       const body = [{ testUuid: 'b1', pairCount: 2, protectedCount: 1, hostCount: 2, lastRunAt: '2025-01-12T00:00:00.000Z' }];
       mockTestResults.mockResolvedValue(body);

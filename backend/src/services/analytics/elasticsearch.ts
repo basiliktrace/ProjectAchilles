@@ -3029,11 +3029,12 @@ export class ElasticsearchService {
    * Fleet result per test for the test library: over the last 90 days, each
    * test's (or bundle's) latest pairs, scored like the Defense Score tile
    * (any-stage, combined protected rule). Cyber-hygiene control pairs fold
-   * into their bundle. Only the org is honoured; no other filters.
+   * into their bundle. The usual filter-bar params apply, but the window
+   * and scoring rule are fixed: a caller's from/to/basis/scoringMode are overridden.
    */
   async getTestResults(params: AnalyticsQueryParams & Partial<ExtendedAnalyticsQueryParams>): Promise<TestResultItem[]> {
     const pairs = await this.getLatestPairs({
-      org: params.org,
+      ...params,
       from: 'now-90d',
       to: 'now',
       basis: 'latest',

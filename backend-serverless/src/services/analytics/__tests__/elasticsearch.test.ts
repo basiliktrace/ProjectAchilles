@@ -3169,6 +3169,17 @@ describe('elasticsearch.ts', () => {
         expect(res[0]).toMatchObject({ testUuid: 'b2', pairCount: 2, protectedCount: 1, hostCount: 1 });
       });
 
+      it('passes the usual filters through but never lets the caller move the window or scoring', async () => {
+        const { svc, spy } = stub([]);
+        await svc.getTestResults(makeParams({
+          org: 'o1', threatActors: 'APT29', from: '2020-01-01T00:00:00Z', to: '2020-02-01T00:00:00Z',
+          basis: 'executions', scoringMode: 'all-stages',
+        }));
+        expect(spy).toHaveBeenCalledWith(expect.objectContaining({
+          org: 'o1', threatActors: 'APT29', from: 'now-90d', to: 'now', basis: 'latest', scoringMode: 'any-stage',
+        }));
+      });
+
       it('queries the last 90 days with any-stage scoring', async () => {
         const { svc, spy } = stub([]);
         await svc.getTestResults({ org: 'o1' });
