@@ -140,6 +140,17 @@ function renderTable(data: GroupedPaginatedResponse) {
   );
 }
 
+/**
+ * Opens a stage's detail from its row in the stage list. Intel-driven bundles
+ * also show the stage name on the attack-chain strip, so a bare getByText
+ * would match twice.
+ */
+async function openStageRow(name: string) {
+  const list = screen.getByRole('list', { name: 'Stages' });
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  await userEvent.click(within(list).getByRole('button', { name: new RegExp(escaped), expanded: false }));
+}
+
 beforeEach(() => {
   getAlertsForTestMock.mockReset();
   csGetAlertsForTestMock.mockReset();
@@ -234,7 +245,8 @@ describe('ExecutionsDataTable — per-stage Defender detection', () => {
     await waitFor(() => {
       expect(screen.getAllByText('Detected').length).toBeGreaterThanOrEqual(2);
     });
-    expect(screen.getAllByText('Unprotected')).toHaveLength(1);
+    // One stage is Unprotected: its attack-chain node and its stage row.
+    expect(screen.getAllByText('Unprotected')).toHaveLength(2);
   });
 
   it('keeps "Unprotected" wording when no Defender correlation exists on the stage', async () => {
@@ -370,7 +382,7 @@ describe('ExecutionsDataTable — variant-suffix attribution matching', () => {
 
     // Open stage 2's detail panel — its control_id is T1562.001 and the
     // alert's attributed_control_id is "t1562.001-svcnotify".
-    await userEvent.click(screen.getByText(stage2.test_name));
+    await openStageRow(stage2.test_name);
     await waitFor(() => {
       expect(screen.getByText(/Wacatac/)).toBeInTheDocument();
     });
@@ -399,7 +411,7 @@ describe('ExecutionsDataTable — variant-suffix attribution matching', () => {
     renderTable(makeData([stage], { defenderDetected: true }));
 
     await userEvent.click(screen.getAllByText(stage.bundle_name!)[0]);
-    await userEvent.click(screen.getByText(stage.test_name));
+    await openStageRow(stage.test_name);
 
     await waitFor(() => {
       expect(getAlertsForTestMock).toHaveBeenCalled();
@@ -408,7 +420,7 @@ describe('ExecutionsDataTable — variant-suffix attribution matching', () => {
     // The lookalike alert title should NOT appear; the panel falls through
     // to the "no related alerts" copy.
     expect(screen.queryByText(/Wacatac/)).toBeNull();
-    expect(screen.getByText(/No related Defender alerts/i)).toBeInTheDocument();
+    expect(screen.getByText("No Defender alert names this stage's binary.")).toBeInTheDocument();
   });
 });
 
@@ -609,7 +621,8 @@ describe('ExecutionsDataTable — CrowdStrike detection + related alerts', () =>
     await waitFor(() => {
       expect(screen.getAllByText('Detected').length).toBeGreaterThanOrEqual(2);
     });
-    expect(screen.getAllByText('Unprotected')).toHaveLength(1);
+    // One stage is Unprotected: its attack-chain node and its stage row.
+    expect(screen.getAllByText('Unprotected')).toHaveLength(2);
   });
 
   it('does not fetch CrowdStrike alerts when the integration is not configured', async () => {
@@ -654,11 +667,11 @@ describe('ExecutionsDataTable — CrowdStrike detection + related alerts', () =>
 
     // Open stage 2's detail panel — the stage-attributed CrowdStrike alert
     // should surface there (and the section header should exist).
-    await userEvent.click(screen.getByText(stage2.test_name));
+    await openStageRow(stage2.test_name);
     await waitFor(() => {
       expect(screen.getByText(/Falcon: Wacatac blocked/)).toBeInTheDocument();
     });
-    expect(screen.getByText('CrowdStrike Alerts')).toBeInTheDocument();
+    expect(screen.getByText('EDR evidence for this stage')).toBeInTheDocument();
   });
 
   it('aggregates bundle-attribution CrowdStrike alerts across per-stage caches and dedupes by alert_id', async () => {
@@ -726,7 +739,8 @@ describe('ExecutionsDataTable — CrowdStrike prevention (vendor-confirmed)', ()
       expect(screen.getAllByText('Prevented').length).toBeGreaterThanOrEqual(2);
     });
     expect(screen.queryByText('Detected')).toBeNull();
-    expect(screen.getAllByText('Unprotected')).toHaveLength(1);
+    // One stage is Unprotected: its attack-chain node and its stage row.
+    expect(screen.getAllByText('Unprotected')).toHaveLength(2);
   });
 
   it('still renders "Detected" (not Prevented) when detected flags are set but no prevention evidence exists', async () => {
@@ -804,7 +818,7 @@ describe('ExecutionsDataTable — CrowdStrike prevention (vendor-confirmed)', ()
 
     await userEvent.click(screen.getAllByText(stage.bundle_name!)[0]);
     await waitFor(() => expect(csGetAlertsForTestMock).toHaveBeenCalled());
-    await userEvent.click(screen.getByText(stage.test_name));
+    await openStageRow(stage.test_name);
 
     await waitFor(() => {
       expect(screen.getByText(/ransomware process killed/)).toBeInTheDocument();
@@ -846,7 +860,8 @@ describe('ExecutionsDataTable — Defender prevention (vendor-confirmed)', () =>
       expect(screen.getAllByText('Prevented').length).toBeGreaterThanOrEqual(2);
     });
     expect(screen.queryByText('Detected')).toBeNull();
-    expect(screen.getAllByText('Unprotected')).toHaveLength(1);
+    // One stage is Unprotected: its attack-chain node and its stage row.
+    expect(screen.getAllByText('Unprotected')).toHaveLength(2);
   });
 
   it('renders a single Prevented label when BOTH vendors confirmed prevention', async () => {
@@ -923,7 +938,7 @@ describe('ExecutionsDataTable — Defender prevention (vendor-confirmed)', () =>
 
     await userEvent.click(screen.getAllByText(stage.bundle_name!)[0]);
     await waitFor(() => expect(getAlertsForTestMock).toHaveBeenCalled());
-    await userEvent.click(screen.getByText(stage.test_name));
+    await openStageRow(stage.test_name);
 
     await waitFor(() => {
       expect(screen.getByText(/Defender blocked the stage binary/)).toBeInTheDocument();
@@ -963,7 +978,7 @@ describe('ExecutionsDataTable — re-fired alert annotation (resolution watermar
   async function openStageDetail(stage: EnrichedTestExecution) {
     await userEvent.click(screen.getAllByText(stage.bundle_name!)[0]);
     await waitFor(() => expect(getAlertsForTestMock).toHaveBeenCalled());
-    await userEvent.click(screen.getByText(stage.test_name));
+    await openStageRow(stage.test_name);
     await waitFor(() => expect(screen.getByText(/suspicious/i)).toBeInTheDocument());
   }
 
@@ -1079,11 +1094,26 @@ describe('ExecutionsDataTable — re-fired alert annotation (resolution watermar
 
     await userEvent.click(screen.getAllByText(stage.bundle_name!)[0]);
     await waitFor(() => expect(csGetAlertsForTestMock).toHaveBeenCalled());
-    await userEvent.click(screen.getByText(stage.test_name));
+    await openStageRow(stage.test_name);
 
     await waitFor(() => {
       expect(screen.getByText('re-fired 3m after · first seen May 10')).toBeInTheDocument();
     });
+  });
+});
+
+describe('ExecutionsDataTable — narrow-screen layout contract', () => {
+  // jsdom cannot measure layout, so this pins the classes that keep the
+  // attack-chain strip scrolling inside the panel below lg: a lone implicit
+  // `auto` grid column grows to the strip's min-content width instead
+  // (measured 562px vs 343px at 375px in headless Chromium).
+  it('gives the master-detail grid a shrinkable column below lg and keeps the lg template', () => {
+    getAlertsForTestMock.mockResolvedValue({ alerts: [], matchedTechniques: [], total: 0 });
+    renderTable(makeData([makeStage({}), makeStage({ control_id: 'T1562.001' })], { defenderDetected: false }));
+    const grid = screen.getByRole('listbox').closest('.grid');
+    expect(grid).toHaveClass('grid-cols-[minmax(0,1fr)]', 'lg:grid-cols-[minmax(0,5fr)_minmax(0,7fr)]');
+    const panel = screen.getByRole('region', { name: 'Run summary' }).parentElement;
+    expect(panel).toHaveClass('min-w-0');
   });
 });
 

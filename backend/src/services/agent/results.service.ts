@@ -237,6 +237,7 @@ async function ingestBundleControls(
           bundle_name: bundle.bundle_name,
           control_id: control.control_id,
           control_validator: control.validator,
+          ...(control.description ? { control_description: control.description } : {}),
           is_bundle_control: true,
           ...(tenantLabel ? { tenant_label: tenantLabel } : {}),
         },

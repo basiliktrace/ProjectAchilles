@@ -24,7 +24,7 @@ vi.mock('../../risk-acceptance/risk-acceptance.service.js', () => ({
   }),
 }));
 
-const { ElasticsearchService, resolveErrorName, ERROR_CODE_MAP } =
+const { ElasticsearchService, resolveErrorName, ERROR_CODE_MAP, sortBundleMembers } =
   await import('../elasticsearch.js');
 
 // ─── Helpers ──────────────────────────────────────────────────────
@@ -105,6 +105,37 @@ describe('elasticsearch.ts', () => {
     mockSearch.mockReset();
     mockCount.mockReset();
     mockInfo.mockReset();
+  });
+
+  describe('sortBundleMembers', () => {
+    const m = (control_validator?: string, control_id?: string) => ({ control_validator, control_id }) as any;
+    const validators = (xs: any[]) => xs.map(x => x.control_validator);
+
+    it('orders "Stage N" numerically, not lexically', () => {
+      const out = sortBundleMembers([m('Stage 5'), m('Stage 1'), m('Stage 10'), m('Stage 2')]);
+      expect(validators(out)).toEqual(['Stage 1', 'Stage 2', 'Stage 5', 'Stage 10']);
+    });
+
+    it('breaks duplicate stage numbers on control_id', () => {
+      const out = sortBundleMembers([m('Stage 3', 'B'), m('Stage 3', 'A'), m('Stage 1', 'Z')]);
+      expect(out.map(x => x.control_id)).toEqual(['Z', 'A', 'B']);
+    });
+
+    it('puts non-stage validators after stages, alphabetically', () => {
+      const out = sortBundleMembers([m('Firewall'), m('Stage 2'), m('BitLocker')]);
+      expect(validators(out)).toEqual(['Stage 2', 'BitLocker', 'Firewall']);
+    });
+
+    it('breaks ties on control_id and treats missing values as empty', () => {
+      const out = sortBundleMembers([m('Firewall', 'CH-2'), m(undefined, 'Z'), m('Firewall', 'CH-1')]);
+      expect(out.map(x => x.control_id)).toEqual(['Z', 'CH-1', 'CH-2']);
+    });
+
+    it('does not mutate its input', () => {
+      const input = [m('Stage 2'), m('Stage 1')];
+      sortBundleMembers(input);
+      expect(validators(input)).toEqual(['Stage 2', 'Stage 1']);
+    });
   });
 
   // ================================================================
@@ -1168,6 +1199,49 @@ describe('elasticsearch.ts', () => {
       expect(result.pagination.hasPrevious).toBe(true);
       // Page 2 should return remaining 20 groups (sliced from index 25)
       expect(result.groups).toHaveLength(20);
+    });
+
+    it('returns bundle members in stage order with the first stage as representative', async () => {
+      const mk = (validator: string) => makeHitSource({
+        'f0rtika.is_bundle_control': true,
+        'f0rtika.bundle_id': 'bundle-002',
+        'f0rtika.control_validator': validator,
+        'f0rtika.control_id': `id-${validator}`,
+      });
+      const bucket = makeGroupBucket('bundle::bundle-002::host-a::1', [
+        mk('Stage 5'), mk('Stage 1'), mk('Stage 10'), mk('Stage 2'),
+      ]);
+
+      mockCount.mockResolvedValue(esCountResponse(4));
+      mockSearch.mockResolvedValue(makeGroupedSearchResponse([bucket], 1));
+
+      const svc = createService();
+      const result = await svc.getGroupedPaginatedExecutions(makePaginatedParams());
+
+      expect(result.groups[0].members.map(m => m.control_validator))
+        .toEqual(['Stage 1', 'Stage 2', 'Stage 5', 'Stage 10']);
+      expect(result.groups[0].representative.control_validator).toBe('Stage 1');
+    });
+
+    it('maps control_description from f0rtika.control_description', async () => {
+      const mk = (desc?: string) => makeHitSource({
+        'f0rtika.is_bundle_control': true,
+        'f0rtika.bundle_id': 'bundle-003',
+        'f0rtika.control_validator': 'Stage 1',
+        'f0rtika.control_id': 'id-1',
+        ...(desc !== undefined ? { 'f0rtika.control_description': desc } : {}),
+      });
+      const bucket = makeGroupBucket('bundle::bundle-003::host-a::1', [mk('PowerShell recon')]);
+      const bucket2 = makeGroupBucket('bundle::bundle-004::host-a::1', [mk()]);
+
+      mockCount.mockResolvedValue(esCountResponse(2));
+      mockSearch.mockResolvedValue(makeGroupedSearchResponse([bucket, bucket2], 2));
+
+      const svc = createService();
+      const result = await svc.getGroupedPaginatedExecutions(makePaginatedParams());
+
+      expect(result.groups[0].members[0].control_description).toBe('PowerShell recon');
+      expect(result.groups[1].members[0].control_description).toBeUndefined();
     });
 
     it('maps standalone groups correctly', async () => {

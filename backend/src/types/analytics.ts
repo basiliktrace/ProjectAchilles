@@ -160,6 +160,8 @@ export interface EnrichedTestExecution extends TestExecution {
   bundle_name?: string;
   control_id?: string;
   control_validator?: string;
+  /** What the stage does (from bundle_results.json); absent on older documents. */
+  control_description?: string;
   is_bundle_control?: boolean;
   /** Set true by the enrichment pass when a Defender alert matches this doc's bundle UUID, hostname, and time window. */
   defender_detected?: boolean;

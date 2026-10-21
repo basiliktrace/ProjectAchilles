@@ -276,6 +276,8 @@ export interface BundleControlResult {
   details: string;
   skipped: boolean;
   error_message: string;
+  /** Optional human-readable summary of what this stage does. */
+  description?: string;
 }
 
 export interface BundleResults {

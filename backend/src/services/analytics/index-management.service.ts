@@ -41,6 +41,7 @@ export const RESULTS_INDEX_MAPPING = {
           bundle_name: { type: 'keyword' as const },
           control_id: { type: 'keyword' as const },
           control_validator: { type: 'keyword' as const },
+          control_description: { type: 'text' as const, index: false },
           is_bundle_control: { type: 'boolean' as const },
           defender_detected: { type: 'boolean' as const },
           // Set true only when an alert's evidence contains THIS stage's

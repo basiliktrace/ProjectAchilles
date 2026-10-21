@@ -288,6 +288,30 @@ interface InconclusiveRun {
   bundleName?: string;
 }
 
+const STAGE_VALIDATOR_RE = /^Stage (\d+)$/;
+
+/**
+ * Deterministic order for the members of a bundle run. All stages of a run
+ * share routing.event_time, so ES returns them in arbitrary order. "Stage N"
+ * validators sort numerically first; the rest follow by validator then
+ * control_id. Returns a new array; the input is not mutated.
+ */
+export function sortBundleMembers(members: EnrichedTestExecution[]): EnrichedTestExecution[] {
+  const stageNo = (m: EnrichedTestExecution): number | null => {
+    const match = STAGE_VALIDATOR_RE.exec(m.control_validator ?? '');
+    return match ? Number(match[1]) : null;
+  };
+  return [...members].sort((a, b) => {
+    const sa = stageNo(a);
+    const sb = stageNo(b);
+    if (sa !== null && sb !== null) return sa - sb || (a.control_id ?? '').localeCompare(b.control_id ?? '');
+    if (sa !== null) return -1;
+    if (sb !== null) return 1;
+    return (a.control_validator ?? '').localeCompare(b.control_validator ?? '')
+      || (a.control_id ?? '').localeCompare(b.control_id ?? '');
+  });
+}
+
 export class ElasticsearchService {
   private client: Client;
   private settings: AnalyticsSettings;
@@ -2415,7 +2439,8 @@ export class ElasticsearchService {
       const groupKey: string = bucket.key;
       const isBundle = groupKey.startsWith('bundle::');
       const memberHits = bucket.members?.hits?.hits || [];
-      const members: EnrichedTestExecution[] = memberHits.map((hit: any) => this.mapHitToExecution(hit));
+      const mapped: EnrichedTestExecution[] = memberHits.map((hit: any) => this.mapHitToExecution(hit));
+      const members = isBundle ? sortBundleMembers(mapped) : mapped;
       const representative = members[0] || this.mapHitToExecution({ _source: {} });
 
       // Warn if top_hits were truncated (bundle exceeds 100 controls)
@@ -2494,6 +2519,7 @@ export class ElasticsearchService {
       bundle_name: getField(source, 'f0rtika.bundle_name'),
       control_id: getField(source, 'f0rtika.control_id'),
       control_validator: getField(source, 'f0rtika.control_validator'),
+      control_description: getField(source, 'f0rtika.control_description'),
       is_bundle_control: getField(source, 'f0rtika.is_bundle_control') ?? false,
       defender_detected: getField(source, 'f0rtika.defender_detected') ?? false,
       defender_stage_detected: getField(source, 'f0rtika.defender_stage_detected') ?? false,

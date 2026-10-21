@@ -184,6 +184,8 @@ Filtered, grouped, paginated execution results. Accepts every shared filter plus
 
 One row per actual execution. Bundle tests appear as multiple rows (one per control, with `is_bundle_control: true` and a `control_id`). Best for SIEM forwarding, CSV exports, or any per-execution analysis.
 
+Bundle-control rows may also carry an optional `control_description` (plain-language "what this stage does", from the control's `description` in `bundle_results.json`). It is omitted when empty, so older runs do not have it. Members of a multi-stage run are returned in stage order ("Stage 2" before "Stage 10"; validators not named "Stage N" follow, sorted by validator then `control_id`).
+
 #### `?grouped=true` — bundle-aware grouping
 
 ```jsonc

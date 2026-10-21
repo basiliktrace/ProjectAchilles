@@ -596,7 +596,10 @@ export default function ExecutionsDataTable({
           No executions found
         </Card>
       ) : (
-        <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,5fr)_minmax(0,7fr)]">
+        <div className="grid grid-cols-[minmax(0,1fr)] items-start gap-4 lg:grid-cols-[minmax(0,5fr)_minmax(0,7fr)]">
+          {/* minmax(0,1fr) below lg: the lone implicit `auto` column would otherwise
+              grow to the detail panel's min-content (the attack-chain strip's full
+              width) and push the page wider than the screen. */}
           <Card className="overflow-hidden">
             <RunList
               rows={displayRows}
