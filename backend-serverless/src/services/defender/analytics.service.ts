@@ -12,6 +12,8 @@ import { trendInterval, windowRange } from '../analytics/integration-window.js';
 import { alertDocs, alertFacets, allOf, LINKED, firstString, severityFilter, sourceFilter } from '../analytics/alert-facets.js';
 import type { AlertFacetCounts, AlertSource, TimeWindow } from '../analytics/integration-window.js';
 import { resolveTestNames } from '../analytics/test-name-lookup.js';
+import { getTechniqueCoverage } from '../analytics/technique-coverage.js';
+import type { TechniqueCoverageResponse } from '../analytics/technique-coverage.js';
 import type { Client } from '@elastic/elasticsearch';
 import type {
   QueryDslQueryContainer,
@@ -746,6 +748,22 @@ export class DefenderAnalyticsService {
   }
 
   // ── Detection correlation ───────────────────────────────────
+
+  /**
+   * Evidence-based technique coverage: per-execution Detected / Prevented /
+   * Missed from the enrichment-written Defender flags on test docs, plus
+   * Defender alert counts per tested technique. Drives the tab's Detection
+   * tile and Technique Coverage table. See analytics/technique-coverage.ts.
+   */
+  async getTechniqueCoverage(window: TimeWindow): Promise<TechniqueCoverageResponse> {
+    const { client, settings } = await this.getEsContext();
+    return getTechniqueCoverage(client, {
+      vendor: 'defender',
+      resultsIndex: settings.indexPattern,
+      alertIndex: DEFENDER_INDEX,
+      window,
+    });
+  }
 
   /**
    * Per-execution Defender detection rate: the share of attack-simulation

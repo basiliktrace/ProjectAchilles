@@ -28,11 +28,13 @@ vi.mock('../../services/integrations/settings.js', () => ({
 const mockGetAlerts = vi.fn();
 const mockGetAlertSummary = vi.fn();
 const mockGetAlertTrend = vi.fn();
+const mockGetTechniqueCoverage = vi.fn();
 vi.mock('../../services/crowdstrike/analytics.service.js', () => ({
   CrowdStrikeAnalyticsService: class MockCrowdStrikeAnalyticsService {
     getAlerts = mockGetAlerts;
     getAlertSummary = mockGetAlertSummary;
     getAlertTrend = mockGetAlertTrend;
+    getTechniqueCoverage = mockGetTechniqueCoverage;
   },
 }));
 
@@ -159,6 +161,43 @@ describe('CrowdStrike analytics routes', () => {
       expect(res.status).toBe(400);
       expect(res.body).toEqual({ success: false, error: 'Invalid from/to' });
       expect(mockGetAlertTrend).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('GET /correlation/technique-coverage', () => {
+    it('returns 200 and delegates with the given window', async () => {
+      mockGetTechniqueCoverage.mockResolvedValue({ overall: { executions: 0 }, byTechnique: [] });
+      const res = await request(createApp()).get(
+        '/api/analytics/crowdstrike/correlation/technique-coverage?from=2026-09-20T00:00:00Z&to=2026-10-20T00:00:00Z',
+      );
+
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({ overall: { executions: 0 }, byTechnique: [] });
+      expect(mockGetTechniqueCoverage).toHaveBeenCalledWith({
+        from: '2026-09-20T00:00:00Z', to: '2026-10-20T00:00:00Z',
+      });
+    });
+
+    it('defaults to the last 30 days when from/to are absent', async () => {
+      mockGetTechniqueCoverage.mockResolvedValue({ overall: {}, byTechnique: [] });
+      const before = Date.now();
+      const res = await request(createApp()).get('/api/analytics/crowdstrike/correlation/technique-coverage');
+      const after = Date.now();
+
+      expect(res.status).toBe(200);
+      const window = mockGetTechniqueCoverage.mock.calls[0][0] as { from: string; to: string };
+      const to = Date.parse(window.to);
+      expect(to).toBeGreaterThanOrEqual(before);
+      expect(to).toBeLessThanOrEqual(after);
+      expect(to - Date.parse(window.from)).toBe(30 * 86_400_000);
+    });
+
+    it('returns 400 Invalid from/to for ?from=x', async () => {
+      const res = await request(createApp()).get('/api/analytics/crowdstrike/correlation/technique-coverage?from=x');
+
+      expect(res.status).toBe(400);
+      expect(res.body).toEqual({ success: false, error: 'Invalid from/to' });
+      expect(mockGetTechniqueCoverage).not.toHaveBeenCalled();
     });
   });
 });

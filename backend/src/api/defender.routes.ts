@@ -11,6 +11,7 @@ import {
   parseSeverityList,
   parseWindowQuery,
 } from '../services/analytics/integration-window.js';
+import { defaultCoverageWindow } from '../services/analytics/technique-coverage.js';
 
 const router = Router();
 
@@ -132,6 +133,13 @@ router.get('/correlation/scores', requirePermission('analytics:dashboards:read')
 /** GET /api/analytics/defender/correlation/techniques — MITRE technique overlap */
 router.get('/correlation/techniques', requirePermission('analytics:dashboards:read'), asyncHandler(async (_req, res) => {
   const data = await analyticsService.getTechniqueOverlap();
+  res.json(data);
+}));
+
+/** GET /api/analytics/defender/correlation/technique-coverage — Evidence-based per-technique coverage (defaults to the last 30 days) */
+router.get('/correlation/technique-coverage', requirePermission('analytics:dashboards:read'), asyncHandler(async (req, res) => {
+  const window = parseWindowQuery(req.query) ?? defaultCoverageWindow();
+  const data = await analyticsService.getTechniqueCoverage(window);
   res.json(data);
 }));
 
