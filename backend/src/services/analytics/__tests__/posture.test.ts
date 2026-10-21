@@ -277,4 +277,17 @@ describe('groupPairs', () => {
     expect(g.get('T2')?.pairCount).toBe(1);
     expect(g.get('T2')?.score).toBe(100);
   });
+
+  it('groups by threatActor; pairs without one are skipped', () => {
+    const pairs = [
+      run({ pairKey: 'a', protected: true, threatActor: 'APT29' }),
+      run({ pairKey: 'b', threatActor: 'APT29' }),
+      run({ pairKey: 'c', protected: true, threatActor: 'Lazarus' }),
+      run({ pairKey: 'd' }),
+    ];
+    const g = groupPairs(pairs, (p) => p.threatActor);
+    expect([...g.keys()].sort()).toEqual(['APT29', 'Lazarus']);
+    expect(g.get('APT29')).toMatchObject({ pairCount: 2, protectedCount: 1, score: 50 });
+    expect(g.get('Lazarus')).toMatchObject({ pairCount: 1, protectedCount: 1, score: 100 });
+  });
 });

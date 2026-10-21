@@ -318,6 +318,37 @@ export interface ThreatActorCoverageItem {
   testCount: number;
   protectedCount: number;
   totalExecutions: number;
+  /** basis=latest only: test x endpoint pairs (equals totalExecutions there). */
+  pairCount?: number;
+  /** basis=latest only: ISO time of the actor's most recent pair result. */
+  lastTestedAt?: string;
+}
+
+// Per-technique latest-result outcomes (per-stage test x endpoint pairs)
+export interface TechniqueOutcomeItem {
+  technique: string;
+  protected: number; // strict: is_protected (blocked)
+  detected: number; // combined-only: Defender/CrowdStrike detected, not blocked
+  unprotected: number; // got through
+  lastTestedAt: string; // ISO time of the technique's most recent pair result
+}
+
+// How deep attack chains get (basis=latest, any-stage bundle pairs). One
+// chain = the latest run of a non-cyber-hygiene bundle on a host.
+export interface ChainDepthBucket {
+  stage: 1 | 2 | 3 | 4;          // stage the chain was blocked at; 4 = "4+"
+  blocked: number;               // chains blocked at this stage
+  alertedNotBlocked: number;     // of those, an earlier stage was detected but not blocked
+  bundleNames: string[];         // distinct bundle names in this bucket, sorted
+}
+
+export interface ChainDepthResponse {
+  chains: number;                // chains counted (blocked + end to end)
+  buckets: ChainDepthBucket[];   // always stages 1, 2, 3, 4 in order
+  endToEnd: number;              // chains no stage blocked
+  endToEndAlerted: number;       // of those, some stage was detected
+  endToEndBundleNames: string[];
+  inconclusive: number;          // chains whose latest run had an errored / pre-execution-blocked stage; in no bucket
 }
 
 // Defense score by hostname item
@@ -335,6 +366,22 @@ export interface ErrorRateResponse {
   errorCount: number;         // docs with codes [0=NormalExit, 1=BinaryNotRecognized, 259=StillActive, 999=UnexpectedTestError]
   conclusiveCount: number;    // docs with codes [101=Unprotected, 105=FileQuarantinedOnExtraction, 126=ExecutionPrevented, 127=QuarantinedOnExecution]
   totalTestActivity: number;  // errorCount + conclusiveCount (excludes code 200=NoOutput)
+}
+
+// Execution activity (dashboard "Testing cadence" card)
+export interface ExecutionActivityDay {
+  date: string;          // UTC day, YYYY-MM-DD
+  protected: number;     // conclusive and (is_protected | defender_detected | crowdstrike_detected)
+  unprotected: number;   // exit code 101 and not detected
+  inconclusive: number;  // non-conclusive exit codes
+}
+
+export interface ExecutionActivityResponse {
+  days: ExecutionActivityDay[];    // one per UTC day, oldest first, zero-filled
+  lastExecutionAt: string | null;  // newest result for the org, all-time (not window-bound)
+  executions7d: number;            // all result docs, last 7 days
+  protectedPct7d: number | null;   // combined-protected / conclusive, last 7 days
+  endpointsTested7d: number;       // distinct hostnames, last 7 days
 }
 
 // Error rate trend data point (rolling window)

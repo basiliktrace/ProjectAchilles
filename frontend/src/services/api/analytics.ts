@@ -225,29 +225,59 @@ export interface CategoryBreakdownItem {
   unprotected: number;
 }
 
-export interface SubcategoryBreakdownItem {
-  subcategory: string;
-  score: number;
-  count: number;
-  protected: number;
-  unprotected: number;
-}
-
-export interface CategorySubcategoryBreakdownItem {
-  category: CategoryType;
-  score: number;
-  count: number;
-  protected: number;
-  unprotected: number;
-  subcategories: SubcategoryBreakdownItem[];
-}
-
 export interface ThreatActorCoverageItem {
   threatActor: string;
   coverage: number;
   testCount: number;
   protectedCount: number;
   totalExecutions: number;
+  /** basis=latest only: test x endpoint pairs. */
+  pairCount?: number;
+  /** basis=latest only: ISO time of the actor's most recent pair result. */
+  lastTestedAt?: string;
+}
+
+/** Per-technique latest-result outcomes (per-stage test x endpoint pairs). */
+export interface TechniqueOutcomeItem {
+  technique: string;
+  protected: number;
+  detected: number;
+  unprotected: number;
+  lastTestedAt: string;
+}
+
+/** One "blocked at stage N" row of the chain-depth card; stage 4 = "4+". */
+export interface ChainDepthBucket {
+  stage: 1 | 2 | 3 | 4;
+  blocked: number;
+  alertedNotBlocked: number;
+  bundleNames: string[];
+}
+
+/** How deep attack chains get: latest run per (org, bundle, host), non-cyber-hygiene bundles. */
+export interface ChainDepthResponse {
+  chains: number;
+  buckets: ChainDepthBucket[];
+  endToEnd: number;
+  endToEndAlerted: number;
+  endToEndBundleNames: string[];
+  /** Latest run had an errored / pre-execution-blocked stage: in no row. */
+  inconclusive: number;
+}
+
+export interface ExecutionActivityDay {
+  date: string;
+  protected: number;
+  unprotected: number;
+  inconclusive: number;
+}
+
+export interface ExecutionActivityResponse {
+  days: ExecutionActivityDay[];
+  lastExecutionAt: string | null;
+  executions7d: number;
+  protectedPct7d: number | null;
+  endpointsTested7d: number;
 }
 
 export interface DefenseScoreByHostItem {
@@ -615,19 +645,30 @@ export const analyticsApi = {
     return response.data;
   },
 
-  async getDefenseScoreByCategorySubcategory(params?: {
+  async getThreatActorCoverage(params?: {
     org?: string;
     from?: string;
     to?: string;
     scoringMode?: 'all-stages' | 'any-stage';
     basis?: 'latest' | 'executions';
-  }): Promise<CategorySubcategoryBreakdownItem[]> {
-    const response = await apiClient.get('/analytics/defense-score/by-category-subcategory', { params });
+  }): Promise<ThreatActorCoverageItem[]> {
+    const response = await apiClient.get('/analytics/threat-actor-coverage', { params });
     return response.data;
   },
 
-  async getThreatActorCoverage(params?: { org?: string; from?: string; to?: string }): Promise<ThreatActorCoverageItem[]> {
-    const response = await apiClient.get('/analytics/threat-actor-coverage', { params });
+  async getTechniqueOutcomes(params?: { org?: string; from?: string; to?: string }): Promise<TechniqueOutcomeItem[]> {
+    const response = await apiClient.get('/analytics/technique-outcomes', { params });
+    return response.data;
+  },
+
+  /** Always latest-result posture; takes every filter-bar param. */
+  async getChainDepth(params?: ExtendedFilterParams & { basis?: 'latest' | 'executions' }): Promise<ChainDepthResponse> {
+    const response = await apiClient.get('/analytics/chain-depth', { params });
+    return response.data;
+  },
+
+  async getExecutionActivity(params?: { org?: string; days?: number }): Promise<ExecutionActivityResponse> {
+    const response = await apiClient.get('/analytics/execution-activity', { params });
     return response.data;
   },
 

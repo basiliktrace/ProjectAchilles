@@ -1,4 +1,4 @@
-import { Activity, Bird, FlaskConical, Server, ShieldAlert, ShieldCheck, Star } from 'lucide-react';
+import { Bird, FlaskConical, Server, ShieldAlert, ShieldCheck, Star } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { isLowSample, POSTURE_HELP, postureCaption, postureWindowLabel } from '@/lib/posture';
 import { isSameTimeRange, TIME_RANGE_PRESETS, timeRangeButtonLabel } from '@/lib/timeRange';
@@ -6,13 +6,13 @@ import { PageHeader } from '@/components/layout/PageHeader';
 import { useHasPermission } from '@/hooks/useAppRole';
 import { useSharedTimeRange } from '@/hooks/useSharedTimeRange';
 import { AttentionBanner } from './components/AttentionBanner';
-import { CategoryBreakdownCard } from './components/CategoryBreakdownCard';
+import { AttackOutcomeMatrix } from './components/AttackOutcomeMatrix';
 import { FleetHealthCard } from './components/FleetHealthCard';
 import { KpiCard, type KpiCardProps } from './components/KpiCard';
-import { MitreCoverageBars } from './components/MitreCoverageBars';
 import { RecentExecutionsCard } from './components/RecentExecutionsCard';
-import { SeverityDonut } from './components/SeverityDonut';
 import { SyncChip } from './components/SyncChip';
+import { TestingCadenceCard } from './components/TestingCadenceCard';
+import { ThreatActorReadinessCard } from './components/ThreatActorReadinessCard';
 import { TopControlsCard } from './components/TopControlsCard';
 import { TrendOverviewChart } from './components/TrendOverviewChart';
 import { useDashboardData } from './useDashboardData';
@@ -75,7 +75,7 @@ export default function DashboardPage() {
     {
       label: 'Total tests',
       value: data.testStats ? String(data.testStats.total) : '—',
-      sub: data.testStats ? `${data.testStats.criticalHigh} critical/high` : undefined,
+      sub: data.testStats ? `${data.testStats.intelDriven} intel-driven` : undefined,
       icon: FlaskConical,
       to: '/tests',
     },
@@ -93,17 +93,6 @@ export default function DashboardPage() {
       icon: Server,
       to: '/agents',
       tone: data.metrics && data.metrics.offline > 0 ? 'danger' : 'default',
-    },
-    {
-      label: 'Executions 7d',
-      value: data.defense7 ? String(data.defense7.totalExecutions) : '—',
-      sub: data.analyticsConfigured
-        ? data.defense7?.score != null
-          ? `${data.defense7.score.toFixed(0)}% protected`
-          : undefined
-        : 'not configured',
-      icon: Activity,
-      to: '/analytics',
     },
   ];
 
@@ -190,15 +179,15 @@ export default function DashboardPage() {
       <AttentionBanner items={data.attentionItems} loading={data.loading} />
 
       {/* KPI row */}
-      <div className="grid auto-rows-fr grid-cols-2 gap-4 md:grid-cols-3 lg:grid-cols-6 max-lg:[&>*]:min-w-0">
+      <div className="grid auto-rows-fr grid-cols-2 gap-4 md:grid-cols-3 lg:grid-cols-5 max-lg:[&>*]:min-w-0">
         {kpis.map((kpi) => (
           <KpiCard key={kpi.label} {...kpi} loading={data.loading} />
         ))}
       </div>
 
-      {/* Trend + severity */}
+      {/* Trend + cadence */}
       <div className="grid gap-4 lg:grid-cols-3 max-lg:[&>*]:min-w-0">
-        <div className="lg:col-span-2">
+        <div className="lg:col-span-2 [&>*]:h-full">
           <TrendOverviewChart
             data={data.trend}
             description={data.trendDescription}
@@ -208,33 +197,22 @@ export default function DashboardPage() {
             loading={data.loading}
           />
         </div>
-        <SeverityDonut
-          mix={data.testStats?.severityMix ?? { high: 0, medium: 0, low: 0 }}
-          loading={data.loading}
-        />
+        <TestingCadenceCard view={data.cadence} configured={data.analyticsConfigured} loading={data.loading} />
       </div>
 
-      {/* MITRE + categories */}
+      {/* ATT&CK outcomes + threat actors */}
       <div className="grid gap-4 lg:grid-cols-3 max-lg:[&>*]:min-w-0">
-        <div className="lg:col-span-2">
-          <MitreCoverageBars
-            tactics={data.testStats?.mitre.tactics ?? []}
-            totalTechniques={data.testStats?.mitre.totalTechniques ?? 0}
-            coveredTactics={data.testStats?.mitre.coveredTactics ?? 0}
-            totalTactics={data.testStats?.mitre.totalTactics ?? 14}
-            mappedTests={data.testStats?.mitre.mappedTests ?? 0}
+        <div className="lg:col-span-2 [&>*]:h-full">
+          <AttackOutcomeMatrix
+            view={data.attackMatrix}
+            configured={data.analyticsConfigured}
+            rangeLabel={windowLabel}
             loading={data.loading}
           />
         </div>
-        <CategoryBreakdownCard
-          rows={data.testStats?.categories ?? []}
-          avgScore={
-            data.testStats && data.testStats.scoredTests > 0
-              ? data.testStats.avgScore.toFixed(3)
-              : undefined
-          }
-          scoredTests={data.testStats?.scoredTests}
-          criticalHigh={data.testStats?.criticalHigh}
+        <ThreatActorReadinessCard
+          view={data.actorReadiness}
+          configured={data.analyticsConfigured}
           loading={data.loading}
         />
       </div>

@@ -44,7 +44,7 @@ export function TrendOverviewChart({ data, description, hasSecureScore, hasZtaSc
   );
 
   return (
-    <Card>
+    <Card className="h-full">
       <CardHeader>
         <CardTitle>Trend overview — {rangeLabel}</CardTitle>
         <CardDescription>{description}</CardDescription>

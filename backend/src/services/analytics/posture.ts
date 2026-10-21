@@ -25,6 +25,7 @@ export interface PairRun {
   category?: string;
   subcategory?: string;
   techniques: string[];
+  threatActor?: string; // f0rtika.threat_actor; any-stage bundle: top value over its controls
 }
 export interface PostureWindow {
   fromMs: number;

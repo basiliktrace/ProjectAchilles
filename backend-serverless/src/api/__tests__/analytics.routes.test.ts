@@ -45,6 +45,10 @@ const mockTechniqueLatest = vi.fn();
 const mockTechnique = vi.fn();
 const mockCoverageLatest = vi.fn();
 const mockCoverage = vi.fn();
+const mockThreatActorLatest = vi.fn();
+const mockThreatActor = vi.fn();
+const mockTechniqueOutcomes = vi.fn();
+const mockChainDepth = vi.fn();
 vi.mock('../../services/analytics/elasticsearch.js', () => ({
   ElasticsearchService: class MockElasticsearchService {
     testConnection = mockTestConnection;
@@ -62,6 +66,10 @@ vi.mock('../../services/analytics/elasticsearch.js', () => ({
     getTechniqueDistribution = mockTechnique;
     getTestCoverageLatest = mockCoverageLatest;
     getTestCoverage = mockCoverage;
+    getThreatActorCoverageLatest = mockThreatActorLatest;
+    getThreatActorCoverage = mockThreatActor;
+    getTechniqueOutcomes = mockTechniqueOutcomes;
+    getChainDepth = mockChainDepth;
   },
 }));
 
@@ -226,7 +234,7 @@ describe('analytics routes', () => {
   describe('breakdown basis dispatch', () => {
     beforeEach(() => {
       mockGetSettings.mockReturnValue({ configured: true, connectionType: 'direct', node: 'http://localhost:9200' });
-      for (const m of [mockByCategoryLatest, mockByCategory, mockByHostnameLatest, mockByHostname, mockTechniqueLatest, mockTechnique, mockCoverageLatest, mockCoverage]) {
+      for (const m of [mockByCategoryLatest, mockByCategory, mockByHostnameLatest, mockByHostname, mockTechniqueLatest, mockTechnique, mockCoverageLatest, mockCoverage, mockThreatActorLatest, mockThreatActor, mockTechniqueOutcomes, mockChainDepth]) {
         m.mockResolvedValue([]);
       }
     });
@@ -235,6 +243,7 @@ describe('analytics routes', () => {
       ['/defense-score/by-hostname', mockByHostnameLatest, mockByHostname],
       ['/technique-distribution', mockTechniqueLatest, mockTechnique],
       ['/test-coverage', mockCoverageLatest, mockCoverage],
+      ['/threat-actor-coverage', mockThreatActorLatest, mockThreatActor],
     ];
     for (const [path, latest, executions] of cases) {
       it(`${path}: basis=latest -> latest method, default -> executions, bogus -> 400`, async () => {
@@ -252,6 +261,35 @@ describe('analytics routes', () => {
         expect(bad.status).toBe(400);
       });
     }
+
+    it('/technique-outcomes always uses the latest method and ignores basis', async () => {
+      mockTechniqueOutcomes.mockResolvedValue([{ technique: 'T1059', protected: 1, detected: 0, unprotected: 0, lastTestedAt: '2025-01-01T00:00:00.000Z' }]);
+      const res = await request(createApp()).get('/api/analytics/technique-outcomes?from=now-30d&org=o1&scoringMode=any-stage');
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual([{ technique: 'T1059', protected: 1, detected: 0, unprotected: 0, lastTestedAt: '2025-01-01T00:00:00.000Z' }]);
+      expect(mockTechniqueOutcomes).toHaveBeenCalledWith(expect.objectContaining({ from: 'now-30d', org: 'o1' }));
+
+      for (const basis of ['executions', 'bogus']) {
+        const r = await request(createApp()).get(`/api/analytics/technique-outcomes?basis=${basis}`);
+        expect(r.status).toBe(200);
+      }
+      expect(mockTechniqueOutcomes).toHaveBeenCalledTimes(3);
+    });
+
+    it('/chain-depth always uses the latest chain-depth method and ignores basis', async () => {
+      const body = { chains: 1, buckets: [], endToEnd: 1, endToEndAlerted: 0, endToEndBundleNames: ['Chain One'] };
+      mockChainDepth.mockResolvedValue(body);
+      const res = await request(createApp()).get('/api/analytics/chain-depth?from=now-30d&org=o1&threatActors=APT29&bundleNames=Chain%20One');
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual(body);
+      expect(mockChainDepth).toHaveBeenCalledWith(expect.objectContaining({ from: 'now-30d', org: 'o1', threatActors: 'APT29', bundleNames: 'Chain One' }));
+
+      for (const basis of ['executions', 'bogus']) {
+        const r = await request(createApp()).get(`/api/analytics/chain-depth?basis=${basis}`);
+        expect(r.status).toBe(200);
+      }
+      expect(mockChainDepth).toHaveBeenCalledTimes(3);
+    });
   });
 
   describe('basis dispatch', () => {

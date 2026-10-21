@@ -8,7 +8,7 @@ const CHART_FILES = [
   'pages/analytics/components/StackedBarChart.tsx',
   'pages/analytics/components/ErrorTypePieChart.tsx',
   'pages/analytics/components/DefenseScoreByHostChart.tsx',
-  'pages/analytics/components/CategoryBreakdownChart.tsx',
+  'pages/analytics/components/ChainDepthCard.tsx',
   'pages/analytics/components/CoverageTreemap.tsx',
   'pages/analytics/components/SeverityBreakdownChart.tsx',
   'pages/analytics/components/AlertsSummaryCard.tsx',
@@ -17,10 +17,10 @@ const CHART_FILES = [
   'pages/analytics/components/TechniqueDistributionCard.tsx',
   'pages/analytics/components/TestActivityCard.tsx',
   'pages/dashboard/components/TrendOverviewChart.tsx',
-  'pages/dashboard/components/SeverityDonut.tsx',
-  'pages/dashboard/components/MitreCoverageBars.tsx',
-  'pages/dashboard/components/CategoryBreakdownCard.tsx',
   'pages/dashboard/components/FleetHealthCard.tsx',
+  'pages/dashboard/components/TestingCadenceCard.tsx',
+  'pages/dashboard/components/ThreatActorReadinessCard.tsx',
+  'pages/dashboard/components/AttackOutcomeMatrix.tsx',
 ];
 
 // Raw color literals we forbid inside chart files. `var(--token)` and

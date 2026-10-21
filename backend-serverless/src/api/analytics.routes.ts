@@ -541,7 +541,28 @@ router.get('/defense-score/by-category-subcategory', asyncHandler(async (req, re
 // GET /api/analytics/threat-actor-coverage - Threat actor coverage metrics
 router.get('/threat-actor-coverage', asyncHandler(async (req, res) => {
   const es = await getEsService();
-  const result = await es.getThreatActorCoverage(extractFilterParams(req.query));
+  const filterParams = extractFilterParams(req.query);
+  const result = filterParams.basis === 'latest'
+    ? await es.getThreatActorCoverageLatest(filterParams)
+    : await es.getThreatActorCoverage(filterParams);
+  res.json(result);
+}));
+
+// GET /api/analytics/technique-outcomes - Blocked / detected-only / got-through
+// per technique. Always latest-result posture (per-stage pairs); basis is ignored.
+router.get('/technique-outcomes', asyncHandler(async (req, res) => {
+  const es = await getEsService();
+  const { basis: _basis, ...query } = req.query;
+  const result = await es.getTechniqueOutcomes(extractFilterParams(query));
+  res.json(result);
+}));
+
+// GET /api/analytics/chain-depth - Stage each chain's latest run was blocked at
+// (non-cyber-hygiene bundles). Always latest-result posture; basis is ignored.
+router.get('/chain-depth', asyncHandler(async (req, res) => {
+  const es = await getEsService();
+  const { basis: _basis, ...query } = req.query;
+  const result = await es.getChainDepth(extractFilterParams(query));
   res.json(result);
 }));
 
@@ -589,6 +610,15 @@ router.get('/error-rate/trend', asyncHandler(async (req, res) => {
 router.get('/error-rate', asyncHandler(async (req, res) => {
   const es = await getEsService();
   const result = await es.getErrorRate(extractFilterParams(req.query));
+  res.json(result);
+}));
+
+// GET /api/analytics/execution-activity - Recent per-day execution counts for the cadence card
+router.get('/execution-activity', asyncHandler(async (req, res) => {
+  const es = await getEsService();
+  const parsed = parseInt(req.query.days as string, 10);
+  const days = Number.isFinite(parsed) ? Math.max(1, Math.min(90, parsed)) : 14;
+  const result = await es.getExecutionActivity({ org: req.query.org as string | undefined, days });
   res.json(result);
 }));
 

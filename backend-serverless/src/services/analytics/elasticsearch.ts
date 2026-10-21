@@ -18,6 +18,7 @@ import type { OutcomeFilters, PairRun, PostureWindow } from './posture.js';
 import { TtlPromiseCache } from './postureCache.js';
 import type { TtlCacheOptions } from './postureCache.js';
 import type {
+  ExecutionActivityResponse,
   AnalyticsSettings,
   AnalyticsQueryParams,
   DefenseScoreResponse,
@@ -40,6 +41,9 @@ import type {
   CategorySubcategoryBreakdownItem,
   SubcategoryBreakdownItem,
   ThreatActorCoverageItem,
+  TechniqueOutcomeItem,
+  ChainDepthBucket,
+  ChainDepthResponse,
   DefenseScoreByHostItem,
   CanonicalTestCountResponse,
   ErrorRateResponse,
@@ -134,6 +138,42 @@ interface PairFetchOptions {
   latestOnly: boolean;
 }
 
+/**
+ * An any-stage bundle run with what the chain-depth card needs. Only
+ * fetchBundlePairRuns builds these; per-doc runs are plain PairRuns. Kept out
+ * of posture.ts so the shared pure module stays untouched.
+ */
+interface ChainRun extends PairRun {
+  /** Stages that ran: the run's conclusive control docs (skipped stages are exit 0, filtered out). */
+  stagesRun: number;
+  /** Some stage was Defender/CrowdStrike-detected without being blocked (is_protected false). */
+  alertedUnblocked: boolean;
+}
+
+function isChainRun(run: PairRun): run is ChainRun {
+  return typeof (run as Partial<ChainRun>).stagesRun === 'number';
+}
+
+/** Pair key of an any-stage bundle pair: one per (oid, bundle_id, hostname). */
+function bundlePairKey(oid: unknown, bundleId: string, hostname: string): string {
+  return `${oid ?? ''}|bundle:${bundleId}|${hostname}`;
+}
+
+/**
+ * Everything that shapes a basis=latest fetch, resolved once per request so
+ * every query behind one answer uses the exact same clauses.
+ */
+interface PostureScope {
+  window: PostureWindow;
+  outcome: OutcomeFilters;
+  isAnyStage: boolean;
+  org: string | undefined;
+  clauses: any[];
+  exclusionFilter: unknown;
+  /** Cache-key fields shared by every latest-basis fetch. */
+  keyBase: Record<string, unknown>;
+}
+
 interface PostureShapeSpec extends PairFetchOptions {
   /** Widen the lower bound by one freshness window (series lookback). */
   lookback: boolean;
@@ -153,7 +193,9 @@ const POSTURE_SHAPES: Record<PostureShape, PostureShapeSpec> = {
  * 30 s from settle. Weight = runs + rawRuns, measured at ~450 B per PairRun
  * (V8, ~140-char pair keys). A snapshot over 500k runs is served but not
  * kept, and all cached snapshots together hold at most 500k runs (~225 MB),
- * so the cache adds at most the footprint of one maximal snapshot.
+ * so the cache adds at most the footprint of one maximal snapshot. The
+ * chain-depth inconclusive-runs cache is separate and much smaller
+ * (INCONCLUSIVE_CACHE_MAX_ENTRIES pair entries in total).
  * Fewer entries than backend/ (16): a warm Vercel function instance keeps
  * the cache across invocations.
  */
@@ -164,6 +206,14 @@ const POSTURE_CACHE_OPTIONS: TtlCacheOptions<PostureSnapshot> = {
   maxTotalWeight: 500_000,
   weigh: (s) => s.runs.length + (s.rawRuns?.length ?? 0),
 };
+
+/**
+ * Budget of the chain-depth inconclusive-runs cache, in pair entries across
+ * all cached maps (one pair key + one timestamp each, ~200 B, so ~10 MB at
+ * most). It holds only the sparse errored chain runs; a map over this is
+ * served but not kept.
+ */
+const INCONCLUSIVE_CACHE_MAX_ENTRIES = 50_000;
 
 const DAY_MS = 86_400_000;
 const RANGE_UNIT_MS: Record<string, number> = { h: 3_600_000, d: DAY_MS, w: 7 * DAY_MS, m: 30 * DAY_MS, M: 30 * DAY_MS };
@@ -944,6 +994,35 @@ export class ElasticsearchService {
   private readonly PAIR_OID_SOURCE = { oid: { terms: { field: 'routing.oid', missing_bucket: true } } };
   // No missing_bucket on hostname: docs without routing.hostname form no pairs.
   private readonly PAIR_HOST_SOURCE = { host: { terms: { field: 'routing.hostname' } } };
+  /**
+   * Composite sources of one any-stage bundle run. Every control of one run
+   * shares routing.event_time (= result.completed_at), so the exact timestamp
+   * isolates a run.
+   */
+  private readonly BUNDLE_RUN_SOURCES = [
+    this.PAIR_OID_SOURCE,
+    { bundle: { terms: { field: 'f0rtika.bundle_id' } } },
+    this.PAIR_HOST_SOURCE,
+    { ts: { terms: { field: 'routing.event_time' } } },
+  ];
+
+  /**
+   * Bundle-stage codes that do NOT make a chain run inconclusive: conclusive
+   * outcomes, Skipped (0) and the upload confirmation (200). Anything else on
+   * a stage (999 error, 260 ASR blocked pre-execution, ...) means the chain
+   * neither ran end to end nor was blocked by a defense at that stage.
+   */
+  private readonly CHAIN_SETTLED_CODES = [0, 101, 105, 126, 127, 200];
+
+  /** Latest inconclusive bundle run per pair (chain depth): same TTL as the posture snapshots, own small budget. */
+  private readonly inconclusiveCache = new TtlPromiseCache<Map<string, number>>({
+    ttlMs: POSTURE_CACHE_OPTIONS.ttlMs,
+    maxEntries: POSTURE_CACHE_OPTIONS.maxEntries,
+    maxEntryWeight: INCONCLUSIVE_CACHE_MAX_ENTRIES,
+    maxTotalWeight: INCONCLUSIVE_CACHE_MAX_ENTRIES,
+    weigh: (m) => m.size,
+  });
+
   private readonly PAIR_DAY_SOURCE = {
     day: { date_histogram: { field: 'routing.event_time', calendar_interval: 'day', time_zone: 'UTC' } },
   };
@@ -980,7 +1059,7 @@ export class ElasticsearchService {
         aggs: {
           [aggName]: {
             composite: { size: pageSize, sources, ...(after ? { after } : {}) },
-            aggs: subAggs,
+            ...(Object.keys(subAggs).length > 0 ? { aggs: subAggs } : {}),
           },
         },
       } as any);
@@ -1082,6 +1161,7 @@ export class ElasticsearchService {
       run.category = info?.category;
       run.subcategory = info?.subcategory;
       run.techniques = info?.techniques ?? [];
+      run.threatActor = info?.threatActor;
     });
     return runs;
   }
@@ -1090,7 +1170,7 @@ export class ElasticsearchService {
   private async fetchTestMetadata(
     filters: any[],
     testCount: number,
-  ): Promise<Map<string, { testName?: string; category?: string; subcategory?: string; techniques: string[] }>> {
+  ): Promise<Map<string, { testName?: string; category?: string; subcategory?: string; techniques: string[]; threatActor?: string }>> {
     const response = await this.client.search({
       index: this.settings.indexPattern,
       size: 0,
@@ -1103,14 +1183,14 @@ export class ElasticsearchService {
               top_hits: {
                 size: 1,
                 sort: [{ 'routing.event_time': { order: 'desc' } }],
-                _source: ['f0rtika.test_name', 'f0rtika.category', 'f0rtika.subcategory', 'f0rtika.techniques'],
+                _source: ['f0rtika.test_name', 'f0rtika.category', 'f0rtika.subcategory', 'f0rtika.techniques', 'f0rtika.threat_actor'],
               },
             },
           },
         },
       },
     });
-    const out = new Map<string, { testName?: string; category?: string; subcategory?: string; techniques: string[] }>();
+    const out = new Map<string, { testName?: string; category?: string; subcategory?: string; techniques: string[]; threatActor?: string }>();
     const buckets: any[] = (response.aggregations as any)?.test_meta?.buckets ?? [];
     for (const b of buckets) {
       const src = b.doc?.hits?.hits?.[0]?._source ?? {};
@@ -1119,6 +1199,7 @@ export class ElasticsearchService {
         category: optString(getField(src, 'f0rtika.category')),
         subcategory: optString(getField(src, 'f0rtika.subcategory')),
         techniques: toStringArray(getField(src, 'f0rtika.techniques')),
+        threatActor: optString(getField(src, 'f0rtika.threat_actor')),
       });
     }
     return out;
@@ -1136,17 +1217,23 @@ export class ElasticsearchService {
       filters,
       'bundle_runs',
       this.BUNDLE_RUN_PAGE_SIZE,
-      [
-        this.PAIR_OID_SOURCE,
-        { bundle: { terms: { field: 'f0rtika.bundle_id' } } },
-        this.PAIR_HOST_SOURCE,
-        // Every control of one bundle run shares routing.event_time
-        // (= result.completed_at), so the exact timestamp isolates a run.
-        { ts: { terms: { field: 'routing.event_time' } } },
-      ],
+      this.BUNDLE_RUN_SOURCES,
       {
         combined: this.buildDetectedFilter(),
         strict: { filter: { term: { 'f0rtika.is_protected': true } } },
+        // Chain depth: a detection that did not block (the chain went on).
+        alerted_unblocked: {
+          filter: {
+            bool: {
+              should: [
+                { term: { 'f0rtika.defender_detected': true } },
+                { term: { 'f0rtika.crowdstrike_detected': true } },
+              ],
+              minimum_should_match: 1,
+              must_not: [{ term: { 'f0rtika.is_protected': true } }],
+            },
+          },
+        },
         codes: { terms: { field: 'event.ERROR', size: 10 } },
         names: { terms: { field: 'f0rtika.error_name', size: 20 } },
       },
@@ -1160,8 +1247,8 @@ export class ElasticsearchService {
           .filter(n => Number.isFinite(n))
           .sort((x, y) => x - y);
         const storedNames = ((b.names?.buckets ?? []) as any[]).map(n => String(n.key));
-        all.push({
-          pairKey: `${b.key.oid ?? ''}|bundle:${bundleId}|${hostname}`,
+        const run: ChainRun = {
+          pairKey: bundlePairKey(b.key.oid, bundleId, hostname),
           ts,
           protected: (b.combined?.doc_count ?? 0) > 0,
           strictProtected: (b.strict?.doc_count ?? 0) > 0,
@@ -1170,7 +1257,10 @@ export class ElasticsearchService {
           hostname,
           testName: '',
           techniques: [],
-        });
+          stagesRun: Number(b.doc_count) || 0,
+          alertedUnblocked: (b.alerted_unblocked?.doc_count ?? 0) > 0,
+        };
+        all.push(run);
         allBundles.push(bundleId);
       },
     );
@@ -1196,6 +1286,7 @@ export class ElasticsearchService {
       run.category = info?.category;
       run.subcategory = info?.subcategory;
       run.techniques = info?.techniques ?? [];
+      run.threatActor = info?.threatActor;
     });
     return runs;
   }
@@ -1203,7 +1294,8 @@ export class ElasticsearchService {
   /**
    * Static per-bundle metadata, once per bundle_id (mirrors fetchTestMetadata):
    * bundle_name / category / subcategory from the bundle's latest control doc,
-   * and the union of f0rtika.techniques over its control docs.
+   * the union of f0rtika.techniques over its control docs, and the most
+   * common f0rtika.threat_actor (every control carries the bundle's actor).
    * Strictly, a pair's techniques are those of its latest RUN's controls. A
    * bundle's controls are stable across runs, so the per-bundle_id union is
    * the same set, without fetching control docs for every historical run.
@@ -1211,7 +1303,7 @@ export class ElasticsearchService {
   private async fetchBundleMetadata(
     filters: any[],
     bundleCount: number,
-  ): Promise<Map<string, { bundleName?: string; category?: string; subcategory?: string; techniques: string[] }>> {
+  ): Promise<Map<string, { bundleName?: string; category?: string; subcategory?: string; techniques: string[]; threatActor?: string }>> {
     const response = await this.client.search({
       index: this.settings.indexPattern,
       size: 0,
@@ -1228,11 +1320,12 @@ export class ElasticsearchService {
               },
             },
             techniques: { terms: { field: 'f0rtika.techniques', size: this.BUNDLE_TECHNIQUES_SIZE } },
+            threat_actor: { terms: { field: 'f0rtika.threat_actor', size: 1 } },
           },
         },
       },
     });
-    const out = new Map<string, { bundleName?: string; category?: string; subcategory?: string; techniques: string[] }>();
+    const out = new Map<string, { bundleName?: string; category?: string; subcategory?: string; techniques: string[]; threatActor?: string }>();
     const buckets: any[] = (response.aggregations as any)?.bundle_meta?.buckets ?? [];
     for (const b of buckets) {
       const src = b.doc?.hits?.hits?.[0]?._source ?? {};
@@ -1241,6 +1334,7 @@ export class ElasticsearchService {
         category: optString(getField(src, 'f0rtika.category')),
         subcategory: optString(getField(src, 'f0rtika.subcategory')),
         techniques: ((b.techniques?.buckets ?? []) as any[]).map(t => String(t.key)),
+        threatActor: optString(b.threat_actor?.buckets?.[0]?.key),
       });
     }
     return out;
@@ -1288,28 +1382,109 @@ export class ElasticsearchService {
     params: AnalyticsQueryParams & Partial<ExtendedAnalyticsQueryParams>,
     shape: PostureShape,
   ): Promise<PostureSnapshot & { outcome: OutcomeFilters }> {
+    return this.latestPostureFor(await this.resolvePostureScope(params), shape);
+  }
+
+  /** Window, filter-bar clauses and risk-acceptance exclusion of a latest-basis request. */
+  private async resolvePostureScope(
+    params: AnalyticsQueryParams & Partial<ExtendedAnalyticsQueryParams>,
+  ): Promise<PostureScope> {
     const window = this.resolveLatestWindow(params); // 400 before any ES call
     const outcome = this.parseOutcomeFilters(params);
     const isAnyStage = params.scoringMode === 'any-stage';
     const clauses = this.buildFilterBarClauses(params, { excludeOutcome: true });
     const exclusionFilter: unknown = (await this.getRiskAcceptanceService().buildExclusionFilter(params.org)) ?? null;
-    const spec = POSTURE_SHAPES[shape];
-
-    const key = JSON.stringify({
-      index: this.settings.indexPattern,
-      from: params.from || null,
-      to: params.to || null,
-      scoringMode: isAnyStage ? 'any-stage' : 'all-stages',
-      org: params.org || null,
+    return {
+      window,
+      outcome,
+      isAnyStage,
+      org: params.org,
       clauses,
-      exclusion: exclusionFilter,
+      exclusionFilter,
+      keyBase: {
+        index: this.settings.indexPattern,
+        from: params.from || null,
+        to: params.to || null,
+        org: params.org || null,
+        clauses,
+        exclusion: exclusionFilter,
+      },
+    };
+  }
+
+  private async latestPostureFor(
+    scope: PostureScope,
+    shape: PostureShape,
+  ): Promise<PostureSnapshot & { outcome: OutcomeFilters }> {
+    const spec = POSTURE_SHAPES[shape];
+    const key = JSON.stringify({
+      ...scope.keyBase,
+      scoringMode: scope.isAnyStage ? 'any-stage' : 'all-stages',
       shape,
       ...spec,
     });
     const snapshot = await this.postureCache.get(key, () =>
-      this.fetchPostureSnapshot(window, params.org, clauses, exclusionFilter, isAnyStage, spec),
+      this.fetchPostureSnapshot(scope.window, scope.org, scope.clauses, scope.exclusionFilter, scope.isAnyStage, spec),
     );
-    return { ...snapshot, outcome };
+    return { ...snapshot, outcome: scope.outcome };
+  }
+
+  /**
+   * Base filters of a latest-basis fetch, in one place so the posture
+   * snapshot and the chain-depth inconclusive pass can't drift apart: test
+   * data, [lowerMs, toMs], the code clause, org, filter-bar clauses.
+   */
+  private buildPostureFilters(lowerMs: number, toMs: number, codeFilter: any, org: string | undefined, clauses: any[]): any[] {
+    const filters: any[] = [
+      this.buildTestDataFilter(),
+      {
+        range: {
+          'routing.event_time': {
+            gte: new Date(lowerMs).toISOString(),
+            lte: new Date(toMs).toISOString(),
+          },
+        },
+      },
+      codeFilter,
+    ];
+    const orgFilter = this.buildOrgFilter(org);
+    if (orgFilter) filters.push(orgFilter);
+    filters.push(...clauses);
+    return filters;
+  }
+
+  /** Latest inconclusive bundle run per any-stage pair, served from its own short cache. */
+  private getBundleInconclusiveRuns(scope: PostureScope): Promise<Map<string, number>> {
+    const key = JSON.stringify({ ...scope.keyBase, kind: 'bundle-inconclusive' });
+    return this.inconclusiveCache.get(key, () => this.fetchBundleInconclusiveRuns(scope));
+  }
+
+  /**
+   * pairKey -> newest event_time of a non-cyber-hygiene bundle run in the
+   * freshness window that has a stage which is neither conclusive nor Skipped
+   * (e.g. 999 error, 260 ASR blocked pre-execution). Same window, org,
+   * filter-bar and risk-acceptance clauses as the posture snapshot; no
+   * sub-aggregations, so pages can be PAIR_PAGE_SIZE.
+   */
+  private async fetchBundleInconclusiveRuns(scope: PostureScope): Promise<Map<string, number>> {
+    const filters = this.buildPostureFilters(
+      scope.window.fromMs,
+      scope.window.toMs,
+      { bool: { must_not: [{ terms: { 'event.ERROR': this.CHAIN_SETTLED_CODES } }] } },
+      scope.org,
+      scope.clauses,
+    );
+    filters.push({ exists: { field: 'event.ERROR' } }, this.PER_BUNDLE_FILTER);
+    if (scope.exclusionFilter) filters.push(scope.exclusionFilter);
+    const latest = new Map<string, number>();
+    await this.paginateComposite(filters, 'bundle_inconclusive', this.PAIR_PAGE_SIZE, this.BUNDLE_RUN_SOURCES, {}, (b) => {
+      const ts = parseEsTime(b.key?.ts);
+      if (!Number.isFinite(ts)) return;
+      const key = bundlePairKey(b.key.oid, String(b.key.bundle), String(b.key.host));
+      const cur = latest.get(key);
+      if (cur === undefined || ts > cur) latest.set(key, ts);
+    });
+    return latest;
   }
 
   private async fetchPostureSnapshot(
@@ -1321,21 +1496,7 @@ export class ElasticsearchService {
     spec: PostureShapeSpec,
   ): Promise<PostureSnapshot> {
     const lowerMs = spec.lookback ? window.fromMs - window.freshnessMs : window.fromMs;
-    const filters: any[] = [
-      this.buildTestDataFilter(),
-      {
-        range: {
-          'routing.event_time': {
-            gte: new Date(lowerMs).toISOString(),
-            lte: new Date(window.toMs).toISOString(),
-          },
-        },
-      },
-      this.buildConclusiveResultsFilter(),
-    ];
-    const orgFilter = this.buildOrgFilter(org);
-    if (orgFilter) filters.push(orgFilter);
-    filters.push(...clauses);
+    const filters = this.buildPostureFilters(lowerMs, window.toMs, this.buildConclusiveResultsFilter(), org, clauses);
 
     const fetchOpts: PairFetchOptions = { withMetadata: spec.withMetadata, latestOnly: spec.latestOnly };
     if (!exclusionFilter) {
@@ -2779,6 +2940,153 @@ export class ElasticsearchService {
       .slice(0, 50);
   }
 
+  /**
+   * Threat actor coverage, basis=latest: per actor, the share of its test x
+   * endpoint pairs whose latest result is protected (combined verdict), worst
+   * first. Pairs without a threat actor are left out.
+   */
+  async getThreatActorCoverageLatest(params: AnalyticsQueryParams & Partial<ExtendedAnalyticsQueryParams>): Promise<ThreatActorCoverageItem[]> {
+    const pairs = await this.getLatestPairs(params);
+    const byActor = new Map<string, PairRun[]>();
+    for (const p of pairs) {
+      if (!p.threatActor) continue;
+      const list = byActor.get(p.threatActor);
+      if (list) list.push(p);
+      else byActor.set(p.threatActor, [p]);
+    }
+    const items: ThreatActorCoverageItem[] = [];
+    for (const [threatActor, actorPairs] of byActor) {
+      const s = summarizePairs(actorPairs);
+      if (s.score === null) continue;
+      const lastTs = actorPairs.reduce((m, p) => Math.max(m, p.ts), Number.NEGATIVE_INFINITY);
+      items.push({
+        threatActor,
+        coverage: s.score,
+        testCount: new Set(actorPairs.map(p => p.testName)).size,
+        protectedCount: s.protectedCount,
+        totalExecutions: s.pairCount,
+        pairCount: s.pairCount,
+        lastTestedAt: new Date(lastTs).toISOString(),
+      });
+    }
+    return items.sort((a, b) =>
+      a.coverage - b.coverage || b.totalExecutions - a.totalExecutions || a.threatActor.localeCompare(b.threatActor));
+  }
+
+  /**
+   * Per-technique outcomes, basis=latest: each per-stage pair under each of
+   * its techniques counts as blocked (is_protected), detected-only (combined
+   * but not strict) or got through. Always per-stage, for the same reason as
+   * getTechniqueDistributionLatest. Every technique is returned (no top-N).
+   */
+  async getTechniqueOutcomes(params: AnalyticsQueryParams & Partial<ExtendedAnalyticsQueryParams>): Promise<TechniqueOutcomeItem[]> {
+    const pairs = await this.getLatestPairs({ ...params, scoringMode: 'all-stages' });
+    const byTechnique = new Map<string, { protected: number; detected: number; unprotected: number; lastTs: number }>();
+    for (const p of pairs) {
+      for (const technique of new Set(p.techniques)) {
+        let t = byTechnique.get(technique);
+        if (!t) {
+          t = { protected: 0, detected: 0, unprotected: 0, lastTs: Number.NEGATIVE_INFINITY };
+          byTechnique.set(technique, t);
+        }
+        if (p.strictProtected) t.protected++;
+        else if (p.protected) t.detected++;
+        else t.unprotected++;
+        if (p.ts > t.lastTs) t.lastTs = p.ts;
+      }
+    }
+    const items: TechniqueOutcomeItem[] = [];
+    for (const [technique, t] of byTechnique) {
+      items.push({
+        technique,
+        protected: t.protected,
+        detected: t.detected,
+        unprotected: t.unprotected,
+        lastTestedAt: new Date(t.lastTs).toISOString(),
+      });
+    }
+    const total = (i: TechniqueOutcomeItem) => i.protected + i.detected + i.unprotected;
+    return items.sort((a, b) => total(b) - total(a) || a.technique.localeCompare(b.technique));
+  }
+
+  /**
+   * How deep attack chains get, basis=latest. A chain is the latest run of a
+   * non-cyber-hygiene bundle on a host: the any-stage bundle pairs the Defense
+   * Score counts, from the same snapshot, so every filter-bar param applies
+   * and the date range is the freshness window. Standalone tests and
+   * cyber-hygiene controls are not chains and are left out.
+   * The f0_library orchestrators stop at the first blocked stage and ingest
+   * the rest as Skipped (exit 0, not conclusive), so the stages that ran are
+   * the run's conclusive docs: a run with a blocked stage was blocked at stage
+   * stagesRun (4 and deeper share the 4+ bucket); otherwise it ran end to end.
+   * A detection without a block doesn't stop a chain. Stages carry no order,
+   * so alertedNotBlocked is "a detected stage other than the blocking one",
+   * which, because the chain stopped at the block, is an earlier stage.
+   * A run with a stage that is neither conclusive nor Skipped (999 error, 260
+   * ASR blocked pre-execution) also stops the chain, but not because a
+   * defense blocked that stage: when such a run is the pair's latest (its
+   * time >= the latest conclusive run's), the pair is `inconclusive` and in
+   * no bucket. That also covers a newest run that errored at stage 1, which
+   * has no conclusive docs and would otherwise leave an older run standing.
+   * Inconclusive pairs are counted only when the outcome filters let
+   * inconclusive results through (no result=protected|unprotected, no
+   * errorCodes/errorNames: their codes aren't fetched).
+   */
+  async getChainDepth(params: AnalyticsQueryParams & Partial<ExtendedAnalyticsQueryParams>): Promise<ChainDepthResponse> {
+    const scope = await this.resolvePostureScope({ ...params, scoringMode: 'any-stage' });
+    const [{ window, runs, outcome }, inconclusiveRuns] = await Promise.all([
+      this.latestPostureFor(scope, 'metadata'),
+      this.getBundleInconclusiveRuns(scope),
+    ]);
+
+    const inconclusiveKeys = new Set(inconclusiveRuns.keys());
+    const settled: PairRun[] = [];
+    for (const p of latestPairsAsOf(runs, window.toMs, window.freshnessMs)) {
+      if (!isChainRun(p)) continue;
+      const erroredTs = inconclusiveRuns.get(p.pairKey);
+      if (erroredTs !== undefined && erroredTs >= p.ts) continue; // latest run is inconclusive
+      inconclusiveKeys.delete(p.pairKey);
+      settled.push(p);
+    }
+    const result = outcome.result ?? 'all';
+    const showInconclusive = (result === 'all' || result === 'inconclusive') && !outcome.errorCodes && !outcome.errorNames;
+
+    const stages = [1, 2, 3, 4] as const;
+    const buckets = stages.map(stage => ({ stage, blocked: 0, alertedNotBlocked: 0, names: new Set<string>() }));
+    const endToEndNames = new Set<string>();
+    let chains = 0;
+    let endToEnd = 0;
+    let endToEndAlerted = 0;
+    for (const p of applyOutcomeFilters(settled, outcome)) {
+      if (!isChainRun(p)) continue;
+      chains++;
+      if (p.strictProtected) {
+        const bucket = buckets[Math.min(Math.max(p.stagesRun, 1), 4) - 1];
+        bucket.blocked++;
+        if (p.alertedUnblocked) bucket.alertedNotBlocked++;
+        if (p.testName) bucket.names.add(p.testName);
+      } else {
+        endToEnd++;
+        if (p.alertedUnblocked) endToEndAlerted++;
+        if (p.testName) endToEndNames.add(p.testName);
+      }
+    }
+    const sorted = (names: Set<string>) => [...names].sort((a, b) => a.localeCompare(b));
+    return {
+      chains,
+      buckets: buckets.map((b): ChainDepthBucket => ({
+        stage: b.stage,
+        blocked: b.blocked,
+        alertedNotBlocked: b.alertedNotBlocked,
+        bundleNames: sorted(b.names),
+      })),
+      endToEnd,
+      endToEndAlerted,
+      endToEndBundleNames: sorted(endToEndNames),
+      inconclusive: showInconclusive ? inconclusiveKeys.size : 0,
+    };
+  }
+
   // Get canonical test count (stable denominator for coverage calculations)
   // Returns all unique tests seen in the last 90 days
   async getCanonicalTestCount(params?: { org?: string; days?: number }): Promise<CanonicalTestCountResponse> {
@@ -2983,6 +3291,143 @@ export class ElasticsearchService {
       errorCount,
       conclusiveCount,
       totalTestActivity,
+    };
+  }
+
+  /**
+   * Execution activity for the dashboard cadence card: per-UTC-day counts
+   * (protected / got through / inconclusive) plus 7-day headline numbers.
+   * Fixed recent window, counted per result document (bundle stages count
+   * individually). Days are zero-filled, oldest first.
+   *
+   * Counted documents are real test results only: the test-data filter, no
+   * upload confirmations (exit 200) and no skipped bundle stages (exit 0 on a
+   * bundle-control document — a chain stopped at stage 1 must not draw its
+   * unreached stages as inconclusive). Protected = conclusive AND (blocked OR
+   * detected); got through = conclusive AND NOT protected; inconclusive = the
+   * rest. The 7-day numbers cover the last 7 UTC days (today included), i.e.
+   * exactly the last 7 bars.
+   */
+  async getExecutionActivity(params: { org?: string; days?: number } = {}): Promise<ExecutionActivityResponse> {
+    const requested = Number.isFinite(params.days) ? Math.trunc(params.days as number) : 14;
+    const days = Math.max(1, Math.min(90, requested));
+    // The query window must also cover the 7-day headline numbers.
+    const spanDays = Math.max(days, 7);
+    const todayMs = Math.floor(Date.now() / DAY_MS) * DAY_MS;
+    const dayKeys: string[] = [];
+    for (let i = spanDays - 1; i >= 0; i--) {
+      dayKeys.push(new Date(todayMs - i * DAY_MS).toISOString().slice(0, 10));
+    }
+
+    const orgFilter = this.buildOrgFilter(params.org);
+    // Real test results only (see the doc comment above).
+    const countedFilter = {
+      bool: {
+        filter: [this.buildTestDataFilter(), ...(orgFilter ? [orgFilter] : [])],
+        must_not: [
+          { term: { 'event.ERROR': this.UPLOAD_CONFIRMATION_CODE } },
+          {
+            bool: {
+              filter: [
+                { term: { 'f0rtika.is_bundle_control': true } },
+                { term: { 'event.ERROR': 0 } },
+              ],
+            },
+          },
+        ],
+      },
+    };
+    const filters: any[] = [
+      { range: { 'routing.event_time': { gte: `now-${spanDays - 1}d/d` } } },
+      countedFilter,
+    ];
+
+    const conclusive = { terms: { 'event.ERROR': this.CONCLUSIVE_ERROR_CODES } };
+    const detected = {
+      bool: {
+        should: [
+          { term: { 'f0rtika.is_protected': true } },
+          { term: { 'f0rtika.defender_detected': true } },
+          { term: { 'f0rtika.crowdstrike_detected': true } },
+        ],
+        minimum_should_match: 1,
+      },
+    };
+    const protectedFilter = { bool: { filter: [conclusive, detected] } };
+    const unprotectedFilter = { bool: { filter: [conclusive], must_not: [detected] } };
+    const inconclusiveFilter = { bool: { must_not: [conclusive] } };
+
+    const response = await this.client.search({
+      index: this.settings.indexPattern,
+      size: 0,
+      query: { bool: { filter: filters } },
+      aggs: {
+        per_day: {
+          date_histogram: {
+            field: 'routing.event_time',
+            calendar_interval: 'day',
+            min_doc_count: 0,
+            extended_bounds: { min: dayKeys[0], max: dayKeys[dayKeys.length - 1] },
+          },
+          aggs: {
+            protected: { filter: protectedFilter },
+            unprotected: { filter: unprotectedFilter },
+            inconclusive: { filter: inconclusiveFilter },
+          },
+        },
+        // All-time newest result for the org: global ignores the window filter above
+        // (the query's only other filter is the counted filter, re-applied here).
+        all_time: {
+          global: {},
+          aggs: {
+            org: {
+              filter: countedFilter,
+              aggs: { last: { max: { field: 'routing.event_time' } } },
+            },
+          },
+        },
+        last_7d: {
+          filter: { range: { 'routing.event_time': { gte: 'now-6d/d' } } },
+          aggs: {
+            endpoints: { cardinality: { field: 'routing.hostname' } },
+            conclusive: { filter: conclusive },
+            protected: { filter: protectedFilter },
+          },
+        },
+      },
+    });
+
+    const aggs = response.aggregations as any;
+    const byDay = new Map<string, { protected: number; unprotected: number; inconclusive: number }>();
+    for (const b of (aggs?.per_day?.buckets ?? []) as any[]) {
+      const key = typeof b.key === 'number'
+        ? new Date(b.key).toISOString().slice(0, 10)
+        : String(b.key_as_string ?? b.key).slice(0, 10);
+      byDay.set(key, {
+        protected: b.protected?.doc_count ?? 0,
+        unprotected: b.unprotected?.doc_count ?? 0,
+        inconclusive: b.inconclusive?.doc_count ?? 0,
+      });
+    }
+    const dayRows = dayKeys.slice(-days).map((date) => ({
+      date,
+      ...(byDay.get(date) ?? { protected: 0, unprotected: 0, inconclusive: 0 }),
+    }));
+
+    const last = aggs?.all_time?.org?.last;
+    const lastExecutionAt: string | null =
+      last?.value != null ? (last.value_as_string ?? new Date(last.value).toISOString()) : null;
+
+    const w = aggs?.last_7d;
+    const conclusive7d: number = w?.conclusive?.doc_count ?? 0;
+    const protected7d: number = w?.protected?.doc_count ?? 0;
+
+    return {
+      days: dayRows,
+      lastExecutionAt,
+      executions7d: w?.doc_count ?? 0,
+      protectedPct7d: conclusive7d > 0 ? Math.round((protected7d / conclusive7d) * 1000) / 10 : null,
+      endpointsTested7d: w?.endpoints?.value ?? 0,
     };
   }
 }

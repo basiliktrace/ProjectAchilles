@@ -13,7 +13,7 @@ import StackedBarChart from './components/StackedBarChart';
 import TechniqueDistributionCard from './components/TechniqueDistributionCard';
 import CoverageTreemap from './components/CoverageTreemap';
 import DefenseScoreByHostChart from './components/DefenseScoreByHostChart';
-import CategoryBreakdownChart from './components/CategoryBreakdownChart';
+import ChainDepthCard from './components/ChainDepthCard';
 import TestActivityCard from './components/TestActivityCard';
 import ExecutionsDataTable from './components/ExecutionsDataTable';
 import { Toast } from '@/components/shared/ui/Alert';
@@ -41,7 +41,7 @@ import type {
   TechniqueDistributionItem,
   HostTestMatrixCell,
   FilterOption,
-  CategorySubcategoryBreakdownItem,
+  ChainDepthResponse,
   EnrichedTestExecution,
   DefenseScoreByHostItem,
   ErrorRateTrendDataPoint,
@@ -185,7 +185,8 @@ export default function AnalyticsDashboardPage() {
   const [hostTestMatrix, setHostTestMatrix] = useState<HostTestMatrixCell[]>([]);
 
   // New visualization data
-  const [categoryBreakdown, setCategoryBreakdown] = useState<CategorySubcategoryBreakdownItem[]>([]);
+  // null after a failed fetch (the card shows its error state)
+  const [chainDepth, setChainDepth] = useState<ChainDepthResponse | null>(null);
   const [recentTests, setRecentTests] = useState<EnrichedTestExecution[]>([]);
   const [recentTestsTotal, setRecentTestsTotal] = useState<number | null>(null);
   const [defenseScoreByHost, setDefenseScoreByHost] = useState<DefenseScoreByHostItem[]>([]);
@@ -301,7 +302,7 @@ export default function AnalyticsDashboardPage() {
         coverage,
         techDist,
         matrix,
-        categoryData,
+        chainDepthData,
         recentTestsData,
         hostScores,
         errorRateData,
@@ -315,7 +316,11 @@ export default function AnalyticsDashboardPage() {
         analyticsApi.getTestCoverage(scoreParams),
         analyticsApi.getTechniqueDistribution(scoreParams),
         analyticsApi.getHostTestMatrix(params),
-        analyticsApi.getDefenseScoreByCategorySubcategory(scoreParams),
+        // Its own failure only blanks its card, not the whole dashboard.
+        analyticsApi.getChainDepth(scoreParams).catch((err: unknown) => {
+          console.error('Failed to load chain depth:', err);
+          return null;
+        }),
         analyticsApi.getPaginatedExecutions({ ...params, pageSize: 3, sortField: 'routing.event_time', sortOrder: 'desc' }),
         analyticsApi.getDefenseScoreByHostname(scoreParams),
         analyticsApi.getErrorRate(params),
@@ -339,7 +344,7 @@ export default function AnalyticsDashboardPage() {
       setTestCoverageData(coverage.slice(0, 10));
       setTechniqueDistData(techDist.slice(0, 10));
       setHostTestMatrix(matrix);
-      setCategoryBreakdown(categoryData);
+      setChainDepth(chainDepthData);
       setRecentTests(recentTestsData.data);
       setRecentTestsTotal(recentTestsData.pagination.totalItems);
       setDefenseScoreByHost(hostScores);
@@ -660,7 +665,7 @@ export default function AnalyticsDashboardPage() {
       <div>
         <PageHeader
           title="Analytics"
-          description="Detection depth across error types, techniques, and categories"
+          description="Detection depth across error types, techniques, and attack chains"
         >
           <Button
             variant={filterState.isExpanded || filterState.activeFilterCount > 0 ? 'secondary' : 'outline'}
@@ -765,10 +770,13 @@ export default function AnalyticsDashboardPage() {
                   handleTabChange('executions');
                 }}
               />
-              <CategoryBreakdownChart
-                data={categoryBreakdown}
+              <ChainDepthCard
+                data={chainDepth}
                 loading={loadingDashboard}
-                title="Score by category"
+                onRowClick={(bundleNames) => {
+                  filterState.setBundleNames(bundleNames);
+                  handleTabChange('executions');
+                }}
               />
             </div>
 
