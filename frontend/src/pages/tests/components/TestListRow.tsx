@@ -4,6 +4,7 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { targetLabel } from '@/utils/platformLabels';
 import { cn } from '@/lib/utils';
 import type { FleetResult } from './fleetResult';
+import { techniqueIds } from './techniqueIds';
 
 /*
  * Column tracks, shared by the header and every row so they cannot drift.
@@ -75,7 +76,8 @@ export function TestListRow({
 }: TestListRowProps) {
   const primary = selectMode ? onToggleSelect : onOpen;
   const stageCount = test.stageCount ?? test.stages.length;
-  const extraTechniques = test.techniques.length - VISIBLE_TECHNIQUES;
+  const techniques = techniqueIds(test.techniques);
+  const extraTechniques = techniques.length - VISIBLE_TECHNIQUES;
   const platforms = test.target?.length ? test.target.map(targetLabel).join(', ') : '—';
 
   return (
@@ -117,7 +119,7 @@ export function TestListRow({
       </div>
 
       <div className="hidden min-w-0 flex-nowrap items-center gap-1 overflow-hidden 2xl:flex">
-        {test.techniques.slice(0, VISIBLE_TECHNIQUES).map((technique) => (
+        {techniques.slice(0, VISIBLE_TECHNIQUES).map((technique) => (
           <span key={technique} className="shrink-0 whitespace-nowrap rounded bg-overlay px-1.5 py-px font-mono text-[11px] text-muted">
             {technique}
           </span>

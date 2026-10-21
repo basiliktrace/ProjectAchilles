@@ -63,6 +63,31 @@ describe('TestListRow', () => {
     expect(screen.getByText('+2')).toBeTruthy();
   });
 
+  it('dedupes a bare ID and its named variant into one chip with no +n', () => {
+    renderRow({}, { techniques: ['T1003.001', 'T1003.001 (OS Credential Dumping: LSASS Memory)'] });
+    expect(screen.getByText('T1003.001')).toBeTruthy();
+    expect(screen.queryByText(/LSASS Memory/)).toBeNull();
+    expect(screen.queryByText(/^\+\d+$/)).toBeNull();
+  });
+
+  it('counts +n over unique technique IDs only', () => {
+    renderRow({}, {
+      techniques: [
+        'T1562.001 - Impair Defenses: Disable or Modify Tools',
+        'T1562.001',
+        'T1219 (Remote Access Software)',
+        'T1219',
+        'T1105',
+        'T1105 (Ingress Tool Transfer)',
+        'T1486',
+      ],
+    });
+    expect(screen.getByText('T1562.001')).toBeTruthy();
+    expect(screen.getByText('T1219')).toBeTruthy();
+    expect(screen.queryByText('T1105')).toBeNull();
+    expect(screen.getByText('+2')).toBeTruthy();
+  });
+
   it('shows platform labels, stage count and score', () => {
     renderRow();
     expect(screen.getByText('Windows, Linux')).toBeTruthy();
