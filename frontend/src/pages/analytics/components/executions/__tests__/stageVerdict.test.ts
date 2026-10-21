@@ -155,6 +155,38 @@ describe('stageVerdict', () => {
     expect(stageVerdict(s2, [s1, s2]).body).toBe('The chain stopped before this stage.');
   });
 
+  it('skipped after an errored stage names that stage, not an earlier block', () => {
+    const s1 = mk({ control_validator: 'Stage 1', error_code: 126 });
+    const s2 = mk({ control_validator: 'Stage 2', error_code: 999 });
+    const s3 = mk({ control_validator: 'Stage 3', error_code: 0 });
+    const s4 = mk({ control_validator: 'Stage 4', error_code: 0 });
+    const all = [s1, s2, s3, s4];
+    expect(stageVerdict(s3, all).body).toBe('The chain stopped at stage 2, which ended with an error.');
+    expect(stageVerdict(s4, all).body).toBe('The chain stopped at stage 2, which ended with an error.');
+    expect(stageVerdict(s3, all).title).toBe('Did not run.');
+  });
+
+  it('skipped after a not-run (260) stage', () => {
+    const s1 = mk({ control_validator: 'Stage 1', error_code: 126 });
+    const s2 = mk({ control_validator: 'Stage 2', error_code: 260 });
+    const s3 = mk({ control_validator: 'Stage 3', error_code: 0 });
+    expect(stageVerdict(s3, [s1, s2, s3]).body).toBe(
+      'The chain stopped at stage 2, where a control blocked the test binary before it ran.',
+    );
+  });
+
+  it('skipped uses numeric stage ordering (Stage 10 after Stage 9)', () => {
+    const s9 = mk({ control_validator: 'Stage 9', error_code: 105 });
+    const s10 = mk({ control_validator: 'Stage 10', error_code: 0 });
+    expect(stageVerdict(s10, [s9, s10]).body).toBe('The chain stopped at stage 9, where a control blocked it.');
+  });
+
+  it('skipped after a detected stage keeps the generic copy', () => {
+    const s1 = mk({ control_validator: 'Stage 1', error_code: 101, defender_stage_detected: true });
+    const s2 = mk({ control_validator: 'Stage 2', error_code: 0 });
+    expect(stageVerdict(s2, [s1, s2]).body).toBe('The chain stopped before this stage.');
+  });
+
   it('falls back to bundle flags when stage flags are undefined', () => {
     const v = stageVerdict(mk({ defender_detected: true }), []);
     expect(v.kind).toBe('detected');

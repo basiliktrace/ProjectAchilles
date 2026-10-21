@@ -63,17 +63,26 @@ function preventedFallback(exec: EnrichedTestExecution): string {
   return 'An EDR reports it stopped it.';
 }
 
-function nearestBlockedStageNumber(exec: EnrichedTestExecution, siblings: EnrichedTestExecution[]): string | null {
+/**
+ * Why a skipped stage did not run. "Stop" orchestrators end the chain at the first block or the
+ * first error, so the cause is the nearest earlier stage that was not itself skipped.
+ */
+function skippedBody(exec: EnrichedTestExecution, siblings: EnrichedTestExecution[]): string {
+  const generic = 'The chain stopped before this stage.';
   const idx = siblings.indexOf(exec);
-  if (idx <= 0) return null;
   for (let i = idx - 1; i >= 0; i--) {
-    const kind = classifyExecution(siblings[i]);
-    if (kind === 'protected' || kind === 'prevented') {
-      const m = /^Stage (\d+)$/.exec(siblings[i].control_validator ?? '');
-      return m ? m[1] : null;
-    }
+    const prev = siblings[i];
+    const kind = stageKind(prev);
+    if (kind === 'skipped') continue;
+    const m = /^Stage (\d+)$/.exec(prev.control_validator ?? '');
+    if (!m) return generic;
+    const n = m[1];
+    if (kind === 'protected' || kind === 'prevented') return `The chain stopped at stage ${n}, where a control blocked it.`;
+    if (kind === 'not-run') return `The chain stopped at stage ${n}, where a control blocked the test binary before it ran.`;
+    if (kind === 'inconclusive') return `The chain stopped at stage ${n}, which ended with an error.`;
+    return generic;
   }
-  return null;
+  return generic;
 }
 
 export function stageVerdict(exec: EnrichedTestExecution, siblings: EnrichedTestExecution[]): StageVerdict {
@@ -113,14 +122,8 @@ export function stageVerdict(exec: EnrichedTestExecution, siblings: EnrichedTest
         title: 'Ran to completion with no block and no alert.',
         body: 'Nothing on the endpoint reacted to this stage.',
       };
-    case 'skipped': {
-      const n = nearestBlockedStageNumber(exec, siblings);
-      return {
-        kind,
-        title: 'Did not run.',
-        body: n ? `The chain stopped at stage ${n}, where a control blocked it.` : 'The chain stopped before this stage.',
-      };
-    }
+    case 'skipped':
+      return { kind, title: 'Did not run.', body: skippedBody(exec, siblings) };
     default: {
       const evidence = preventionSentence(exec);
       return {
