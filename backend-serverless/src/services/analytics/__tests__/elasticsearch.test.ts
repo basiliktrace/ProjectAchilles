@@ -3104,7 +3104,7 @@ describe('elasticsearch.ts', () => {
           bundleMeta: { b1: { name: 'Chain One' } },
         });
         const res = await createService().getChainDepth(params);
-        expect(res).toEqual({ chains: 1, buckets: emptyBuckets, endToEnd: 1, endToEndAlerted: 0, endToEndBundleNames: ['Chain One'], endToEndAlertedBundleNames: [], endToEndUndetectedBundleNames: ['Chain One'], inconclusive: 0 });
+        expect(res).toEqual({ chains: 1, buckets: emptyBuckets, endToEnd: 1, endToEndAlerted: 0, endToEndBundleNames: ['Chain One'], endToEndAlertedBundleNames: [], endToEndUndetectedBundleNames: ['Chain One'], inconclusive: 0, blockedBeforeRun: 0, blockedBeforeRunBundleNames: [], stageErrors: 0 });
       });
 
       it('a detection-only stage does not stop the chain: end to end, alerted', async () => {
@@ -3188,7 +3188,7 @@ describe('elasticsearch.ts', () => {
           meta: { 'standalone-1': { name: 'Standalone' }, 'ch-bundle::CH-DEF-001': { name: 'Defender on', category: 'cyber-hygiene' } },
         });
         const res = await createService().getChainDepth(params);
-        expect(res).toEqual({ chains: 0, buckets: emptyBuckets, endToEnd: 0, endToEndAlerted: 0, endToEndBundleNames: [], endToEndAlertedBundleNames: [], endToEndUndetectedBundleNames: [], inconclusive: 0 });
+        expect(res).toEqual({ chains: 0, buckets: emptyBuckets, endToEnd: 0, endToEndAlerted: 0, endToEndBundleNames: [], endToEndAlertedBundleNames: [], endToEndUndetectedBundleNames: [], inconclusive: 0, blockedBeforeRun: 0, blockedBeforeRunBundleNames: [], stageErrors: 0 });
         // Chains come from the non-cyber-hygiene bundle composite only.
         const bundleQuery = searchesWith('bundle_runs')[0];
         expect(bundleQuery.query.bool.filter).toContainEqual((createService() as any).PER_BUNDLE_FILTER);
@@ -3221,9 +3221,67 @@ describe('elasticsearch.ts', () => {
       });
 
       /** A run with a non-conclusive, non-skipped stage (999 error, 260 ASR pre-execution block…). */
-      function errored(r: { bundle: string; host: string; ts: string; oid?: string }) {
-        return { key: { oid: r.oid ?? 'org-a', bundle: r.bundle, host: r.host, ts: Date.parse(r.ts) }, doc_count: 1 };
+      function errored(r: { bundle: string; host: string; ts: string; oid?: string; preExec?: boolean; name?: string }) {
+        return {
+          key: { oid: r.oid ?? 'org-a', bundle: r.bundle, host: r.host, ts: Date.parse(r.ts) },
+          doc_count: 1,
+          pre_exec: { doc_count: r.preExec ? 1 : 0 },
+          bundle_name: { buckets: r.name ? [{ key: r.name, doc_count: 1 }] : [] },
+        };
       }
+
+      describe('blocked before running vs stage errors', () => {
+        it('a stage blocked before it ran (260) counts as blockedBeforeRun, with its bundle name', async () => {
+          routeSearch({
+            bundlePages: [[chain({ bundle: 'b1', host: 'h1', ts: '2025-01-20T09:00:00Z', stagesRun: 1 })]],
+            inconclusivePages: [[errored({ bundle: 'b1', host: 'h1', ts: '2025-01-20T09:00:00Z', preExec: true, name: 'Chain One' })]],
+          });
+          const res = await createService().getChainDepth(params);
+          expect(res).toMatchObject({ blockedBeforeRun: 1, blockedBeforeRunBundleNames: ['Chain One'], stageErrors: 0, inconclusive: 1, chains: 0 });
+        });
+
+        it('a stage error (999) counts as stageErrors', async () => {
+          routeSearch({
+            bundlePages: [[chain({ bundle: 'b1', host: 'h1', ts: '2025-01-20T09:00:00Z', stagesRun: 1 })]],
+            inconclusivePages: [[errored({ bundle: 'b1', host: 'h1', ts: '2025-01-20T09:00:00Z', name: 'Chain One' })]],
+          });
+          const res = await createService().getChainDepth(params);
+          expect(res).toMatchObject({ blockedBeforeRun: 0, blockedBeforeRunBundleNames: [], stageErrors: 1, inconclusive: 1 });
+        });
+
+        it('a run with both a 260 and a 999 stage counts as blocked before running', async () => {
+          const both = { ...errored({ bundle: 'b1', host: 'h1', ts: '2025-01-20T09:00:00Z', preExec: true, name: 'Chain One' }), doc_count: 2 };
+          routeSearch({ bundlePages: [[]], inconclusivePages: [[both]] });
+          const res = await createService().getChainDepth(params);
+          expect(res).toMatchObject({ blockedBeforeRun: 1, stageErrors: 0 });
+        });
+
+        it('a newer pre-execution block supersedes an older conclusive run', async () => {
+          routeSearch({
+            bundlePages: [[chain({ bundle: 'b1', host: 'h1', ts: '2025-01-10T09:00:00Z', stagesRun: 1, blocked: true })]],
+            inconclusivePages: [[errored({ bundle: 'b1', host: 'h1', ts: '2025-01-20T09:00:00Z', preExec: true, name: 'Chain One' })]],
+          });
+          const res = await createService().getChainDepth(params);
+          expect(res.buckets[0].blocked).toBe(0);
+          expect(res.blockedBeforeRun).toBe(1);
+        });
+
+        it('both counts read 0 under a result=protected filter', async () => {
+          routeSearch({
+            bundlePages: [[]],
+            inconclusivePages: [[errored({ bundle: 'b1', host: 'h1', ts: '2025-01-20T09:00:00Z', preExec: true, name: 'Chain One' })]],
+          });
+          const res = await createService().getChainDepth({ ...params, result: 'protected' });
+          expect(res).toMatchObject({ blockedBeforeRun: 0, stageErrors: 0, inconclusive: 0 });
+        });
+
+        it('the inconclusive composite asks which runs had a 260 stage', async () => {
+          routeSearch({ bundlePages: [[]] });
+          await createService().getChainDepth(params);
+          const req = searchesWith('bundle_inconclusive')[0];
+          expect(req.aggs.bundle_inconclusive.aggs.pre_exec).toEqual({ filter: { term: { 'event.ERROR': 260 } } });
+        });
+      });
 
       describe('inconclusive chains (R8)', () => {
         it('stage 1 = 101, stage 2 = 999 (error): inconclusive, not end to end', async () => {
@@ -3233,7 +3291,7 @@ describe('elasticsearch.ts', () => {
             bundleMeta: { b1: { name: 'Chain One' } },
           });
           const res = await createService().getChainDepth(params);
-          expect(res).toEqual({ chains: 0, buckets: emptyBuckets, endToEnd: 0, endToEndAlerted: 0, endToEndBundleNames: [], endToEndAlertedBundleNames: [], endToEndUndetectedBundleNames: [], inconclusive: 1 });
+          expect(res).toEqual({ chains: 0, buckets: emptyBuckets, endToEnd: 0, endToEndAlerted: 0, endToEndBundleNames: [], endToEndAlertedBundleNames: [], endToEndUndetectedBundleNames: [], inconclusive: 1, blockedBeforeRun: 0, blockedBeforeRunBundleNames: [], stageErrors: 1 });
         });
 
         it('stage 1 = 101, stage 2 = 260 (ASR blocked pre-execution): inconclusive, not end to end', async () => {
@@ -3310,8 +3368,8 @@ describe('elasticsearch.ts', () => {
             { host: { terms: { field: 'routing.hostname' } } },
             { ts: { terms: { field: 'routing.event_time' } } },
           ]);
-          expect(req.aggs.bundle_inconclusive.composite.size).toBe(10000);
-          expect(req.aggs.bundle_inconclusive.aggs).toBeUndefined();
+          expect(req.aggs.bundle_inconclusive.composite.size).toBe(1000); // sub-aggregations: bundle-run page size
+          expect(Object.keys(req.aggs.bundle_inconclusive.aggs)).toEqual(['pre_exec', 'bundle_name']);
         });
 
         it('result=protected|unprotected shows no inconclusive chains; a superseded pair still stays out', async () => {

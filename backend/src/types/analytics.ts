@@ -351,6 +351,11 @@ export interface ChainDepthResponse {
   endToEndAlertedBundleNames: string[];    // end-to-end chains where an EDR alerted
   endToEndUndetectedBundleNames: string[]; // end-to-end chains with no alert (a bundle can be in both)
   inconclusive: number;          // chains whose latest run had an errored / pre-execution-blocked stage; in no bucket
+  /** Of those, chains whose latest run had a stage blocked before it ran (260): the technique was not evaluated. */
+  blockedBeforeRun: number;
+  blockedBeforeRunBundleNames: string[];
+  /** Of those, chains whose latest run had a stage error (e.g. 999). inconclusive = blockedBeforeRun + stageErrors. */
+  stageErrors: number;
 }
 
 // Defense score by hostname item

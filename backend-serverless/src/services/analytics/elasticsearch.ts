@@ -277,6 +277,17 @@ export const TEST_KEY_SCRIPT = {
   lang: 'painless' as const,
 };
 
+/** Exit code for a test binary blocked before it ran (e.g. an ASR prevalence rule). */
+const BLOCKED_PRE_EXECUTION_CODE = 260;
+
+/** Newest inconclusive run of a chain (see fetchBundleInconclusiveRuns). */
+interface InconclusiveRun {
+  ts: number;
+  /** The run had a stage blocked before execution (260). */
+  preExec: boolean;
+  bundleName?: string;
+}
+
 export class ElasticsearchService {
   private client: Client;
   private settings: AnalyticsSettings;
@@ -1015,7 +1026,7 @@ export class ElasticsearchService {
   private readonly CHAIN_SETTLED_CODES = [0, 101, 105, 126, 127, 200];
 
   /** Latest inconclusive bundle run per pair (chain depth): same TTL as the posture snapshots, own small budget. */
-  private readonly inconclusiveCache = new TtlPromiseCache<Map<string, number>>({
+  private readonly inconclusiveCache = new TtlPromiseCache<Map<string, InconclusiveRun>>({
     ttlMs: POSTURE_CACHE_OPTIONS.ttlMs,
     maxEntries: POSTURE_CACHE_OPTIONS.maxEntries,
     maxEntryWeight: INCONCLUSIVE_CACHE_MAX_ENTRIES,
@@ -1454,19 +1465,20 @@ export class ElasticsearchService {
   }
 
   /** Latest inconclusive bundle run per any-stage pair, served from its own short cache. */
-  private getBundleInconclusiveRuns(scope: PostureScope): Promise<Map<string, number>> {
+  private getBundleInconclusiveRuns(scope: PostureScope): Promise<Map<string, InconclusiveRun>> {
     const key = JSON.stringify({ ...scope.keyBase, kind: 'bundle-inconclusive' });
     return this.inconclusiveCache.get(key, () => this.fetchBundleInconclusiveRuns(scope));
   }
 
   /**
-   * pairKey -> newest event_time of a non-cyber-hygiene bundle run in the
-   * freshness window that has a stage which is neither conclusive nor Skipped
-   * (e.g. 999 error, 260 ASR blocked pre-execution). Same window, org,
-   * filter-bar and risk-acceptance clauses as the posture snapshot; no
-   * sub-aggregations, so pages can be PAIR_PAGE_SIZE.
+   * pairKey -> newest non-cyber-hygiene bundle run in the freshness window
+   * that has a stage which is neither conclusive nor Skipped (e.g. 999 error,
+   * 260 blocked before execution), with whether that run had a 260 stage and
+   * the bundle name. Same window, org, filter-bar and risk-acceptance clauses
+   * as the posture snapshot. Two small sub-aggregations, so pages use the
+   * bundle-run size to stay far under the 65,536-bucket limit.
    */
-  private async fetchBundleInconclusiveRuns(scope: PostureScope): Promise<Map<string, number>> {
+  private async fetchBundleInconclusiveRuns(scope: PostureScope): Promise<Map<string, InconclusiveRun>> {
     const filters = this.buildPostureFilters(
       scope.window.fromMs,
       scope.window.toMs,
@@ -1476,13 +1488,19 @@ export class ElasticsearchService {
     );
     filters.push({ exists: { field: 'event.ERROR' } }, this.PER_BUNDLE_FILTER);
     if (scope.exclusionFilter) filters.push(scope.exclusionFilter);
-    const latest = new Map<string, number>();
-    await this.paginateComposite(filters, 'bundle_inconclusive', this.PAIR_PAGE_SIZE, this.BUNDLE_RUN_SOURCES, {}, (b) => {
+    const latest = new Map<string, InconclusiveRun>();
+    const subAggs = {
+      pre_exec: { filter: { term: { 'event.ERROR': BLOCKED_PRE_EXECUTION_CODE } } },
+      bundle_name: { terms: { field: 'f0rtika.bundle_name', size: 1 } },
+    };
+    await this.paginateComposite(filters, 'bundle_inconclusive', this.BUNDLE_RUN_PAGE_SIZE, this.BUNDLE_RUN_SOURCES, subAggs, (b) => {
       const ts = parseEsTime(b.key?.ts);
       if (!Number.isFinite(ts)) return;
       const key = bundlePairKey(b.key.oid, String(b.key.bundle), String(b.key.host));
       const cur = latest.get(key);
-      if (cur === undefined || ts > cur) latest.set(key, ts);
+      if (cur !== undefined && ts <= cur.ts) return;
+      const name = b.bundle_name?.buckets?.[0]?.key;
+      latest.set(key, { ts, preExec: (b.pre_exec?.doc_count ?? 0) > 0, bundleName: name != null ? String(name) : undefined });
     });
     return latest;
   }
@@ -3043,8 +3061,8 @@ export class ElasticsearchService {
     const settled: PairRun[] = [];
     for (const p of latestPairsAsOf(runs, window.toMs, window.freshnessMs)) {
       if (!isChainRun(p)) continue;
-      const erroredTs = inconclusiveRuns.get(p.pairKey);
-      if (erroredTs !== undefined && erroredTs >= p.ts) continue; // latest run is inconclusive
+      const errored = inconclusiveRuns.get(p.pairKey);
+      if (errored !== undefined && errored.ts >= p.ts) continue; // latest run is inconclusive
       inconclusiveKeys.delete(p.pairKey);
       settled.push(p);
     }
@@ -3077,6 +3095,12 @@ export class ElasticsearchService {
       }
     }
     const sorted = (names: Set<string>) => [...names].sort((a, b) => a.localeCompare(b));
+    // A pre-execution block (260) means a control stopped the test binary, so
+    // it wins over a stage error in the same run. The technique was never
+    // evaluated: this is reported separately, never as a blocked stage.
+    const blockedBeforeRun = [...inconclusiveKeys]
+      .map(key => inconclusiveRuns.get(key))
+      .filter((r): r is InconclusiveRun => r !== undefined && r.preExec);
     return {
       chains,
       buckets: buckets.map((b): ChainDepthBucket => ({
@@ -3091,6 +3115,9 @@ export class ElasticsearchService {
       endToEndAlertedBundleNames: sorted(endToEndAlertedNames),
       endToEndUndetectedBundleNames: sorted(endToEndUndetectedNames),
       inconclusive: showInconclusive ? inconclusiveKeys.size : 0,
+      blockedBeforeRun: showInconclusive ? blockedBeforeRun.length : 0,
+      blockedBeforeRunBundleNames: showInconclusive ? sorted(new Set(blockedBeforeRun.flatMap(r => (r.bundleName ? [r.bundleName] : [])))) : [],
+      stageErrors: showInconclusive ? inconclusiveKeys.size - blockedBeforeRun.length : 0,
     };
   }
 
