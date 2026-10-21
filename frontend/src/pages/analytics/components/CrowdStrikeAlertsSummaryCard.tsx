@@ -10,6 +10,7 @@ import {
 } from '@/components/ui/chart';
 import type { CrowdStrikeAlertSummary, CrowdStrikeRecentAlertItem } from '@/services/api/crowdstrike';
 import { formatCrowdStrikeProduct } from '../utils/crowdstrikeProduct';
+import { formatTimeAgo } from '../utils/timeAgo';
 
 interface CrowdStrikeAlertsSummaryCardProps {
   data: CrowdStrikeAlertSummary | null;
@@ -39,15 +40,6 @@ const SEVERITY_LABELS = {
 
 type SeverityKey = keyof typeof SEVERITY_COLORS;
 const SEVERITY_ORDER: readonly SeverityKey[] = ['critical', 'high', 'medium', 'low', 'informational'];
-
-function formatTimeAgo(dateStr: string): string {
-  const diff = Date.now() - new Date(dateStr).getTime();
-  const hours = Math.floor(diff / 3600000);
-  if (hours < 1) return 'Just now';
-  if (hours < 24) return `${hours}h ago`;
-  const days = Math.floor(hours / 24);
-  return `${days}d ago`;
-}
 
 /** Section header + list of alert rows, used for both High and Medium lists. */
 function RecentAlertList({
