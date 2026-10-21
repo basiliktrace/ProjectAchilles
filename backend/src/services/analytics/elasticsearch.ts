@@ -149,6 +149,10 @@ interface ChainRun extends PairRun {
   stagesRun: number;
   /** Some stage was Defender/CrowdStrike-detected without being blocked (is_protected false). */
   alertedUnblocked: boolean;
+  /** "Stage N" numbers of the blocked stages; null when any blocked stage has no such validator. */
+  blockedStages: number[] | null;
+  /** "Stage N" numbers of the detected-but-unblocked stages; null when any has no such validator. */
+  alertedStages: number[] | null;
 }
 
 function isChainRun(run: PairRun): run is ChainRun {
@@ -299,6 +303,42 @@ interface InconclusiveRun {
 const STAGE_VALIDATOR_RE = /^Stage (\d+)$/;
 
 /**
+ * Stage numbers from a filter agg's `stages` terms on control_validator, or
+ * null when a doc in the filter has no "Stage N" validator (older runs) or
+ * the terms didn't cover every doc, so callers fall back to counting stages.
+ */
+function stageNumbers(agg: any): number[] | null {
+  const buckets: any[] = agg?.stages?.buckets ?? [];
+  const numbers: number[] = [];
+  let covered = 0;
+  for (const b of buckets) {
+    const match = STAGE_VALIDATOR_RE.exec(String(b.key));
+    if (!match) return null;
+    numbers.push(Number(match[1]));
+    covered += Number(b.doc_count) || 0;
+  }
+  return covered === (Number(agg?.doc_count) || 0) ? numbers : null;
+}
+
+/**
+ * Where a blocked chain was stopped and whether an earlier stage alerted.
+ * The stop is the lowest-numbered blocked stage, so a chain that keeps
+ * running after a block (LockBit 298cc137) lands where it was first stopped.
+ * Without stage numbers it falls back to the stages that ran, which is the
+ * same stage for orchestrators that stop at the first block.
+ */
+function chainStop(run: ChainRun): { stage: number; alertedBefore: boolean } {
+  if (run.blockedStages && run.blockedStages.length > 0) {
+    const stage = Math.min(...run.blockedStages);
+    const alertedBefore = run.alertedStages
+      ? run.alertedStages.some(n => n < stage)
+      : run.alertedUnblocked;
+    return { stage, alertedBefore };
+  }
+  return { stage: run.stagesRun, alertedBefore: run.alertedUnblocked };
+}
+
+/**
  * Deterministic order for the members of a bundle run. All stages of a run
  * share routing.event_time, so ES returns them in arbitrary order. "Stage N"
  * validators sort numerically first; the rest follow by validator then
@@ -326,6 +366,9 @@ export class ElasticsearchService {
 
   // Conclusive test outcome codes (used for Defense Score)
   private readonly CONCLUSIVE_ERROR_CODES = [101, 105, 126, 127];
+
+  // Distinct control_validator values per bundle run for chain depth (chains have <= 7 stages)
+  private readonly CHAIN_STAGE_TERMS = 20;
 
   // Error codes representing failed/inconclusive test attempts (used for Error Rate)
   private readonly ERROR_CODES = [0, 1, 259, 999];
@@ -1263,7 +1306,11 @@ export class ElasticsearchService {
       this.BUNDLE_RUN_SOURCES,
       {
         combined: this.buildDetectedFilter(),
-        strict: { filter: { term: { 'f0rtika.is_protected': true } } },
+        strict: {
+          filter: { term: { 'f0rtika.is_protected': true } },
+          // Chain depth: which stages blocked ("Stage N" validators).
+          aggs: { stages: { terms: { field: 'f0rtika.control_validator', size: this.CHAIN_STAGE_TERMS } } },
+        },
         // Chain depth: a detection that did not block (the chain went on).
         alerted_unblocked: {
           filter: {
@@ -1276,6 +1323,7 @@ export class ElasticsearchService {
               must_not: [{ term: { 'f0rtika.is_protected': true } }],
             },
           },
+          aggs: { stages: { terms: { field: 'f0rtika.control_validator', size: this.CHAIN_STAGE_TERMS } } },
         },
         codes: { terms: { field: 'event.ERROR', size: 10 } },
         names: { terms: { field: 'f0rtika.error_name', size: 20 } },
@@ -1302,6 +1350,8 @@ export class ElasticsearchService {
           techniques: [],
           stagesRun: Number(b.doc_count) || 0,
           alertedUnblocked: (b.alerted_unblocked?.doc_count ?? 0) > 0,
+          blockedStages: stageNumbers(b.strict),
+          alertedStages: stageNumbers(b.alerted_unblocked),
         };
         all.push(run);
         allBundles.push(bundleId);
@@ -3104,13 +3154,13 @@ export class ElasticsearchService {
    * Score counts, from the same snapshot, so every filter-bar param applies
    * and the date range is the freshness window. Standalone tests and
    * cyber-hygiene controls are not chains and are left out.
-   * The f0_library orchestrators stop at the first blocked stage and ingest
-   * the rest as Skipped (exit 0, not conclusive), so the stages that ran are
-   * the run's conclusive docs: a run with a blocked stage was blocked at stage
-   * stagesRun (4 and deeper share the 4+ bucket); otherwise it ran end to end.
-   * A detection without a block doesn't stop a chain. Stages carry no order,
-   * so alertedNotBlocked is "a detected stage other than the blocking one",
-   * which, because the chain stopped at the block, is an earlier stage.
+   * A run with a blocked stage was stopped at its lowest-numbered blocked
+   * "Stage N" (4 and deeper share the 4+ bucket); otherwise it ran end to end.
+   * Most f0_library orchestrators stop at the first block and ingest the rest
+   * as Skipped, but LockBit (298cc137) runs every stage, so the stage count
+   * is only the fallback for runs without stage numbers (see chainStop).
+   * A detection without a block doesn't stop a chain. alertedNotBlocked is a
+   * detected, unblocked stage numbered before the stop.
    * A run with a stage that is neither conclusive nor Skipped (999 error, 260
    * ASR blocked pre-execution) also stops the chain, but not because a
    * defense blocked that stage: when such a run is the pair's latest (its
@@ -3152,9 +3202,10 @@ export class ElasticsearchService {
       if (!isChainRun(p)) continue;
       chains++;
       if (p.strictProtected) {
-        const bucket = buckets[Math.min(Math.max(p.stagesRun, 1), 4) - 1];
+        const stop = chainStop(p);
+        const bucket = buckets[Math.min(Math.max(stop.stage, 1), 4) - 1];
         bucket.blocked++;
-        if (p.alertedUnblocked) bucket.alertedNotBlocked++;
+        if (stop.alertedBefore) bucket.alertedNotBlocked++;
         if (p.testName) bucket.names.add(p.testName);
       } else {
         endToEnd++;

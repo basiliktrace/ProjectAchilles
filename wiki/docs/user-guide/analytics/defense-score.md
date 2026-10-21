@@ -149,9 +149,10 @@ wide right column carrying the shapes you read.
   so this is not a protection result and is not counted as protected anywhere.
   Chains whose latest run had a stage error (for example exit 999) are noted
   in the footer, not in the rows. The chip totals the rows. It follows the
-  filter bar, and clicking a row filters Executions to those bundles. It relies
-  on chains stopping at the first blocked stage, with later stages ingested as
-  Skipped.
+  filter bar, and clicking a row filters Executions to those bundles. A chain
+  counts at the first stage that blocked it, also for chains that keep running
+  after a block (LockBit); the amber "alerted" segment then counts only
+  detections on stages before that one.
 
 **Posture row — left column**
 
