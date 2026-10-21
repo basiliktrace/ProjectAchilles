@@ -8,7 +8,7 @@ interface TestingCadenceCardProps {
   loading?: boolean;
 }
 
-const CHIP = 'shrink-0 rounded-md px-2 py-1 font-mono text-[11px]';
+const CHIP = 'w-fit shrink-0 self-start rounded-md px-2 py-1 font-mono text-[11px]';
 const TILE = 'flex flex-col gap-1 rounded-lg border border-border bg-raised px-3 py-2.5';
 const TILE_LABEL = 'font-mono text-[10.5px] uppercase tracking-wider text-muted';
 
@@ -36,8 +36,21 @@ function lastRunChip(view: CadenceView): { text: string; className: string } {
 }
 
 export function TestingCadenceCard({ view, loading }: TestingCadenceCardProps) {
-  if (loading || !view) {
+  if (loading) {
     return <div className="h-72 animate-pulse rounded-lg border border-border bg-raised" aria-hidden="true" />;
+  }
+  if (!view) {
+    return (
+      <Card className="h-full">
+        <CardHeader>
+          <CardTitle>Testing cadence</CardTitle>
+          <CardDescription>Is the programme actually running?</CardDescription>
+        </CardHeader>
+        <CardContent className="flex h-40 items-center justify-center text-sm text-faint">
+          Couldn't load testing cadence — try again later
+        </CardContent>
+      </Card>
+    );
   }
 
   const chip = lastRunChip(view);
@@ -57,7 +70,7 @@ export function TestingCadenceCard({ view, loading }: TestingCadenceCardProps) {
   const last = view.bars[view.bars.length - 1]?.date;
 
   return (
-    <Card>
+    <Card className="h-full">
       <CardHeader className="flex-row items-start justify-between gap-3 space-y-0 grid-rows-1">
         <div className="flex flex-col gap-1">
           <CardTitle>Testing cadence</CardTitle>
@@ -110,8 +123,10 @@ export function TestingCadenceCard({ view, loading }: TestingCadenceCardProps) {
           <div className={TILE}>
             <span className={TILE_LABEL}>Endpoints tested · 7d</span>
             <span className="text-lg font-semibold">
-              {view.endpointsTested7d}{' '}
-              <span className="text-[13px] font-normal text-muted">/ {view.agentsTotal}</span>
+              {view.endpointsTested7d}
+              {view.agentsTotal > 0 && (
+                <span className="text-[13px] font-normal text-muted"> / {view.agentsTotal}</span>
+              )}
             </span>
           </div>
           <div className={TILE}>

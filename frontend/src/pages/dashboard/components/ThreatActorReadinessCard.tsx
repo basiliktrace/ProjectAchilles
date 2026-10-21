@@ -8,13 +8,7 @@ interface ThreatActorReadinessCardProps {
   loading?: boolean;
 }
 
-const STALE_DAYS = 14;
-
-function daysAgo(iso: string | null): number | null {
-  if (!iso) return null;
-  const t = new Date(iso).getTime();
-  return Number.isNaN(t) ? null : Math.max(0, Math.floor((Date.now() - t) / 86_400_000));
-}
+const UNTESTED_SHOWN = 6;
 
 function scoreClass(score: number): string {
   if (score < 80) return 'text-danger';
@@ -23,8 +17,8 @@ function scoreClass(score: number): string {
 }
 
 function ActorLine({ row }: { row: ActorRow }) {
-  const ago = daysAgo(row.lastTestedAt);
-  const stale = ago != null && ago > STALE_DAYS;
+  const ago = row.daysAgo;
+  const stale = row.stale;
   const score = Math.min(100, Math.max(0, row.score));
   const meta = `${row.testCount} ${row.testCount === 1 ? 'test' : 'tests'}${ago != null ? ` · ${ago}d ago` : ''}`;
   return (
@@ -47,12 +41,25 @@ function ActorLine({ row }: { row: ActorRow }) {
 }
 
 export function ThreatActorReadinessCard({ view, loading }: ThreatActorReadinessCardProps) {
-  if (loading || !view) {
+  if (loading) {
     return <div className="h-72 animate-pulse rounded-lg border border-border bg-raised" aria-hidden="true" />;
+  }
+  if (!view) {
+    return (
+      <Card className="h-full">
+        <CardHeader>
+          <CardTitle>Threat actor readiness</CardTitle>
+          <CardDescription>Which adversaries would get through today · worst first</CardDescription>
+        </CardHeader>
+        <CardContent className="flex h-40 items-center justify-center text-sm text-faint">
+          Couldn't load threat actor readiness — try again later
+        </CardContent>
+      </Card>
+    );
   }
 
   return (
-    <Card>
+    <Card className="h-full">
       <CardHeader className="flex-row items-start justify-between gap-3 space-y-0 grid-rows-1">
         <div className="flex flex-col gap-1">
           <CardTitle>Threat actor readiness</CardTitle>
@@ -84,7 +91,11 @@ export function ThreatActorReadinessCard({ view, loading }: ThreatActorReadiness
                 {view.untestedActors.length > 0 ? (
                   <>
                     Not tested in {view.rangeLabel.replace(/^the /, '')}:{' '}
-                    <span className="text-warning">{view.untestedActors.join(', ')}</span>
+                    <span className="text-warning" title={view.untestedActors.join(', ')}>
+                      {view.untestedActors.slice(0, UNTESTED_SHOWN).join(', ')}
+                      {view.untestedActors.length > UNTESTED_SHOWN &&
+                        ` +${view.untestedActors.length - UNTESTED_SHOWN} more`}
+                    </span>
                   </>
                 ) : (
                   'Every library actor has been tested'

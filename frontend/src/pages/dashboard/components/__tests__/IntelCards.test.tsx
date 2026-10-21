@@ -54,8 +54,8 @@ describe('TestingCadenceCard', () => {
 
 const actors: ActorReadinessView = {
   rows: [
-    { threatActor: 'APT34', score: 64, pairCount: 14, testCount: 7, exposed: true, lastTestedAt: '2026-10-18T00:00:00Z' },
-    { threatActor: 'BlueNoroff', score: 100, pairCount: 3, testCount: 1, exposed: false, lastTestedAt: null },
+    { threatActor: 'APT34', score: 64, pairCount: 14, testCount: 7, exposed: true, lastTestedAt: '2026-10-18T00:00:00Z', daysAgo: 2, stale: false },
+    { threatActor: 'BlueNoroff', score: 100, pairCount: 3, testCount: 1, exposed: false, lastTestedAt: null, daysAgo: null, stale: false },
   ],
   totalActors: 2,
   exposedCount: 1,
@@ -82,13 +82,19 @@ describe('ThreatActorReadinessCard', () => {
   });
 });
 
+const cell = (technique: string, state: 'stopped' | 'partial' | 'through' | 'notRun', label: string) =>
+  ({ technique, state, protected: 0, detected: 0, unprotected: 0, label });
 const matrix: AttackMatrixView = {
   columns: [
-    { slug: 'initial-access', code: 'IA', name: 'Initial Access', throughCount: 1,
-      cells: [{ technique: 'T1566', state: 'through' }, { technique: 'T1190', state: 'protected' }] },
-    { slug: 'execution', code: 'EX', name: 'Execution', throughCount: 0, cells: [{ technique: 'T1059.001', state: 'notRun' }] },
+    { slug: 'initial-access', code: 'IA', name: 'Initial Access', throughCount: 1, stoppedCount: 1, testedCount: 2,
+      cells: [
+        cell('T1566', 'through', 'T1566 · 7 blocked · 2 detected only · 4 got through of 13 endpoints'),
+        cell('T1190', 'stopped', 'T1190 · 5 blocked of 5 endpoints'),
+      ] },
+    { slug: 'execution', code: 'EX', name: 'Execution', throughCount: 0, stoppedCount: 0, testedCount: 0,
+      cells: [cell('T1059.001', 'notRun', 'T1059.001 · in library, not run in this range')] },
   ],
-  totals: { through: 1, detected: 0, protected: 1, notRun: 1, techniques: 3 },
+  totals: { through: 1, partial: 0, stopped: 1, notRun: 1, techniques: 3 },
   weakestTactic: { slug: 'initial-access', code: 'IA', name: 'Initial Access', throughCount: 1 },
   empty: false,
 };
@@ -96,10 +102,12 @@ const matrix: AttackMatrixView = {
 describe('AttackOutcomeMatrix', () => {
   it('renders cells as links with state labels', () => {
     wrap(<AttackOutcomeMatrix view={matrix} />);
-    const cell = screen.getByRole('link', { name: 'T1566 · got through' });
+    const cell = screen.getByRole('link', { name: 'T1566 · 7 blocked · 2 detected only · 4 got through of 13 endpoints' });
     expect(cell).toHaveAttribute('href', '/analytics?techniques=T1566');
-    expect(screen.getByRole('link', { name: 'T1059.001 · not run in window' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'T1059.001 · in library, not run in this range' })).toBeInTheDocument();
     expect(screen.getByText('1 got through')).toBeInTheDocument();
+    expect(screen.getByText('1 stopped')).toBeInTheDocument();
+    expect(screen.getByText('stopped (≥95%)')).toBeInTheDocument();
     expect(screen.getByText('Initial Access (1 got through)')).toBeInTheDocument();
     expect(screen.getByText('1/2')).toBeInTheDocument();
   });
@@ -110,5 +118,37 @@ describe('AttackOutcomeMatrix', () => {
   it('shows a skeleton when loading', () => {
     const { container } = wrap(<AttackOutcomeMatrix view={null} loading />);
     expect(container.querySelector('.animate-pulse')).not.toBeNull();
+  });
+});
+
+describe('failed-load states', () => {
+  it('cadence shows an error body, not a skeleton', () => {
+    const { container } = wrap(<TestingCadenceCard view={null} />);
+    expect(screen.getByText('Testing cadence')).toBeInTheDocument();
+    expect(screen.getByText(/Couldn't load testing cadence/)).toBeInTheDocument();
+    expect(container.querySelector('.animate-pulse')).toBeNull();
+  });
+  it('readiness shows an error body, not a skeleton', () => {
+    const { container } = wrap(<ThreatActorReadinessCard view={null} />);
+    expect(screen.getByText(/Couldn't load threat actor readiness/)).toBeInTheDocument();
+    expect(container.querySelector('.animate-pulse')).toBeNull();
+  });
+  it('matrix shows an error body, not a skeleton', () => {
+    const { container } = wrap(<AttackOutcomeMatrix view={null} />);
+    expect(screen.getByText(/Couldn't load ATT&CK outcomes/)).toBeInTheDocument();
+    expect(container.querySelector('.animate-pulse')).toBeNull();
+  });
+});
+
+describe('small behaviours', () => {
+  it('hides "/ 0" when no agents are enrolled', () => {
+    const { container } = wrap(<TestingCadenceCard view={{ ...cadence, agentsTotal: 0, endpointsTested7d: 3 }} />);
+    expect(container.textContent).not.toContain('/ 0');
+  });
+  it('caps untested actors at 6 with a +N more suffix', () => {
+    const many = Array.from({ length: 9 }, (_, i) => `Actor${i}`);
+    wrap(<ThreatActorReadinessCard view={{ ...actors, untestedActors: many }} />);
+    expect(screen.getByText(/\+3 more/)).toBeInTheDocument();
+    expect(screen.queryByText(/Actor8/)).toBeNull();
   });
 });

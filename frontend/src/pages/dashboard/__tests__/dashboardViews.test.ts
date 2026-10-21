@@ -88,6 +88,8 @@ describe('buildActorReadiness', () => {
     expect(v.rows[0].threatActor).toBe('A1');
     expect(v.rows[1].threatActor).toBe('A0');
     expect(v.rows[0].exposed).toBe(true);
+    expect(v.rows[0].daysAgo).toBeNull();
+    expect(v.rows[0].stale).toBe(false);
     expect(v.totalActors).toBe(9);
     // 50,50,76,79,82,... -> exposed: 50,50,76,79
     expect(v.exposedCount).toBe(4);
@@ -99,30 +101,46 @@ describe('buildActorReadiness', () => {
 
 describe('buildAttackMatrix', () => {
   const o = (technique: string, p = 0, d = 0, u = 0) => ({ technique, protected: p, detected: d, unprotected: u, lastTestedAt: '2026-10-20T00:00:00Z' });
+  const stateFor = (p: number, d: number, u: number) =>
+    buildAttackMatrix([o('T1059', p, d, u)], []).columns.find((c) => c.slug === 'execution')!.cells[0].state;
+
+  it('pins the share band edges', () => {
+    expect(stateFor(19, 0, 1)).toBe('stopped'); // exactly 0.95
+    expect(stateFor(18, 0, 2)).toBe('partial'); // 0.90
+    expect(stateFor(4, 0, 1)).toBe('partial'); // exactly 0.80
+    expect(stateFor(7999, 0, 2001)).toBe('through'); // 0.7999
+    expect(stateFor(3, 1, 1)).toBe('partial'); // detected counts as stopped: 0.80
+    expect(stateFor(0, 0, 2)).toBe('through');
+    expect(stateFor(5, 0, 0)).toBe('stopped');
+  });
 
   it('places sub-techniques under parent tactics; unknown IDs count in totals but in no column', () => {
     const v = buildAttackMatrix([o('T1059.001', 1), o('T9999', 0, 0, 2)], []);
     const exec = v.columns.find((c) => c.slug === 'execution')!;
-    expect(exec.cells).toContainEqual({ technique: 'T1059.001', state: 'protected' });
+    expect(exec.cells[0]).toMatchObject({ technique: 'T1059.001', state: 'stopped', protected: 1 });
     expect(v.columns.some((c) => c.cells.some((x) => x.technique === 'T9999'))).toBe(false);
     expect(v.totals.techniques).toBe(2);
     expect(v.totals.through).toBe(1);
     expect(v.empty).toBe(false);
   });
 
-  it('worst state wins, library techniques without outcomes are notRun, ordering and weakest tactic', () => {
+  it('orders through, partial, stopped, notRun then ID; labels carry counts; weakest tactic', () => {
     const v = buildAttackMatrix(
-      [o('T1059', 5, 0, 0), o('T1059.001', 3, 2, 0), o('T1059.003', 1, 0, 1), o('T1059.005', 1, 0, 1)],
+      [o('T1059', 5), o('T1059.001', 3, 2, 1), o('T1059.003', 1, 0, 1), o('T1059.005', 1, 0, 1)],
       [makeTest({ techniques: ['T1059.007'], stages: [{ stageId: 1, technique: 'T1059.008', name: 's', fileName: 'f' }] })],
     );
     const exec = v.columns.find((c) => c.slug === 'execution')!;
     expect(exec.cells.map((c) => `${c.technique}:${c.state}`)).toEqual([
-      'T1059.003:through', 'T1059.005:through', 'T1059.001:detected', 'T1059:protected',
+      'T1059.003:through', 'T1059.005:through', 'T1059.001:partial', 'T1059:stopped',
       'T1059.007:notRun', 'T1059.008:notRun',
     ]);
+    expect(exec.cells[2].label).toBe('T1059.001 · 3 blocked · 2 detected only · 1 got through of 6 endpoints');
+    expect(exec.cells[4].label).toBe('T1059.007 · in library, not run in this range');
     expect(exec.throughCount).toBe(2);
+    expect(exec.stoppedCount).toBe(1);
+    expect(exec.testedCount).toBe(4);
     expect(v.weakestTactic?.slug).toBe('execution');
-    expect(v.totals).toMatchObject({ through: 2, detected: 1, protected: 1, notRun: 2, techniques: 6 });
+    expect(v.totals).toMatchObject({ through: 2, partial: 1, stopped: 1, notRun: 2, techniques: 6 });
   });
 
   it('no through cells gives weakestTactic null; nothing at all is empty', () => {

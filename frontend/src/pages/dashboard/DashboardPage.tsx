@@ -187,7 +187,7 @@ export default function DashboardPage() {
 
       {/* Trend + cadence */}
       <div className="grid gap-4 lg:grid-cols-3 max-lg:[&>*]:min-w-0">
-        <div className="lg:col-span-2">
+        <div className="lg:col-span-2 [&>*]:h-full">
           <TrendOverviewChart
             data={data.trend}
             description={data.trendDescription}
@@ -202,8 +202,8 @@ export default function DashboardPage() {
 
       {/* ATT&CK outcomes + threat actors */}
       <div className="grid gap-4 lg:grid-cols-3 max-lg:[&>*]:min-w-0">
-        <div className="lg:col-span-2">
-          <AttackOutcomeMatrix view={data.attackMatrix} loading={data.loading} />
+        <div className="lg:col-span-2 [&>*]:h-full">
+          <AttackOutcomeMatrix view={data.attackMatrix} rangeLabel={windowLabel} loading={data.loading} />
         </div>
         <ThreatActorReadinessCard view={data.actorReadiness} loading={data.loading} />
       </div>

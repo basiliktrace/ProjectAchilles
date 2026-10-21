@@ -96,6 +96,7 @@ export function buildCadence(
 
 export const ACTOR_ROW_LIMIT = 7;
 export const ACTOR_EXPOSED_BELOW = 80;
+export const ACTOR_STALE_DAYS = 14;
 
 export interface ActorRow {
   threatActor: string;
@@ -106,6 +107,10 @@ export interface ActorRow {
   /** score < ACTOR_EXPOSED_BELOW */
   exposed: boolean;
   lastTestedAt: string | null;
+  /** Whole days since lastTestedAt; null when never. */
+  daysAgo: number | null;
+  /** Last tested more than ACTOR_STALE_DAYS ago. */
+  stale: boolean;
 }
 
 export interface ActorReadinessView {
@@ -127,19 +132,26 @@ export function buildActorReadiness(
   coverage: ThreatActorCoverageItem[],
   tests: TestMetadata[],
   rangeLabel = 'this range',
+  now: number = Date.now(),
 ): ActorReadinessView {
   const pairs = (c: ThreatActorCoverageItem) => c.pairCount ?? c.totalExecutions ?? 0;
   const sorted = [...coverage].sort(
     (a, b) => a.coverage - b.coverage || pairs(b) - pairs(a) || a.threatActor.localeCompare(b.threatActor),
   );
-  const rows: ActorRow[] = sorted.slice(0, ACTOR_ROW_LIMIT).map((c) => ({
-    threatActor: c.threatActor,
-    score: c.coverage,
-    pairCount: pairs(c),
-    testCount: c.testCount,
-    exposed: c.coverage < ACTOR_EXPOSED_BELOW,
-    lastTestedAt: c.lastTestedAt ?? null,
-  }));
+  const rows: ActorRow[] = sorted.slice(0, ACTOR_ROW_LIMIT).map((c) => {
+    const t = c.lastTestedAt ? new Date(c.lastTestedAt).getTime() : NaN;
+    const daysAgo = Number.isNaN(t) ? null : Math.max(0, Math.floor((now - t) / MS_PER_DAY));
+    return {
+      threatActor: c.threatActor,
+      score: c.coverage,
+      pairCount: pairs(c),
+      testCount: c.testCount,
+      exposed: c.coverage < ACTOR_EXPOSED_BELOW,
+      lastTestedAt: c.lastTestedAt ?? null,
+      daysAgo,
+      stale: daysAgo != null && daysAgo > ACTOR_STALE_DAYS,
+    };
+  });
 
   const tested = new Set(coverage.map((c) => c.threatActor));
   const libraryActors = new Set<string>();
@@ -162,12 +174,22 @@ export function buildActorReadiness(
 /* ATT&CK outcome matrix                                               */
 /* ------------------------------------------------------------------ */
 
-export type CellState = 'through' | 'detected' | 'protected' | 'notRun';
+export type CellState = 'stopped' | 'partial' | 'through' | 'notRun';
+
+/** Share of endpoints (protected + detected) at or above which a technique is 'stopped'. */
+export const STOPPED_SHARE = 0.95;
+/** Share at or above which a technique is 'partial'; below it is 'through'. */
+export const PARTIAL_SHARE = 0.8;
 
 export interface MatrixCell {
   /** Exact technique ID as reported (sub-techniques are their own cells). */
   technique: string;
   state: CellState;
+  protected: number;
+  detected: number;
+  unprotected: number;
+  /** Tooltip / aria text, e.g. "T1486 · 7 blocked · 2 detected only · 4 got through of 13 endpoints". */
+  label: string;
 }
 
 export interface MatrixColumn {
@@ -177,6 +199,10 @@ export interface MatrixColumn {
   cells: MatrixCell[];
   /** Cells in the 'through' state. */
   throughCount: number;
+  /** Cells in the 'stopped' state. */
+  stoppedCount: number;
+  /** Cells that have results (not 'notRun'). */
+  testedCount: number;
 }
 
 export interface AttackMatrixView {
@@ -190,42 +216,70 @@ export interface AttackMatrixView {
   empty: boolean;
 }
 
-const STATE_ORDER: Record<CellState, number> = { through: 0, detected: 1, protected: 2, notRun: 3 };
+const STATE_ORDER: Record<CellState, number> = { through: 0, partial: 1, stopped: 2, notRun: 3 };
 
-function stateOf(o: { protected: number; detected: number; unprotected: number }): CellState {
-  if (o.unprotected > 0) return 'through';
-  if (o.detected > 0) return 'detected';
-  return 'protected';
+function stateOf(share: number): CellState {
+  if (share >= STOPPED_SHARE) return 'stopped';
+  if (share >= PARTIAL_SHARE) return 'partial';
+  return 'through';
+}
+
+interface Counts { protected: number; detected: number; unprotected: number }
+
+function makeCell(technique: string, c: Counts | undefined): MatrixCell {
+  const n = c ? c.protected + c.detected + c.unprotected : 0;
+  if (!c || n === 0) {
+    return {
+      technique, state: 'notRun', protected: 0, detected: 0, unprotected: 0,
+      label: `${technique} · in library, not run in this range`,
+    };
+  }
+  const parts: string[] = [];
+  if (c.protected) parts.push(`${c.protected} blocked`);
+  if (c.detected) parts.push(`${c.detected} detected only`);
+  if (c.unprotected) parts.push(`${c.unprotected} got through`);
+  return {
+    technique,
+    state: stateOf((c.protected + c.detected) / n),
+    protected: c.protected,
+    detected: c.detected,
+    unprotected: c.unprotected,
+    label: `${technique} · ${parts.join(' · ')} of ${n} endpoints`,
+  };
 }
 
 export function buildAttackMatrix(
   outcomes: TechniqueOutcomeItem[],
   tests: TestMetadata[],
 ): AttackMatrixView {
-  const states = new Map<string, CellState>();
+  const counts = new Map<string, Counts>();
   for (const o of outcomes) {
-    const next = stateOf(o);
-    const prev = states.get(o.technique);
-    // Same ID reported twice: keep the worst
-    if (!prev || STATE_ORDER[next] < STATE_ORDER[prev]) states.set(o.technique, next);
+    const prev = counts.get(o.technique) ?? { protected: 0, detected: 0, unprotected: 0 };
+    counts.set(o.technique, {
+      protected: prev.protected + o.protected,
+      detected: prev.detected + o.detected,
+      unprotected: prev.unprotected + o.unprotected,
+    });
   }
+  const ids = new Set<string>(counts.keys());
   for (const t of tests) {
-    const ids = [...(t.techniques ?? []), ...(t.stages ?? []).map((s) => s.technique)];
-    for (const id of ids) {
-      if (id && !states.has(id)) states.set(id, 'notRun');
+    for (const id of [...(t.techniques ?? []), ...(t.stages ?? []).map((s) => s.technique)]) {
+      if (id) ids.add(id);
     }
   }
+  const cellsById = new Map<string, MatrixCell>();
+  for (const id of ids) cellsById.set(id, makeCell(id, counts.get(id)));
 
   const shown = ENTERPRISE_TACTICS.filter((t) => t.shown);
   const shownSlugs = new Set(shown.map((t) => t.slug));
   const byTactic = new Map<string, MatrixCell[]>(shown.map((t) => [t.slug, []]));
-  const totals = { through: 0, detected: 0, protected: 0, notRun: 0, techniques: 0 };
+  const totals = { stopped: 0, partial: 0, through: 0, notRun: 0, techniques: 0 };
 
-  for (const [technique, state] of states) {
-    totals[state] += 1;
+  for (const [technique, cell] of cellsById) {
+    totals[cell.state] += 1;
     totals.techniques += 1;
     for (const slug of tacticsForTechnique(technique)) {
-      if (shownSlugs.has(slug)) byTactic.get(slug)!.push({ technique, state });
+      if (shownSlugs.has(slug)) byTactic.get(slug)!.push(cell);
     }
   }
 
@@ -239,6 +293,8 @@ export function buildAttackMatrix(
       name: t.name,
       cells,
       throughCount: cells.filter((c) => c.state === 'through').length,
+      stoppedCount: cells.filter((c) => c.state === 'stopped').length,
+      testedCount: cells.filter((c) => c.state !== 'notRun').length,
     };
   });
 
@@ -253,6 +309,6 @@ export function buildAttackMatrix(
     weakestTactic: weakest
       ? { slug: weakest.slug, code: weakest.code, name: weakest.name, throughCount: weakest.throughCount }
       : null,
-    empty: states.size === 0,
+    empty: cellsById.size === 0,
   };
 }

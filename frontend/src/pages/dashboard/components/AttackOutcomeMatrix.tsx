@@ -5,14 +5,16 @@ import type { AttackMatrixView, CellState, MatrixColumn } from '../dashboardView
 
 interface AttackOutcomeMatrixProps {
   view: AttackMatrixView | null;
+  /** Window label shown in the description, e.g. "30d". */
+  rangeLabel?: string;
   loading?: boolean;
 }
 
-const STATE_META: Record<CellState, { word: string; cell: string }> = {
-  through: { word: 'got through', cell: 'bg-danger' },
-  detected: { word: 'EDR alert, not blocked', cell: 'bg-warning' },
-  protected: { word: 'protected', cell: 'bg-accent' },
-  notRun: { word: 'not run in window', cell: 'bg-overlay ring-1 ring-inset ring-border-strong' },
+const STATE_META: Record<CellState, { legend: string; cell: string }> = {
+  stopped: { legend: 'stopped (≥95%)', cell: 'bg-accent' },
+  partial: { legend: 'partial (80–94%)', cell: 'bg-warning' },
+  through: { legend: 'got through (<80%)', cell: 'bg-danger' },
+  notRun: { legend: 'in library, not run', cell: 'bg-overlay ring-1 ring-inset ring-border-strong' },
 };
 
 function ruleClass(col: MatrixColumn): string {
@@ -25,23 +27,36 @@ function Chip({ className, children }: { className: string; children: string }) 
   return <span className={cn('rounded-md px-2 py-1 font-mono text-[11px]', className)}>{children}</span>;
 }
 
-export function AttackOutcomeMatrix({ view, loading }: AttackOutcomeMatrixProps) {
-  if (loading || !view) {
+export function AttackOutcomeMatrix({ view, rangeLabel, loading }: AttackOutcomeMatrixProps) {
+  if (loading) {
     return <div className="h-72 animate-pulse rounded-lg border border-border bg-raised" aria-hidden="true" />;
+  }
+  if (!view) {
+    return (
+      <Card className="h-full">
+        <CardHeader>
+          <CardTitle>MITRE ATT&amp;CK coverage</CardTitle>
+          <CardDescription>Each cell is a technique, coloured by the share of endpoints that stopped it</CardDescription>
+        </CardHeader>
+        <CardContent className="flex h-40 items-center justify-center text-sm text-faint">
+          Couldn't load ATT&amp;CK outcomes — try again later
+        </CardContent>
+      </Card>
+    );
   }
 
   return (
-    <Card>
+    <Card className="h-full">
       <CardHeader className="flex-row flex-wrap items-start justify-between gap-3 space-y-0 grid-rows-1">
         <div className="flex flex-col gap-1">
           <CardTitle>MITRE ATT&amp;CK coverage</CardTitle>
-          <CardDescription>Each cell is a technique, coloured by its latest result per stage</CardDescription>
+          <CardDescription>Each cell is a technique, coloured by the share of endpoints that stopped it{rangeLabel ? ` · ${rangeLabel}` : ''}</CardDescription>
         </div>
         {!view.empty && (
           <div className="flex flex-wrap gap-1.5">
-            <Chip className="bg-accent-dim text-accent">{`${view.totals.protected} protected`}</Chip>
+            <Chip className="bg-accent-dim text-accent">{`${view.totals.stopped} stopped`}</Chip>
+            <Chip className="bg-warning-dim text-warning">{`${view.totals.partial} partial`}</Chip>
             <Chip className="bg-danger-dim text-danger">{`${view.totals.through} got through`}</Chip>
-            <Chip className="bg-warning-dim text-warning">{`${view.totals.detected} detected only`}</Chip>
             <Chip className="bg-raised text-muted">{`${view.totals.notRun} not run`}</Chip>
           </div>
         )}
@@ -55,8 +70,6 @@ export function AttackOutcomeMatrix({ view, loading }: AttackOutcomeMatrixProps)
           <>
             <div className="grid grid-cols-3 gap-2 sm:grid-cols-4 lg:grid-cols-6 xl:grid-cols-12">
               {view.columns.map((col) => {
-                const protectedN = col.cells.filter((c) => c.state === 'protected').length;
-                const tested = col.cells.filter((c) => c.state !== 'notRun').length;
                 return (
                   <div key={col.slug} className="flex min-w-0 flex-col gap-1.5">
                     <div
@@ -67,19 +80,19 @@ export function AttackOutcomeMatrix({ view, loading }: AttackOutcomeMatrixProps)
                       <span
                         className={cn('font-mono text-[10px]', col.throughCount > 0 ? 'text-danger' : 'text-muted')}
                       >
-                        {tested > 0 ? `${protectedN}/${tested}` : '—'}
+                        {col.testedCount > 0 ? `${col.stoppedCount}/${col.testedCount}` : '—'}
                       </span>
                     </div>
                     <div className="grid grid-cols-3 gap-[3px]">
                       {col.cells.map((cell) => {
                         const meta = STATE_META[cell.state];
-                        const label = `${cell.technique} · ${meta.word}`;
+                        const label = cell.label;
                         return (
                           <Link
                             key={cell.technique}
                             to={`/analytics?techniques=${encodeURIComponent(cell.technique)}`}
                             aria-label={label}
-                            title={`${col.name} · ${label}`}
+                            title={label}
                             className={cn('h-3.5 rounded-[3px] hover:opacity-70', meta.cell)}
                           />
                         );
@@ -91,10 +104,10 @@ export function AttackOutcomeMatrix({ view, loading }: AttackOutcomeMatrixProps)
             </div>
             <div className="flex flex-wrap items-center justify-between gap-2.5 border-t border-border pt-2.5 text-xs text-muted">
               <div className="flex flex-wrap gap-x-3.5 gap-y-1">
-                {(['protected', 'through', 'detected', 'notRun'] as const).map((s) => (
+                {(['stopped', 'partial', 'through', 'notRun'] as const).map((s) => (
                   <span key={s} className="inline-flex items-center gap-1.5">
                     <span className={cn('size-2.5 rounded-sm', STATE_META[s].cell)} />
-                    {s === 'notRun' ? 'in library, not run' : STATE_META[s].word}
+                    {STATE_META[s].legend}
                   </span>
                 ))}
               </div>
