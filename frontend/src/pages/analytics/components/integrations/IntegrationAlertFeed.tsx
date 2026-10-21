@@ -73,6 +73,15 @@ export default function IntegrationAlertFeed({ vendor, window, windowLabel }: Pr
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
 
+  // The date range is a filter: reset to page 1 when it changes (adjusted during
+  // render so only one request fires).
+  const windowKey = `${window.from}|${window.to}`;
+  const [prevWindowKey, setPrevWindowKey] = useState(windowKey);
+  if (prevWindowKey !== windowKey) {
+    setPrevWindowKey(windowKey);
+    setPage(1);
+  }
+
   useEffect(() => {
     if (searchInput === search) return;
     const t = setTimeout(() => {
@@ -236,7 +245,7 @@ export default function IntegrationAlertFeed({ vendor, window, windowLabel }: Pr
           ) : (
             <div className="relative overflow-x-auto" aria-busy={loading}>
               {loading && !result && (
-                <div className="flex justify-center py-8">
+                <div role="status" className="flex justify-center py-8">
                   <Loader2 className="size-5 animate-spin text-muted-foreground" aria-label="Loading alerts" />
                 </div>
               )}

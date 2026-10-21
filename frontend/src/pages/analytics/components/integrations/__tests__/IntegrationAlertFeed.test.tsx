@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, waitFor, fireEvent, act } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent, act, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { VENDORS } from '../vendorConfig';
 import type { IntegrationVendor } from '../vendorConfig';
@@ -99,10 +99,13 @@ describe('IntegrationAlertFeed', () => {
     const { unmount } = renderFeed(mk('crowdstrike'));
     await screen.findByText('q');
     expect(screen.getByText('Falcon response', { selector: 'th' })).toBeInTheDocument();
-    for (const l of ['Quarantined', 'Process killed', 'Blocked', 'Detected only']) {
-      expect(screen.getAllByText(l).length).toBeGreaterThan(0);
+    const rowOf = (title: string) => screen.getByText(title).closest('tr') as HTMLElement;
+    const expected: Record<string, string> = {
+      q: 'Quarantined', k: 'Process killed', b: 'Blocked', f: 'Kill failed', d: 'Detected only',
+    };
+    for (const [title, label] of Object.entries(expected)) {
+      expect(within(rowOf(title)).getByText(label)).toBeInTheDocument();
     }
-    expect(screen.getAllByText('Kill failed').length).toBeGreaterThan(0);
     expect(screen.getByText('Prevented')).toBeInTheDocument();
     unmount();
 
@@ -112,7 +115,14 @@ describe('IntegrationAlertFeed', () => {
     expect(screen.getByText('Product', { selector: 'th' })).toBeInTheDocument();
     expect(screen.getByText('Device / entity')).toBeInTheDocument();
     expect(screen.getByText('microsoftDefenderForEndpoint')).toBeInTheDocument();
-    expect(screen.getByText('Other')).toBeInTheDocument();
+    // byProduct has 5 entries: top 3 shown, remaining (2 + 1 = 3) aggregated into Other.
+    const summary = screen.getByText('Auto-resolved').closest('div') as HTMLElement;
+    expect(within(summary).getByText('Defender for Endpoint')).toBeInTheDocument();
+    expect(within(summary).getByText('Office 365')).toBeInTheDocument();
+    expect(within(summary).getByText('Identity')).toBeInTheDocument();
+    expect(within(summary).queryByText('Cloud')).not.toBeInTheDocument();
+    expect(within(summary).queryByText('Other1')).not.toBeInTheDocument();
+    expect(within(within(summary).getByText('Other').parentElement as HTMLElement).getByText('3')).toBeInTheDocument();
   });
 
   it('renders an organic, host-less, portal-less alert with dashes and no external link', async () => {
@@ -174,5 +184,58 @@ describe('IntegrationAlertFeed', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
     expect(await screen.findByText('Suspicious thing')).toBeInTheDocument();
     expect(getAlerts).toHaveBeenCalledTimes(2);
+  });
+
+  it('resets to page 1 and sends the segment severities when the severity segment changes', async () => {
+    getAlerts.mockResolvedValue(page([item()], { total: 40 }));
+    renderFeed(mk('crowdstrike'));
+    await screen.findByText('Suspicious thing');
+    fireEvent.click(screen.getByRole('button', { name: /next/i }));
+    await waitFor(() => expect(getAlerts).toHaveBeenLastCalledWith(expect.objectContaining({ page: 2 })));
+    fireEvent.click(screen.getByRole('button', { name: 'High & critical' }));
+    await waitFor(() =>
+      expect(getAlerts).toHaveBeenLastCalledWith(
+        expect.objectContaining({ page: 1, severities: ['critical', 'high'] }),
+      ),
+    );
+    expect(screen.getByRole('button', { name: 'High & critical' })).toHaveAttribute('aria-pressed', 'true');
+  });
+
+  it('resets to page 1 when the window changes', async () => {
+    getAlerts.mockResolvedValue(page([item()], { total: 40 }));
+    const v = mk('crowdstrike');
+    const { rerender } = renderFeed(v);
+    await screen.findByText('Suspicious thing');
+    fireEvent.click(screen.getByRole('button', { name: /next/i }));
+    await waitFor(() => expect(getAlerts).toHaveBeenLastCalledWith(expect.objectContaining({ page: 2 })));
+    getAlerts.mockClear();
+    const win2 = { from: '2026-10-01T00:00:00.000Z', to: '2026-10-21T00:00:00.000Z' };
+    rerender(
+      <MemoryRouter>
+        <IntegrationAlertFeed vendor={v} window={win2} windowLabel="Last 20 days" />
+      </MemoryRouter>,
+    );
+    await waitFor(() => expect(getAlerts).toHaveBeenCalled());
+    expect(getAlerts).toHaveBeenCalledTimes(1);
+    expect(getAlerts).toHaveBeenLastCalledWith(
+      expect.objectContaining({ page: 1, from: win2.from, to: win2.to }),
+    );
+  });
+
+  it('keeps the newer response when an older request resolves last', async () => {
+    let resolveOld!: (p: IntegrationAlertPage) => void;
+    let resolveNew!: (p: IntegrationAlertPage) => void;
+    getAlerts
+      .mockImplementationOnce(() => new Promise<IntegrationAlertPage>((r) => { resolveOld = r; }))
+      .mockImplementationOnce(() => new Promise<IntegrationAlertPage>((r) => { resolveNew = r; }));
+    renderFeed(mk('crowdstrike'));
+    await waitFor(() => expect(getAlerts).toHaveBeenCalledTimes(1));
+    fireEvent.click(screen.getByRole('button', { name: /Organic/ }));
+    await waitFor(() => expect(getAlerts).toHaveBeenCalledTimes(2));
+    await act(async () => { resolveNew(page([item({ alert_id: 'n', alert_title: 'NEWER' })])); });
+    expect(await screen.findByText('NEWER')).toBeInTheDocument();
+    await act(async () => { resolveOld(page([item({ alert_id: 'o', alert_title: 'OLDER' })])); });
+    expect(screen.getByText('NEWER')).toBeInTheDocument();
+    expect(screen.queryByText('OLDER')).not.toBeInTheDocument();
   });
 });
