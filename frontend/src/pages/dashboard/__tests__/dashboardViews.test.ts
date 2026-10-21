@@ -87,7 +87,7 @@ describe('buildActorReadiness', () => {
     expect(v.untestedActors).toEqual([]);
   });
 
-  it('sorts by score asc then pairs desc, caps at 7, counts exposed and untested', () => {
+  it('sorts by score asc then pairs desc, keeps every actor, counts exposed and untested', () => {
     const cov = Array.from({ length: 9 }, (_, i) => ({
       threatActor: `A${i}`, coverage: i < 2 ? 50 : 70 + i * 3, testCount: 1, protectedCount: 1, totalExecutions: 5, pairCount: i === 1 ? 20 : 5,
     }));
@@ -98,7 +98,7 @@ describe('buildActorReadiness', () => {
       makeTest({ category: 'cyber-hygiene', threatActor: 'Other' }),
     ];
     const v = buildActorReadiness(cov, tests, 'the last 30d');
-    expect(v.rows).toHaveLength(7);
+    expect(v.rows).toHaveLength(9);
     expect(v.rows[0].threatActor).toBe('A1');
     expect(v.rows[1].threatActor).toBe('A0');
     expect(v.rows[0].exposed).toBe(true);

@@ -93,7 +93,6 @@ export function buildCadence(
 /* Threat actor readiness                                              */
 /* ------------------------------------------------------------------ */
 
-export const ACTOR_ROW_LIMIT = 7;
 export const ACTOR_EXPOSED_BELOW = 80;
 export const ACTOR_STALE_DAYS = 14;
 
@@ -113,7 +112,7 @@ export interface ActorRow {
 }
 
 export interface ActorReadinessView {
-  /** Weakest first (score asc, pairs desc), at most ACTOR_ROW_LIMIT. */
+  /** Weakest first (score asc, pairs desc); the card shows as many as fit. */
   rows: ActorRow[];
   /** Actors with coverage data (before the row limit). */
   totalActors: number;
@@ -137,7 +136,7 @@ export function buildActorReadiness(
   const sorted = [...coverage].sort(
     (a, b) => a.coverage - b.coverage || pairs(b) - pairs(a) || a.threatActor.localeCompare(b.threatActor),
   );
-  const rows: ActorRow[] = sorted.slice(0, ACTOR_ROW_LIMIT).map((c) => {
+  const rows: ActorRow[] = sorted.map((c) => {
     const t = c.lastTestedAt ? new Date(c.lastTestedAt).getTime() : NaN;
     const daysAgo = Number.isNaN(t) ? null : Math.max(0, Math.floor((now - t) / MS_PER_DAY));
     return {

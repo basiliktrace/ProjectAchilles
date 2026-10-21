@@ -16,16 +16,26 @@ export interface FleetBarRow {
 interface FleetHealthCardProps {
   stats: FleetStat[];
   rows: FleetBarRow[];
+  /** Agents with no task in 7 days. */
+  staleAgents?: number;
+  /** Agents running an older version than the latest registered one. */
+  outdatedAgents?: number;
+  totalAgents?: number;
   loading?: boolean;
 }
 
-export function FleetHealthCard({ stats, rows, loading }: FleetHealthCardProps) {
+export function FleetHealthCard({ stats, rows, staleAgents, outdatedAgents, totalAgents = 0, loading }: FleetHealthCardProps) {
+  const attention = [
+    { label: 'Stale (no task in 7d)', count: staleAgents },
+    { label: 'Outdated agents', count: outdatedAgents },
+  ].filter((row): row is { label: string; count: number } => row.count != null);
+
   if (loading) {
     return <div className="h-64 animate-pulse rounded-lg border border-border bg-raised" aria-hidden="true" />;
   }
 
   return (
-    <Card>
+    <Card className="h-full">
       <CardHeader>
         <CardTitle>Fleet health</CardTitle>
         <CardDescription>Endpoint agents</CardDescription>
@@ -61,6 +71,26 @@ export function FleetHealthCard({ stats, rows, loading }: FleetHealthCardProps) 
             </div>
           )}
         </div>
+        {rows.length > 0 && attention.length > 0 && (
+          <div className="flex flex-col gap-2.5 border-t border-border pt-3">
+            {attention.map((row) => {
+              const pct = totalAgents > 0 ? (row.count / totalAgents) * 100 : 0;
+              return (
+                <div key={row.label}>
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs">{row.label}</span>
+                    <span className={cn('font-mono text-xs', row.count > 0 ? 'text-warning' : 'text-muted')}>
+                      {row.count} ({Math.round(pct)}%)
+                    </span>
+                  </div>
+                  <div className="mt-1 h-1.5 rounded-full bg-raised">
+                    <div className="h-full rounded-full bg-warning/70" style={{ width: `${pct}%` }} />
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
       </CardContent>
     </Card>
   );

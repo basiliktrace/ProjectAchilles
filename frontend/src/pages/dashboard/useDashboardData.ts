@@ -55,8 +55,9 @@ import type { TrendPoint } from './components/TrendOverviewChart';
 import type { RemediationControl } from './components/TopControlsCard';
 import type { RecentExecution } from './components/RecentExecutionsCard';
 
-const TOP_CONTROLS = 5;
-const RECENT_TASKS = 6;
+// Upper bounds: the cards show as many as fit their row (FitList max)
+const TOP_CONTROLS = 10;
+const RECENT_TASKS = 10;
 const AGENT_POLL_MS = 15_000;
 const CADENCE_DAYS = 14;
 
@@ -160,6 +161,8 @@ export interface DashboardData {
   testStats: TestStats | null;
   metrics: AgentMetrics | null;
   fleetHealth: FleetHealthMetrics | null;
+  /** Agents running an older version than the latest registered one. */
+  outdatedAgents: number;
   trend: TrendPoint[];
   trendDescription: string;
   controls: RemediationControl[];
@@ -399,6 +402,7 @@ export function useDashboardData(range: DateRangeValue = DEFAULT_TIME_RANGE): Da
     testStats,
     metrics,
     fleetHealth,
+    outdatedAgents: outdatedCount,
     trend,
     trendDescription,
     controls,

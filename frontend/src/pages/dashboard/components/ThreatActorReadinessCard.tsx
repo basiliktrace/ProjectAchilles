@@ -1,4 +1,5 @@
 import { Link } from 'react-router-dom';
+import { FitList } from '@/components/shared/FitList';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { cn } from '@/lib/utils';
 import type { ActorReadinessView, ActorRow } from '../dashboardViews';
@@ -92,14 +93,13 @@ export function ThreatActorReadinessCard({ view, configured, loading }: ThreatAc
           </div>
         ) : (
           <>
-            <div className="flex flex-col gap-0.5">
-              {view.rows.map((row) => (
-                <ActorLine key={row.threatActor} row={row} />
-              ))}
-              {view.rows.length === 0 && (
-                <div className="py-6 text-center text-sm text-faint">No threat actor has results in this range</div>
-              )}
-            </div>
+            {view.rows.length === 0 ? (
+              <div className="py-6 text-center text-sm text-faint">No threat actor has results in this range</div>
+            ) : (
+              <FitList items={view.rows} min={3} max={10} fallback={7} gap={2} getKey={(row) => row.threatActor}>
+                {(row) => <ActorLine row={row} />}
+              </FitList>
+            )}
             <div className="mt-auto flex items-center justify-between gap-2.5 border-t border-border pt-2.5 text-xs text-muted">
               <span className="min-w-0">
                 {view.untestedActors.length > 0 ? (

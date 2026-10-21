@@ -49,13 +49,17 @@ export function TrendOverviewChart({ data, description, hasSecureScore, hasZtaSc
         <CardTitle>Trend overview — {rangeLabel}</CardTitle>
         <CardDescription>{description}</CardDescription>
       </CardHeader>
-      <CardContent>
+      <CardContent className="flex flex-1 flex-col">
         {data.length === 0 ? (
-          <div className="flex h-52 items-center justify-center text-sm text-faint">
+          <div className="flex min-h-52 flex-1 items-center justify-center text-sm text-faint">
             Nothing recorded yet.
           </div>
         ) : (
-          <ResponsiveContainer width="100%" height={208}>
+          // Grows with the row (the Testing cadence card sets its height); the
+          // absolute box keeps the chart out of the card's intrinsic height
+          <div className="relative min-h-[208px] flex-1">
+          <div className="absolute inset-0">
+          <ResponsiveContainer width="100%" height="100%">
             <AreaChart data={data} margin={{ top: 4, right: 8, bottom: 0, left: -18 }}>
               <defs>
                 <linearGradient id="trend-defense-fill" x1="0" y1="0" x2="0" y2="1">
@@ -131,6 +135,8 @@ export function TrendOverviewChart({ data, description, hasSecureScore, hasZtaSc
               />
             </AreaChart>
           </ResponsiveContainer>
+          </div>
+          </div>
         )}
         <div className="mt-3 flex items-center justify-center gap-4">
           {series.map((s) => (

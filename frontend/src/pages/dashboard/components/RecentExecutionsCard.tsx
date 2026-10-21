@@ -1,4 +1,5 @@
 import { Link } from 'react-router-dom';
+import { FitList } from '@/components/shared/FitList';
 import { StreamRow } from '@/components/shared/ui/StreamRow';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -25,12 +26,12 @@ export function RecentExecutionsCard({ executions, configured, loading }: Recent
   }
 
   return (
-    <Card>
+    <Card className="h-full">
       <CardHeader>
         <CardTitle>Recent executions</CardTitle>
         <CardDescription>Latest task results</CardDescription>
       </CardHeader>
-      <CardContent className="flex flex-col gap-1">
+      <CardContent className="flex flex-1 flex-col">
         {!configured ? (
           <div className="flex h-32 items-center justify-center text-sm text-faint">
             Analytics is not configured.
@@ -40,9 +41,9 @@ export function RecentExecutionsCard({ executions, configured, loading }: Recent
             Nothing recorded yet.
           </div>
         ) : (
-          executions.map((execution) => (
+          <FitList items={executions} min={3} max={10} fallback={6} gap={4} getKey={(e) => e.id}>
+            {(execution) => (
             <StreamRow
-              key={execution.id}
               as={Link}
               to={execution.to}
               className="group rounded-md px-1 py-1.5 text-xs hover:bg-raised"
@@ -65,7 +66,8 @@ export function RecentExecutionsCard({ executions, configured, loading }: Recent
               }
               trailing={<span className="whitespace-nowrap text-faint">{execution.timeAgo}</span>}
             />
-          ))
+            )}
+          </FitList>
         )}
       </CardContent>
     </Card>
