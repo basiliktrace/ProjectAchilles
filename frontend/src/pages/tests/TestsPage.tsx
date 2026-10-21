@@ -9,7 +9,7 @@ import {
   X,
 } from 'lucide-react';
 import { browserApi } from '@/services/api/browser';
-import { analyticsApi } from '@/services/api/analytics';
+import { analyticsApi, type TestResultItem } from '@/services/api/analytics';
 import type { TestMetadata } from '@/types/test';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { Button } from '@/components/ui/button';
@@ -30,7 +30,8 @@ import { Sheet, SheetContent, SheetTitle } from '@/components/ui/sheet';
 import { targetLabel } from '@/utils/platformLabels';
 import { cn } from '@/lib/utils';
 import { tacticLabel, tacticToSlug } from '@/lib/mitreTactics';
-import { CompactTestCard } from './components/CompactTestCard';
+import { TestListHeader, TestListRow } from './components/TestListRow';
+import { fleetResultText, type FleetState } from './components/fleetResult';
 import { FacetRail } from './components/FacetRail';
 import {
   DEFAULT_FILTERS,
@@ -83,6 +84,8 @@ export default function TestsPage() {
   const [executedUuids, setExecutedUuids] = useState<Set<string> | null>(null);
   const [builtUuids, setBuiltUuids] = useState<Set<string> | null>(null);
   const fetchedRef = useRef(false);
+  const [fleetFetchState, setFleetFetchState] = useState<FleetState>('loading');
+  const [fleetResults, setFleetResults] = useState<Map<string, TestResultItem>>(() => new Map());
 
   const [selectMode, setSelectMode] = useState(false);
   const [selectedUuids, setSelectedUuids] = useState<Set<string>>(new Set());
@@ -195,6 +198,29 @@ export default function TestsPage() {
       .then((uuids) => setBuiltUuids(new Set(uuids)))
       .catch(() => setBuiltUuids(null));
   }, [esConfigured]);
+
+  // Fleet results get their own effect (not behind fetchedRef) so they load once
+  // analytics turns out to be configured; a failure leaves the cells neutral.
+  useEffect(() => {
+    if (!esConfigured) return;
+    let cancelled = false;
+    setFleetFetchState('loading');
+    analyticsApi
+      .getTestResults()
+      .then((items) => {
+        if (cancelled) return;
+        setFleetResults(new Map(items.map((item) => [item.testUuid, item])));
+        setFleetFetchState('ready');
+      })
+      .catch(() => {
+        if (!cancelled) setFleetFetchState('error');
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [esConfigured]);
+
+  const fleetState: FleetState = esConfigured ? fleetFetchState : 'error';
 
   const ctx = useMemo(
     () => ({
@@ -356,9 +382,9 @@ export default function TestsPage() {
 
         <div className="flex flex-col gap-6">
           {loading ? (
-            <div className="grid gap-2.5 sm:grid-cols-[repeat(auto-fill,minmax(280px,1fr))]">
+            <div className="overflow-hidden rounded-[10px] border border-border bg-surface">
               {Array.from({ length: 9 }).map((_, i) => (
-                <div key={i} className="h-20 animate-pulse rounded-lg border border-border bg-raised" />
+                <div key={i} className="h-16 animate-pulse border-b border-border bg-raised/40 last:border-b-0" />
               ))}
             </div>
           ) : groups.length === 0 ? (
@@ -371,26 +397,32 @@ export default function TestsPage() {
             </div>
           ) : (
             groups.map((group) => (
-              <section key={group.category}>
+              <section key={group.category} aria-label={group.category}>
                 <div className="mb-2.5 flex items-center gap-2.5">
                   <h2 className="font-mono text-xs text-accent">{group.category}</h2>
                   <span className="text-[11px] text-faint">{group.tests.length} tests</span>
                   <div className="h-px flex-1 bg-border" />
                 </div>
-                <div className="grid gap-2.5 sm:grid-cols-[repeat(auto-fill,minmax(280px,1fr))]">
-                  {group.tests.map((test) => (
-                    <CompactTestCard
-                      key={test.uuid}
-                      test={test}
-                      onOpen={() => navigate(`/tests/${test.uuid}`)}
-                      isFavorite={isFavorite(test.uuid)}
-                      onToggleFavorite={() => toggleFavorite(test.uuid)}
-                      onExecute={canCreateTasks ? () => openDrawer([test]) : undefined}
-                      selectMode={selectMode}
-                      selected={selectedUuids.has(test.uuid)}
-                      onToggleSelect={() => toggleSelect(test.uuid)}
-                    />
-                  ))}
+                <div className="overflow-x-auto rounded-[10px] border border-border bg-surface">
+                  <div className="lg:min-w-[900px]">
+                    <TestListHeader />
+                    <ul>
+                      {group.tests.map((test) => (
+                        <TestListRow
+                          key={test.uuid}
+                          test={test}
+                          fleet={fleetResultText(test, fleetResults.get(test.uuid), fleetState)}
+                          onOpen={() => navigate(`/tests/${test.uuid}`)}
+                          isFavorite={isFavorite(test.uuid)}
+                          onToggleFavorite={() => toggleFavorite(test.uuid)}
+                          onExecute={canCreateTasks ? () => openDrawer([test]) : undefined}
+                          selectMode={selectMode}
+                          selected={selectedUuids.has(test.uuid)}
+                          onToggleSelect={() => toggleSelect(test.uuid)}
+                        />
+                      ))}
+                    </ul>
+                  </div>
                 </div>
               </section>
             ))
