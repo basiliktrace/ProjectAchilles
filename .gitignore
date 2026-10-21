@@ -99,3 +99,8 @@ wiki/node_modules/
 /PRODUCT.md
 /DESIGN.md
 /.impeccable/
+
+# On-prem installer render outputs (scripts/deploy-server.sh)
+deploy/caddy/rendered/
+deploy/onprem/*.ps1
+deploy/onprem/*.sh

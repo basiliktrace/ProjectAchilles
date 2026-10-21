@@ -1,0 +1,4 @@
+# Extra site blocks — default for every TLS_MODE except achilles-ca.
+# scripts/deploy-server.sh copies this (or extras/<mode>.sites.caddy) to
+# rendered/sites-extra.caddy, which the Caddyfile imports at top level.
+# Intentionally empty.

@@ -1,0 +1,7 @@
+# TLS_MODE=achilles-ca
+# Leaf certificate issued and auto-renewed by Caddy's local CA, which is
+# configured (rendered/global.caddy, from extras/achilles-ca.global.caddy) to
+# sign with the installer's name-constrained ProjectAchilles intermediate
+# instead of a Caddy-generated CA. Endpoints trust the ProjectAchilles root,
+# which they fetch over plain HTTP from /ca/root.cer (extras/achilles-ca.sites.caddy).
+tls internal

@@ -1,8 +1,14 @@
 # ProjectAchilles — Caddy reverse proxy (single public origin)
 #
-# This file is intentionally static. The only part that changes between
-# deployments is the TLS strategy, which lives in the imported `tls.caddy`
-# snippet rendered by scripts/deploy-server.sh from your chosen TLS_MODE.
+# This file is intentionally static. What changes between deployments lives
+# in three snippets that scripts/deploy-server.sh renders from your TLS_MODE
+# into deploy/caddy/rendered/ (gitignored, mounted at /etc/caddy/rendered):
+#
+#   tls.caddy          TLS strategy for the site      (from tls-modes/<mode>.caddy)
+#   global.caddy       extra global options            (from global.caddy, or
+#                                                       extras/<mode>.global.caddy)
+#   sites-extra.caddy  extra top-level site blocks     (from sites-extra.caddy, or
+#                                                       extras/<mode>.sites.caddy)
 #
 # Topology: Caddy terminates TLS on :443 and reverse-proxies everything to
 # the frontend container. The frontend (nginx) serves the SPA and proxies
@@ -13,9 +19,15 @@
 
 {
 	# Global options
-	email {$ACME_EMAIL}
-	# admin endpoint stays on loopback inside the container
+	# No global `email`: the ACME modes pass {$ACME_EMAIL} in their tls snippet,
+	# and an empty `email` line would stop Caddy starting in the modes that
+	# don't collect one (internal, byo, achilles-ca).
+	# Admin API disabled. Config changes (and a renewed achilles-ca
+	# intermediate) therefore need a container restart, not `caddy reload`.
 	admin off
+
+	# Per-mode global options (e.g. the achilles-ca `pki` block).
+	import /etc/caddy/rendered/global.caddy
 }
 
 {$ACHILLES_DOMAIN} {
@@ -26,8 +38,8 @@
 		max_size 50MB
 	}
 
-	# TLS strategy is rendered per-deployment into tls.caddy.
-	import /etc/caddy/tls.caddy
+	# TLS strategy is rendered per-deployment into rendered/tls.caddy.
+	import /etc/caddy/rendered/tls.caddy
 
 	reverse_proxy frontend:80 {
 		header_up Host {host}
@@ -41,3 +53,6 @@
 		format console
 	}
 }
+
+# Per-mode extra sites (e.g. the achilles-ca plain-HTTP /ca/* site).
+import /etc/caddy/rendered/sites-extra.caddy

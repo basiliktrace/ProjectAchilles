@@ -8,7 +8,8 @@
 # network.
 #
 # Driven by scripts/deploy-server.sh, which generates the root .env and renders
-# deploy/caddy/tls.caddy. You can also run it directly:
+# deploy/caddy/rendered/{tls,global,sites-extra}.caddy (gitignored; render them
+# before the first `up`). You can also run it directly:
 #
 #   docker compose -f docker-compose.server.yml up -d --build
 #   docker compose -f docker-compose.server.yml --profile elasticsearch up -d --build
@@ -20,10 +21,12 @@ services:
   caddy:
     image: ${CADDY_IMAGE:-caddy:2.10.0-alpine}
     restart: unless-stopped
+    # CADDY_BIND_IP pins the published ports to one host address (the LAN IP
+    # for an on-prem install). Unset = all interfaces (public-server default).
     ports:
-      - "80:80"
-      - "443:443"
-      - "443:443/udp"   # HTTP/3
+      - "${CADDY_BIND_IP:-0.0.0.0}:80:80"
+      - "${CADDY_BIND_IP:-0.0.0.0}:443:443"
+      - "${CADDY_BIND_IP:-0.0.0.0}:443:443/udp"   # HTTP/3
     environment:
       - ACHILLES_DOMAIN=${ACHILLES_DOMAIN:?set ACHILLES_DOMAIN in .env}
       - ACME_EMAIL=${ACME_EMAIL:-}
@@ -31,8 +34,16 @@ services:
       - CADDY_DNS_TOKEN=${CADDY_DNS_TOKEN:-}
     volumes:
       - ./deploy/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
-      - ./deploy/caddy/tls.caddy:/etc/caddy/tls.caddy:ro
+      - ./deploy/caddy/rendered:/etc/caddy/rendered:ro
       - ./deploy/caddy/certs:/etc/caddy/certs:ro
+      # TLS_MODE=achilles-ca: ACHILLES_CA_DIR=/etc/projectachilles/ca. Mount
+      # DIRECTORIES, not files: renewal swaps files by rename, and a file bind
+      # mount would keep serving the old inode. caddy/ holds only root.crt and
+      # the intermediate cert+key; the root KEY is never mounted. public/ is the
+      # root (PEM + DER) served over plain HTTP at /ca/. Other modes mount the
+      # empty committed deploy/caddy/no-ca.
+      - ${ACHILLES_CA_DIR:-./deploy/caddy/no-ca}/caddy:/etc/caddy/ca:ro
+      - ${ACHILLES_CA_DIR:-./deploy/caddy/no-ca}/public:/srv/ca:ro
       - caddy-data:/data
       - caddy-config:/config
     depends_on:

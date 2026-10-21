@@ -1,5 +1,6 @@
-# Active TLS strategy — RENDERED BY scripts/deploy-server.sh.
-# This committed default uses Caddy's internal CA so the stack is runnable
-# out of the box without a public domain. The deploy script overwrites this
-# file with the snippet matching your chosen TLS_MODE (see tls-modes/).
+# Reference copy of the default TLS strategy — NOT mounted into Caddy.
+# The active snippet is deploy/caddy/rendered/tls.caddy (gitignored), which
+# scripts/deploy-server.sh renders from tls-modes/<TLS_MODE>.caddy and the
+# Caddyfile imports as /etc/caddy/rendered/tls.caddy. The default is Caddy's
+# internal CA, so the stack runs without a public domain.
 tls internal
