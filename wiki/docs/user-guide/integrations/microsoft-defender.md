@@ -207,9 +207,12 @@ The analytics service provides four types of cross-correlation between Achilles 
 
 The headline metric on the Defender tab. It is the share of conclusive
 attack-simulation executions in the selected window that Defender detected,
-read from the per-run flags the enrichment pass writes onto each test result
-(`f0rtika.defender_stage_detected`, falling back to `_detected`), with the prevented subset
-reported separately:
+read from the per-run flags the enrichment pass writes onto each test result,
+with the prevented subset reported separately. A bundle stage counts only by
+its own `f0rtika.defender_stage_detected` flag (never because a sibling stage
+was caught), a standalone test by its own `f0rtika.defender_detected` flag, and
+a vendor-confirmed prevention (`f0rtika.defender_prevented`) always counts as
+detected:
 
 ```
 detectionRate = (prevented + detectedOnly) / executions × 100

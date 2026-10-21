@@ -222,8 +222,9 @@ See [CrowdStrike Falcon](./crowdstrike).
 These are distinct metrics. The **Defense Score** measures whether a test's
 *exit code* reported it as protected; the EDR tabs' **Detection Rate**
 measures whether *Microsoft Defender or CrowdStrike detected the run*,
-read from the per-run enrichment flags (`stage_detected` falling back to
-`detected`, with prevented as a subset). See the Detection Rate sections of
+read from the per-run enrichment flags (a bundle stage by its own
+`stage_detected` flag, a standalone test by its `detected` flag, and a
+vendor-confirmed prevention always counts as detected). See the Detection Rate sections of
 [Microsoft Defender](./microsoft-defender#detection-rate) and
 [CrowdStrike Falcon](./crowdstrike#detection-rate). The Defense Score counts cyber-hygiene controls; the Detection Rate
 excludes them. Auto-resolve never affects either score.

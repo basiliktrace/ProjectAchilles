@@ -67,14 +67,18 @@ cause.
 A full-width feed lists every alert in the window with severity, status,
 techniques and the auto-resolve receipt when present. Filter it by **source**
 (All / Test / Organic) and by **severity**; the counts on each segment stay
-stable as you filter, and the "All" count equals the Alerts tile total. Click a
-row to open the alert drawer.
+stable as you filter, and the "All" count equals the Alerts tile total. The
+summary strip above the feed follows the source you pick but not the severity;
+severity only narrows the rows and the page count. A linked alert's **Linked
+test** opens the Executions view filtered to that test, or to the bundle when
+the alert was matched to a bundle. Click a row to open the alert drawer.
 
 ## Technique Coverage
 
 Per-technique table for the window, split into **prevented**, **detected only**
-and **missed** executions, with the number of CrowdStrike alerts tagged with that exact
-technique. Detected techniques are listed first. The header total equals the
+and **missed** executions, with an **Alerts (in window)** column: the number of
+distinct CrowdStrike alerts in the window tagged with that technique or one of its
+sub-techniques, so it matches the drawer the row opens. Detected techniques are listed first. The header total equals the
 Detection Rate tile's denominator, because both come from the same response.
 
 ## Alert Drill-Down Drawer
@@ -96,10 +100,11 @@ detectionRate = (prevented + detectedOnly) / executions × 100
 - **executions** — conclusive attack-simulation executions in the selected
   window. Each execution is counted once, even if it exercises several
   techniques.
-- **detected** — the execution's own enrichment flag says CrowdStrike caught it. For
-  multi-stage bundles the per-stage flag wins, so a stage is never credited
-  because a sibling stage was detected.
-- **prevented** — detected, and CrowdStrike also blocked it. **Detected only** is
+- **detected** — the execution's own enrichment flag says CrowdStrike caught it. A
+  bundle stage counts only by its own per-stage flag, so it is never credited
+  because a sibling stage was detected; a standalone test counts by its own
+  detection flag. A prevention CrowdStrike confirmed always counts as detected.
+- **prevented** — CrowdStrike confirmed it blocked the execution. **Detected only** is
   detected but not blocked; the rest are **missed**.
 
 :::note Numbers can differ from before
