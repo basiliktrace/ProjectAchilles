@@ -1,10 +1,17 @@
 import type { EnrichedTestExecution } from '@/services/api/analytics';
 import { classifyExecution, type ExecutionOutcome } from './shared';
 
+export type StageKind = ExecutionOutcome | 'not-run';
+
 export interface StageVerdict {
-  kind: ExecutionOutcome | 'not-run';
+  kind: StageKind;
   title: string;
   body: string;
+}
+
+/** A stage's outcome: classifyExecution's, except exit 260 (blocked before it ran) is 'not-run'. */
+export function stageKind(exec: EnrichedTestExecution): StageKind {
+  return exec.error_code === 260 ? 'not-run' : classifyExecution(exec);
 }
 
 const ACTION_COPY: Record<string, string> = {
@@ -127,7 +134,7 @@ export function stageVerdict(exec: EnrichedTestExecution, siblings: EnrichedTest
   }
 }
 
-const COUNT_ORDER: Array<[ExecutionOutcome | 'not-run', string]> = [
+const COUNT_ORDER: Array<[StageKind, string]> = [
   ['protected', 'protected'],
   ['prevented', 'prevented'],
   ['detected', 'detected'],
@@ -140,7 +147,7 @@ const COUNT_ORDER: Array<[ExecutionOutcome | 'not-run', string]> = [
 export function stageOutcomeCounts(members: EnrichedTestExecution[]): string {
   const counts = new Map<string, number>();
   for (const m of members) {
-    const kind = m.error_code === 260 ? 'not-run' : classifyExecution(m);
+    const kind = stageKind(m);
     counts.set(kind, (counts.get(kind) ?? 0) + 1);
   }
   return COUNT_ORDER.filter(([k]) => (counts.get(k) ?? 0) > 0)

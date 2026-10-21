@@ -9,7 +9,7 @@ import {
   ShieldAlert,
   ShieldOff,
 } from 'lucide-react';
-import type { EnrichedTestExecution, RiskAcceptance } from '@/services/api/analytics';
+import type { EnrichedTestExecution } from '@/services/api/analytics';
 import type { RelatedAlertsResponse } from '@/services/api/defender';
 import type { RelatedCrowdStrikeAlertsResponse } from '@/services/api/crowdstrike';
 import { Badge } from '@/components/ui/badge';
@@ -23,72 +23,31 @@ import {
   BundleResultLabel,
   ExecResultLabel,
   SEVERITY_VARIANTS,
-  alertRunTimeAnnotation,
   formatTimestamp,
   isSkippedStage,
-  ERROR_CODE_CATEGORIES,
-  ERROR_CATEGORY_COLORS,
   type BundleGroup,
-  type DisplayRow,
 } from './shared';
+import {
+  CrowdStrikeAlertRow,
+  DefenderAlertRow,
+  MetaCell,
+  ResultCode,
+  RiskActions,
+  descKeyFor,
+  stageAlertState,
+  type RunDetailPanelProps,
+} from './detailParts';
+import { StageList } from './StageList';
+import { stageOutcomeCounts } from './stageVerdict';
 
-export interface AcceptRiskItem {
-  test_name: string;
-  control_id?: string;
-  hostname?: string;
-  scope?: 'host' | 'global';
-}
+export type { AcceptRiskItem, InfoModalRequest } from './detailParts';
 
-export interface InfoModalRequest {
-  testUuid: string;
-  testName: string;
-  hasInfoCard: boolean;
-  hasReadme: boolean;
-  scrollToValidator?: string;
-}
-
-interface DescriptionData {
-  description: string | null;
-  hasInfoCard: boolean;
-  hasReadme: boolean;
-}
-
-interface RunDetailPanelProps {
-  row: DisplayRow | null;
-  defenderConfigured: boolean;
-  crowdstrikeConfigured: boolean;
-  descriptionMap: Map<string, DescriptionData | null>;
-  descriptionLoadingKey: string | null;
-  alertsMap: Map<string, RelatedAlertsResponse | null>;
-  alertsLoading: Set<string>;
-  csAlertsMap: Map<string, RelatedCrowdStrikeAlertsResponse | null>;
-  csAlertsLoading: Set<string>;
-  stageAlertsCacheKey: (exec: EnrichedTestExecution) => string;
-  getAcceptanceForExec: (exec: EnrichedTestExecution) => RiskAcceptance | undefined;
-  riskEnabled: boolean;
-  archiveEnabled: boolean;
-  onRequestAcceptRisk: (items: AcceptRiskItem[]) => void;
-  onRequestRevoke: (target: { id: string; testName: string }) => void;
-  onRequestArchive: (keys: string[]) => void;
-  onOpenInfo: (request: InfoModalRequest) => void;
-  /** Which control row (index) is expanded within a bundle. */
-  expandedControlIndex: number | null;
-  onToggleControl: (index: number, exec: EnrichedTestExecution) => void;
-}
-
-function descKeyFor(exec: EnrichedTestExecution): string {
-  return exec.is_bundle_control && exec.bundle_id
-    ? `${exec.bundle_id}::${exec.control_validator ?? ''}`
-    : exec.test_uuid;
-}
-
-function MetaCell({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <div className="min-w-0">
-      <div className="text-[10px] uppercase tracking-wider text-faint">{label}</div>
-      <div className="mt-0.5 break-words font-mono text-xs">{children}</div>
-    </div>
-  );
+/** First member value for a run-level field (every stage of a run carries the same one). */
+function runField<K extends keyof EnrichedTestExecution>(
+  controls: EnrichedTestExecution[],
+  key: K,
+): EnrichedTestExecution[K] | undefined {
+  return controls.find((c) => c[key] !== undefined && c[key] !== null)?.[key];
 }
 
 /** Description + metadata + stage-attributed Defender/CrowdStrike alerts for one execution. */
@@ -123,36 +82,13 @@ function ExecDetailBody({
   const isLoadingDesc = descriptionLoadingKey === descKey;
   const hasDocumentation = descData && (descData.hasInfoCard || descData.hasReadme);
 
-  const alertKey = stageAlertsCacheKey(exec);
-  const alertData = alertsMap.get(alertKey);
-  const isLoadingAlerts = alertsLoading.has(alertKey);
-
-  const csAlertData = csAlertsMap.get(alertKey);
-  const isLoadingCsAlerts = csAlertsLoading.has(alertKey);
-
-  // Filter to alerts whose evidence binary is THIS specific stage's
-  // technique. Accept exact match OR a `<control_id>-` prefix; the `-`
-  // boundary prevents `T108` from accidentally matching `T1083`.
-  const stageControlId = exec.control_id?.toLowerCase();
-  const stageAlerts =
-    alertData && stageControlId
-      ? alertData.alerts.filter((a) => {
-          if (a.attribution !== 'stage') return false;
-          const att = a.attributed_control_id?.toLowerCase();
-          if (!att) return false;
-          return att === stageControlId || att.startsWith(`${stageControlId}-`);
-        })
-      : [];
-
-  const csStageAlerts =
-    csAlertData && stageControlId
-      ? csAlertData.alerts.filter((a) => {
-          if (a.attribution !== 'stage') return false;
-          const att = a.attributed_control_id?.toLowerCase();
-          if (!att) return false;
-          return att === stageControlId || att.startsWith(`${stageControlId}-`);
-        })
-      : [];
+  const { defender, crowdstrike } = stageAlertState(exec, {
+    alertsMap,
+    alertsLoading,
+    csAlertsMap,
+    csAlertsLoading,
+    stageAlertsCacheKey,
+  });
 
   return (
     <div className="flex flex-col gap-3 text-sm">
@@ -224,49 +160,20 @@ function ExecDetailBody({
           <span className="text-[10px] font-medium uppercase tracking-wider text-faint">
             Defender Alerts
           </span>
-          {isLoadingAlerts ? (
+          {defender.loading ? (
             <div className="mt-2 flex items-center gap-2">
               <Loader2 className="h-3.5 w-3.5 animate-spin text-muted" />
               <span className="text-xs text-muted">Checking for related alerts...</span>
             </div>
-          ) : stageAlerts.length > 0 ? (
+          ) : defender.alerts.length > 0 ? (
             <div className="mt-2 space-y-2">
-              {stageAlerts.map((alert) => {
-                const deltaLabel = alertRunTimeAnnotation(exec.timestamp, alert);
-                return (
-                  <div key={alert.alert_id} className="flex items-center gap-2 text-xs">
-                    <Badge
-                      variant="outline"
-                      className={cn('px-1.5 py-0 text-[10px]', ALERT_SEVERITY_CLASSES[alert.severity])}
-                    >
-                      {alert.severity}
-                    </Badge>
-                    <PreventionBadge
-                      action={alert.prevention_action}
-                      rawStatus={alert.remediation_status}
-                    />
-                    <span className="flex-1 truncate text-foreground">{alert.alert_title}</span>
-                    <Badge variant="default" className="px-1.5 py-0 text-[10px]">
-                      {alert.status}
-                    </Badge>
-                    <span className="whitespace-nowrap text-faint">{deltaLabel}</span>
-                    <a
-                      href={defenderAlertUrl(alert.portal_url, alert.alert_id)}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="shrink-0 rounded p-0.5 text-faint transition-colors hover:text-foreground"
-                      aria-label="Open in Microsoft Defender"
-                      title="Open in Microsoft Defender"
-                    >
-                      <ExternalLink className="h-3 w-3" />
-                    </a>
-                  </div>
-                );
-              })}
+              {defender.alerts.map((alert) => (
+                <DefenderAlertRow key={alert.alert_id} alert={alert} runTimestamp={exec.timestamp} />
+              ))}
             </div>
           ) : (
             <p className="mt-2 text-xs text-faint">
-              {alertData && alertData.alerts.some((a) => a.attribution === 'bundle')
+              {defender.hasBundleAlerts
                 ? 'No stage-specific Defender alerts. See the bundle-level alerts above.'
                 : 'No related Defender alerts within the time window'}
             </p>
@@ -282,49 +189,20 @@ function ExecDetailBody({
           <span className="text-[10px] font-medium uppercase tracking-wider text-faint">
             CrowdStrike Alerts
           </span>
-          {isLoadingCsAlerts ? (
+          {crowdstrike.loading ? (
             <div className="mt-2 flex items-center gap-2">
               <Loader2 className="h-3.5 w-3.5 animate-spin text-muted" />
               <span className="text-xs text-muted">Checking for related alerts...</span>
             </div>
-          ) : csStageAlerts.length > 0 ? (
+          ) : crowdstrike.alerts.length > 0 ? (
             <div className="mt-2 space-y-2">
-              {csStageAlerts.map((alert) => {
-                const deltaLabel = alertRunTimeAnnotation(exec.timestamp, alert);
-                return (
-                  <div key={alert.alert_id} className="flex items-center gap-2 text-xs">
-                    <Badge
-                      variant="outline"
-                      className={cn('px-1.5 py-0 text-[10px]', ALERT_SEVERITY_CLASSES[alert.severity])}
-                    >
-                      {alert.severity}
-                    </Badge>
-                    <PreventionBadge
-                      action={alert.prevention_action}
-                      rawStatus={alert.pattern_disposition_description}
-                    />
-                    <span className="flex-1 truncate text-foreground">{alert.alert_title}</span>
-                    <Badge variant="default" className="px-1.5 py-0 text-[10px]">
-                      {alert.status}
-                    </Badge>
-                    <span className="whitespace-nowrap text-faint">{deltaLabel}</span>
-                    <a
-                      href={falconAlertUrl(alert.portal_url)}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="shrink-0 rounded p-0.5 text-faint transition-colors hover:text-foreground"
-                      aria-label="Open in Falcon console"
-                      title="Open in Falcon console"
-                    >
-                      <ExternalLink className="h-3 w-3" />
-                    </a>
-                  </div>
-                );
-              })}
+              {crowdstrike.alerts.map((alert) => (
+                <CrowdStrikeAlertRow key={alert.alert_id} alert={alert} runTimestamp={exec.timestamp} />
+              ))}
             </div>
           ) : (
             <p className="mt-2 text-xs text-faint">
-              {csAlertData && csAlertData.alerts.some((a) => a.attribution === 'bundle')
+              {crowdstrike.hasBundleAlerts
                 ? 'No stage-specific CrowdStrike alerts. See the bundle-level alerts above.'
                 : 'No related CrowdStrike alerts within the time window'}
             </p>
@@ -335,68 +213,8 @@ function ExecDetailBody({
   );
 }
 
-function RiskActions({
-  exec,
-  riskEnabled,
-  getAcceptanceForExec,
-  onRequestAcceptRisk,
-  onRequestRevoke,
-}: Pick<RunDetailPanelProps, 'riskEnabled' | 'getAcceptanceForExec' | 'onRequestAcceptRisk' | 'onRequestRevoke'> & {
-  exec: EnrichedTestExecution;
-}) {
-  if (!riskEnabled) return null;
-  const acceptance = getAcceptanceForExec(exec);
-  if (acceptance) {
-    return (
-      <Button
-        variant="ghost"
-        size="xs"
-        className="text-warning hover:text-warning"
-        onClick={(e) => {
-          e.stopPropagation();
-          onRequestRevoke({ id: acceptance.acceptance_id, testName: exec.test_name });
-        }}
-        title={`Risk accepted — ${acceptance.justification.substring(0, 100)} — by ${acceptance.accepted_by_name}`}
-      >
-        <ShieldAlert />
-        Revoke
-      </Button>
-    );
-  }
-  return (
-    <Button
-      variant="ghost"
-      size="xs"
-      onClick={(e) => {
-        e.stopPropagation();
-        onRequestAcceptRisk([
-          { test_name: exec.test_name, control_id: exec.control_id, hostname: exec.hostname },
-        ]);
-      }}
-      title="Accept Risk"
-    >
-      <ShieldOff />
-      Accept risk
-    </Button>
-  );
-}
-
 export function RunDetailPanel(props: RunDetailPanelProps) {
-  const {
-    row,
-    defenderConfigured,
-    crowdstrikeConfigured,
-    alertsMap,
-    alertsLoading,
-    csAlertsMap,
-    csAlertsLoading,
-    stageAlertsCacheKey,
-    getAcceptanceForExec,
-    archiveEnabled,
-    onRequestArchive,
-    expandedControlIndex,
-    onToggleControl,
-  } = props;
+  const { row, getAcceptanceForExec, archiveEnabled, onRequestArchive } = props;
 
   if (!row) {
     return (
@@ -413,95 +231,116 @@ export function RunDetailPanel(props: RunDetailPanelProps) {
     row.type === 'bundle'
       ? [...new Set(row.controls.flatMap((c) => c.techniques ?? []))]
       : (row.execution.techniques ?? []);
+  // Attack-chain runs (every bundle but cyber-hygiene) carry their run-level
+  // fields in the header instead of repeating them under each stage.
+  const stageRun = row.type === 'bundle' && row.category !== 'cyber-hygiene' ? row : undefined;
+  const runTags = stageRun ? runField(stageRun.controls, 'tags') : undefined;
+  const runScore = stageRun ? runField(stageRun.controls, 'score') : undefined;
+  const runTarget = stageRun ? runField(stageRun.controls, 'target') : undefined;
+  const runComplexity = stageRun ? runField(stageRun.controls, 'complexity') : undefined;
 
   return (
     <div className="rounded-lg border border-border bg-surface">
-      {/* Header */}
-      <div className="border-b border-border p-4">
-        <div className="flex items-start justify-between gap-3">
-          <h3 className="text-[15px] font-semibold leading-snug">{name}</h3>
-          <div className="shrink-0">
-            {row.type === 'bundle' ? (
-              <BundleResultLabel group={row} />
-            ) : (
-              <ExecResultLabel exec={row.execution} />
-            )}
+      <div role="region" aria-label="Run summary">
+        {/* Header */}
+        <div className="border-b border-border p-4">
+          <div className="flex items-start justify-between gap-3">
+            <h3 className="text-[15px] font-semibold leading-snug">{name}</h3>
+            <div className="shrink-0">
+              {row.type === 'bundle' ? (
+                <BundleResultLabel group={row} />
+              ) : (
+                <ExecResultLabel exec={row.execution} />
+              )}
+            </div>
           </div>
-        </div>
-        <div className="mt-2 flex flex-wrap items-center gap-1.5">
-          {category && <Badge variant="low">{category}</Badge>}
-          {headerExec?.severity && (
-            <Badge
-              variant="outline"
-              className={cn('font-mono uppercase', SEVERITY_VARIANTS[headerExec.severity])}
-            >
-              {headerExec.severity}
-            </Badge>
-          )}
-          {techniques.slice(0, 4).map((t) => (
-            <Badge key={t} variant="default" className="font-mono">
-              {t}
-            </Badge>
-          ))}
-          {techniques.length > 4 && (
-            <span className="text-xs text-faint">+{techniques.length - 4}</span>
-          )}
-          {headerExec && getAcceptanceForExec(headerExec) && (
-            <Badge variant="medium" className="font-mono uppercase">
-              <ShieldOff className="h-3 w-3" /> accepted
-            </Badge>
-          )}
-          <span className="ml-auto flex items-center gap-1">
-            {headerExec && <RiskActions {...props} exec={headerExec} />}
-            {archiveEnabled && (
-              <Button
-                variant="ghost"
-                size="xs"
-                className="hover:text-danger"
-                onClick={() => onRequestArchive([row.key])}
-                title="Archive"
+          <div className="mt-2 flex flex-wrap items-center gap-1.5">
+            {category && <Badge variant="low">{category}</Badge>}
+            {headerExec?.severity && (
+              <Badge
+                variant="outline"
+                className={cn('font-mono uppercase', SEVERITY_VARIANTS[headerExec.severity])}
               >
-                <Archive />
-                Archive
-              </Button>
+                {headerExec.severity}
+              </Badge>
             )}
-          </span>
-        </div>
-      </div>
-
-      {/* Meta grid */}
-      <div className="grid grid-cols-2 gap-3 border-b border-border p-4 md:grid-cols-4">
-        <MetaCell label="Agent">
-          {row.type === 'bundle' ? row.hostname : row.execution.hostname}
-        </MetaCell>
-        <MetaCell label="Executed">
-          {formatTimestamp(row.type === 'bundle' ? row.timestamp : row.execution.timestamp, false)}
-        </MetaCell>
-        {headerExec ? (
-          <>
-            <MetaCell label="Result code">
-              {(() => {
-                const exec = headerExec;
-                if (!exec.error_name && !exec.error_code) return '—';
-                const text =
-                  exec.error_name && exec.error_code
-                    ? `${exec.error_name} (${exec.error_code})`
-                    : exec.error_name || String(exec.error_code ?? '');
-                const cat = exec.error_code != null ? ERROR_CODE_CATEGORIES[exec.error_code] : undefined;
-                return <span className={cat ? ERROR_CATEGORY_COLORS[cat] : ''}>{text}</span>;
-              })()}
-            </MetaCell>
-            {headerExec.score !== undefined && (
-              <MetaCell label="Score">{headerExec.score}/10</MetaCell>
+            {techniques.slice(0, 4).map((t) => (
+              <Badge key={t} variant="default" className="font-mono">
+                {t}
+              </Badge>
+            ))}
+            {techniques.length > 4 && (
+              <span className="text-xs text-faint">+{techniques.length - 4}</span>
             )}
-          </>
-        ) : (
-          <MetaCell label="Results">
-            <span className="text-faint">
-              {(row as BundleGroup).protectedCount}P / {(row as BundleGroup).unprotectedCount}F
+            {headerExec && getAcceptanceForExec(headerExec) && (
+              <Badge variant="medium" className="font-mono uppercase">
+                <ShieldOff className="h-3 w-3" /> accepted
+              </Badge>
+            )}
+            <span className="ml-auto flex items-center gap-1">
+              {headerExec && <RiskActions {...props} exec={headerExec} />}
+              {archiveEnabled && (
+                <Button
+                  variant="ghost"
+                  size="xs"
+                  className="hover:text-danger"
+                  onClick={() => onRequestArchive([row.key])}
+                  title="Archive"
+                >
+                  <Archive />
+                  Archive
+                </Button>
+              )}
             </span>
+          </div>
+          {runTags?.length ? (
+            <div className="mt-2 flex flex-wrap items-center gap-1">
+              {runTags.map((tag) => (
+                <Badge key={tag} variant="default">
+                  {tag}
+                </Badge>
+              ))}
+            </div>
+          ) : null}
+        </div>
+
+        {/* Meta grid */}
+        <div className="grid grid-cols-2 gap-3 border-b border-border p-4 md:grid-cols-4">
+          <MetaCell label="Agent">
+            {row.type === 'bundle' ? row.hostname : row.execution.hostname}
           </MetaCell>
-        )}
+          <MetaCell label="Executed">
+            {formatTimestamp(row.type === 'bundle' ? row.timestamp : row.execution.timestamp, false)}
+          </MetaCell>
+          {headerExec ? (
+            <>
+              <MetaCell label="Result code">
+                <ResultCode exec={headerExec} />
+              </MetaCell>
+              {headerExec.score !== undefined && (
+                <MetaCell label="Score">{headerExec.score}/10</MetaCell>
+              )}
+            </>
+          ) : stageRun ? (
+            <>
+              <div className="col-span-2">
+                <MetaCell label="Results">{stageOutcomeCounts(stageRun.controls)}</MetaCell>
+              </div>
+              {runScore !== undefined && <MetaCell label="Score">{runScore}/10</MetaCell>}
+              {runTarget && <MetaCell label="Target">{runTarget}</MetaCell>}
+              {runComplexity && <MetaCell label="Complexity">{runComplexity}</MetaCell>}
+              <div className="col-span-2">
+                <MetaCell label="Test UUID">{stageRun.bundle_id}</MetaCell>
+              </div>
+            </>
+          ) : (
+            <MetaCell label="Results">
+              <span className="text-faint">
+                {(row as BundleGroup).protectedCount}P / {(row as BundleGroup).unprotectedCount}F
+              </span>
+            </MetaCell>
+          )}
+        </div>
       </div>
 
       {/* Body */}
@@ -509,19 +348,7 @@ export function RunDetailPanel(props: RunDetailPanelProps) {
         {row.type === 'standalone' ? (
           <ExecDetailBody {...props} exec={row.execution} />
         ) : (
-          <BundleBody
-            group={row}
-            {...props}
-            defenderConfigured={defenderConfigured}
-            crowdstrikeConfigured={crowdstrikeConfigured}
-            alertsMap={alertsMap}
-            alertsLoading={alertsLoading}
-            csAlertsMap={csAlertsMap}
-            csAlertsLoading={csAlertsLoading}
-            stageAlertsCacheKey={stageAlertsCacheKey}
-            expandedControlIndex={expandedControlIndex}
-            onToggleControl={onToggleControl}
-          />
+          <BundleBody {...props} group={row} />
         )}
       </div>
     </div>
@@ -540,8 +367,6 @@ function BundleBody({
     csAlertsMap,
     csAlertsLoading,
     stageAlertsCacheKey,
-    expandedControlIndex,
-    onToggleControl,
   } = props;
 
   // Bundle-level Defender alerts: union `attribution === 'bundle'` alerts
@@ -571,9 +396,6 @@ function BundleBody({
   }
   const csBundleAlerts = Array.from(csSeen.values());
 
-  const scored = group.controls.filter((c) => !isSkippedStage(c));
-  const ratio = scored.length > 0 ? group.protectedCount / scored.length : 0;
-  const itemLabel = group.category === 'cyber-hygiene' ? 'Controls' : 'Stages';
 
   return (
     <div className="flex flex-col gap-3">
@@ -683,10 +505,26 @@ function BundleBody({
         </div>
       )}
 
+      {group.category !== 'cyber-hygiene' ? (
+        <StageList {...props} group={group} />
+      ) : (
+        <CyberHygieneControls {...props} group={group} />
+      )}
+    </div>
+  );
+}
+
+/** Cyber-hygiene bundles: protection ratio bar + one row per independent control. */
+function CyberHygieneControls({ group, ...props }: RunDetailPanelProps & { group: BundleGroup }) {
+  const { expandedControlIndex, onToggleControl } = props;
+  const scored = group.controls.filter((c) => !isSkippedStage(c));
+  const ratio = scored.length > 0 ? group.protectedCount / scored.length : 0;
+  return (
+    <>
       {/* Controls header + protection ratio bar */}
       <div className="flex items-center gap-3">
         <span className="text-[10px] font-medium uppercase tracking-wider text-faint">
-          {itemLabel}
+          Controls
         </span>
         <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-danger-dim">
           <div className="h-full rounded-full bg-accent" style={{ width: `${ratio * 100}%` }} />
@@ -729,6 +567,6 @@ function BundleBody({
           );
         })}
       </div>
-    </div>
+    </>
   );
 }
