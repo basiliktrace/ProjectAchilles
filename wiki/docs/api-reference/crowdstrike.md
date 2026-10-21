@@ -158,7 +158,7 @@ descending. `alerts` is CrowdStrike alerts tagged with that **exact** technique 
 the window (no sub-technique roll-up).
 
 :::note Not the same as /correlation/detection-rate
-`/correlation/detection-rate` (above) is the older technique plus time-window
+[`/correlation/detection-rate`](#detection-rate) (below) is the older technique plus time-window
 heuristic and is kept for the CLI. The Analytics tab now uses
 `technique-coverage`, so its numbers can differ from the heuristic.
 :::

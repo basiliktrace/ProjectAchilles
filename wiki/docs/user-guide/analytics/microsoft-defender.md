@@ -65,7 +65,7 @@ cause.
 
 A full-width feed lists every alert in the window with severity, status,
 techniques and the auto-resolve receipt when present. Filter it by **source**
-(All / Test / Organic) and by **severity**; the counts on each segment stay
+(All / Test / Organic) and by **severity** (the default is "High & medium"; the CrowdStrike tab defaults to "All severities"); the counts on each segment stay
 stable as you filter, and the "All" count equals the Alerts tile total. Click a
 row to open the alert drawer.
 
