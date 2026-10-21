@@ -5,7 +5,6 @@ package sysprobe
 import (
 	"context"
 	"fmt"
-	"os"
 	"strings"
 )
 
@@ -45,6 +44,7 @@ type System interface {
 	DockerVersion() (string, error)
 	TimeSynced() (bool, error)
 	IsRoot() bool
+	DirExists(path string) bool
 	OSRelease() (id, version string, err error)
 }
 
@@ -140,7 +140,7 @@ func checkRAM(s System) Check {
 func checkDisk(s System) Check {
 	c := Check{ID: "disk", Title: "Free disk space"}
 	path := "/"
-	if st, err := os.Stat("/var/lib/docker"); err == nil && st.IsDir() {
+	if s.DirExists("/var/lib/docker") {
 		path = "/var/lib/docker"
 	}
 	b, err := s.DiskFreeBytes(path)

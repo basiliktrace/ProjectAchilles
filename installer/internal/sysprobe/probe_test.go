@@ -15,13 +15,16 @@ type fakeSys struct {
 	syncErr    error
 	root       bool
 	osID, osVr string
+	dockerDir  bool
+	diskPath   string
 }
 
 func good() *fakeSys {
 	return &fakeSys{mem: 8 << 30, disk: 100 << 30, busy: map[int]bool{}, httpErr: map[string]error{}, synced: true, root: true, osID: "ubuntu", osVr: "24.04"}
 }
 func (f *fakeSys) MemTotalBytes() (uint64, error)                  { return f.mem, nil }
-func (f *fakeSys) DiskFreeBytes(string) (uint64, error)            { return f.disk, nil }
+func (f *fakeSys) DiskFreeBytes(p string) (uint64, error)          { f.diskPath = p; return f.disk, nil }
+func (f *fakeSys) DirExists(string) bool                           { return f.dockerDir }
 func (f *fakeSys) PortFree(p int) bool                             { return !f.busy[p] }
 func (f *fakeSys) HTTPReachable(_ context.Context, u string) error { return f.httpErr[u] }
 func (f *fakeSys) DockerVersion() (string, error)                  { return "27.1", f.dockerErr }
@@ -115,5 +118,19 @@ func TestPreflightRootDiskDockerTimeEgress(t *testing.T) {
 	}
 	if d := find(t, cs, "egress-github").Detail; d == "" {
 		t.Error("egress detail should name host")
+	}
+}
+
+func TestPreflightDiskPathSelection(t *testing.T) {
+	s := good()
+	s.dockerDir = true
+	Preflight(context.Background(), s, PreflightOptions{})
+	if s.diskPath != "/var/lib/docker" {
+		t.Errorf("got %q", s.diskPath)
+	}
+	s.dockerDir = false
+	Preflight(context.Background(), s, PreflightOptions{})
+	if s.diskPath != "/" {
+		t.Errorf("got %q", s.diskPath)
 	}
 }

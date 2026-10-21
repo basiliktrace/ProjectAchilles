@@ -111,3 +111,8 @@ func (RealSystem) OSRelease() (id, version string, err error) {
 	}
 	return id, version, sc.Err()
 }
+
+func (RealSystem) DirExists(path string) bool {
+	st, err := os.Stat(path)
+	return err == nil && st.IsDir()
+}
