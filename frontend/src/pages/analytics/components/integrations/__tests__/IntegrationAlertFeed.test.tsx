@@ -239,6 +239,54 @@ describe('IntegrationAlertFeed', () => {
     );
   });
 
+  it("hides the Defender strip's Other item when no products fall outside the top three", async () => {
+    getAlerts.mockResolvedValue(
+      page([item({ service_source: 'microsoftDefenderForEndpoint' })], {
+        counts: {
+          bySource: { all: 3, test: 1, organic: 2 },
+          bySeverity: { high: 3 },
+          autoResolved: 0,
+          linkedOpen: 0,
+          byProduct: { 'Defender for Endpoint': 2, 'Office 365': 1, Identity: 0, Cloud: 0 },
+        },
+      }),
+    );
+    renderFeed(mk('defender'));
+    await screen.findByText('Suspicious thing');
+    const summary = screen.getByText('Auto-resolved').closest('div') as HTMLElement;
+    expect(within(summary).getByText('Defender for Endpoint')).toBeInTheDocument();
+    expect(within(summary).queryByText('Other')).not.toBeInTheDocument();
+  });
+
+  it('clamps to the last page when a refresh shrinks the result below the current page', async () => {
+    getAlerts.mockResolvedValue(page([item()], { total: 40 }));
+    const v = mk('crowdstrike');
+    const { rerender } = renderFeed(v);
+    await screen.findByText('Suspicious thing');
+    for (const p of [2, 3, 4]) {
+      fireEvent.click(screen.getByRole('button', { name: /next/i }));
+      await waitFor(() => expect(getAlerts).toHaveBeenLastCalledWith(expect.objectContaining({ page: p })));
+      await waitFor(() => expect(screen.getByRole('button', { name: /previous/i })).toBeEnabled());
+    }
+    // After Sync Now the alerts on page 4 are gone: 15 alerts now fit on 2 pages.
+    getAlerts.mockImplementation(async (params: { page: number }) =>
+      params.page > 2
+        ? page([], { total: 15, page: params.page })
+        : page([item({ alert_id: `p${params.page}`, alert_title: `Row on page ${params.page}` })], { total: 15, page: params.page }),
+    );
+    getAlerts.mockClear();
+    rerender(
+      <MemoryRouter>
+        <IntegrationAlertFeed vendor={v} window={win} windowLabel="Last 30 days" refreshKey={1} />
+      </MemoryRouter>,
+    );
+    expect(await screen.findByText('Row on page 2')).toBeInTheDocument();
+    expect(getAlerts).toHaveBeenLastCalledWith(expect.objectContaining({ page: 2 }));
+    expect(screen.getByText(/page 2 of 2/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /next/i })).toBeDisabled();
+    expect(screen.queryByText('No alerts match these filters')).not.toBeInTheDocument();
+  });
+
   it('keeps the newer response when an older request resolves last', async () => {
     let resolveOld!: (p: IntegrationAlertPage) => void;
     let resolveNew!: (p: IntegrationAlertPage) => void;

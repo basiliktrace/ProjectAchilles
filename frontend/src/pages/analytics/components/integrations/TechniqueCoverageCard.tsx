@@ -121,7 +121,7 @@ export default function TechniqueCoverageCard({ vendor, data, loading, error, on
                       <th className="py-2 pr-3 text-right font-medium">Prevented</th>
                       <th className="py-2 pr-3 text-right font-medium">Detected only</th>
                       <th className="py-2 pr-3 text-right font-medium">Missed</th>
-                      <th className="py-2 text-right font-medium">Alerts</th>
+                      <th className="py-2 text-right font-medium">Alerts (in window)</th>
                     </tr>
                   </thead>
                   <tbody>

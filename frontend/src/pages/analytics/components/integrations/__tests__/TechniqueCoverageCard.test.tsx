@@ -48,6 +48,11 @@ describe('TechniqueCoverageCard', () => {
     expect(screen.queryByText(/±60/)).not.toBeInTheDocument();
   });
 
+  it("labels the alerts column 'Alerts (in window)'", () => {
+    render(<TechniqueCoverageCard vendor={vendor} data={makeData([item(1)])} loading={false} onSelectTechnique={noop} />);
+    expect(screen.getByText('Alerts (in window)', { selector: 'th' })).toBeInTheDocument();
+  });
+
   it('uses Defender wording for the defender vendor', () => {
     const d = { id: 'defender' } as unknown as IntegrationVendor;
     render(<TechniqueCoverageCard vendor={d} data={makeData([item(1)])} loading={false} onSelectTechnique={noop} />);

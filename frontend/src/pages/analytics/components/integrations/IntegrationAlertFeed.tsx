@@ -118,6 +118,13 @@ export default function IntegrationAlertFeed({ vendor, window, windowLabel, refr
       })
       .then((r) => {
         if (cancelled) return;
+        // A refresh (Sync Now keeps the page) can shrink the result below the
+        // current page: re-request the last page instead of showing an empty one.
+        const lastPage = Math.max(1, Math.ceil(r.total / PAGE_SIZE));
+        if (page > lastPage) {
+          setPage(lastPage);
+          return;
+        }
         setResult(r);
         setLoading(false);
       })
@@ -190,7 +197,7 @@ export default function IntegrationAlertFeed({ vendor, window, windowLabel, refr
                     {topProducts.map(([name, c]) => (
                       <SummaryItem key={name} label={name} value={c} />
                     ))}
-                    <SummaryItem label="Other" value={otherProducts} />
+                    {otherProducts > 0 && <SummaryItem label="Other" value={otherProducts} />}
                   </>
                 )}
                 <SummaryItem label="Auto-resolved" value={counts.autoResolved} />
