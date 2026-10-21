@@ -2,6 +2,8 @@
 
 import { apiClient } from '@/hooks/useAuthenticatedApi';
 
+import type { AlertFacetCounts, AlertSource, TechniqueCoverageResponse, TimeWindow } from './crowdstrike';
+export type { AlertFacetCounts, AlertSource, TechniqueCoverageItem, TechniqueCoverageResponse, TimeWindow } from './crowdstrike';
 // ---------------------------------------------------------------------------
 // Response types (mirrors backend analytics service)
 // ---------------------------------------------------------------------------
@@ -34,11 +36,16 @@ export interface AlertSummary {
   byStatus: Record<string, number>;
   recentHigh: RecentAlertItem[];
   recentMedium: RecentAlertItem[];
+  counts: AlertFacetCounts;
 }
 
 export interface AlertTrendPoint {
   date: string;
   count: number;
+  /** Alerts in the bucket linked to an Achilles test. */
+  linked: number;
+  /** Bucket width: day for windows up to 90 days, week beyond. */
+  interval: 'day' | 'week';
   high: number;
   medium: number;
   low: number;
@@ -56,6 +63,10 @@ export interface DefenderAlertItem {
   created_at: string;
   updated_at: string;
   resolved_at: string | null;
+  hostname: string | null;
+  achilles_correlated: boolean;
+  achilles_test_uuid?: string;
+  achilles_test_name?: string;
   recommended_actions: string;
   /**
    * 'stage' when the alert's evidence carries a `<bundle_uuid>-<technique>.exe`
@@ -91,6 +102,7 @@ export interface PaginatedAlerts {
   total: number;
   page: number;
   pageSize: number;
+  counts: AlertFacetCounts;
 }
 
 export interface ControlItem {
@@ -174,8 +186,8 @@ export const defenderApi = {
   },
 
   // Alerts
-  async getAlertSummary(): Promise<AlertSummary> {
-    const res = await apiClient.get('/analytics/defender/alerts/summary');
+  async getAlertSummary(window?: TimeWindow): Promise<AlertSummary> {
+    const res = await apiClient.get('/analytics/defender/alerts/summary', { params: window });
     return res.data;
   },
 
@@ -189,10 +201,19 @@ export const defenderApi = {
     techniques?: string[];
     sortField?: string;
     sortOrder?: 'asc' | 'desc';
+    /** Linked (Achilles test) vs organic alerts. */
+    source?: AlertSource;
+    /** Severity OR-filter; sent as a comma-separated `severity` param. */
+    severities?: string[];
+    from?: string;
+    to?: string;
   }): Promise<PaginatedAlerts> {
     // Server expects techniques as comma-separated string
-    const { techniques, ...rest } = params ?? {};
+    const { techniques, severities, ...rest } = params ?? {};
     const queryParams: Record<string, unknown> = { ...rest };
+    if (severities && severities.length > 0) {
+      queryParams.severity = severities.join(',');
+    }
     if (techniques && techniques.length > 0) {
       queryParams.techniques = techniques.join(',');
     }
@@ -200,8 +221,8 @@ export const defenderApi = {
     return res.data;
   },
 
-  async getAlertTrend(days = 30): Promise<AlertTrendPoint[]> {
-    const res = await apiClient.get('/analytics/defender/alerts/trend', { params: { days } });
+  async getAlertTrend(days = 30, window?: TimeWindow): Promise<AlertTrendPoint[]> {
+    const res = await apiClient.get('/analytics/defender/alerts/trend', { params: { days, ...window } });
     return res.data;
   },
 
@@ -232,6 +253,11 @@ export const defenderApi = {
   // Cross-correlation
   async getScoreCorrelation(days = 90): Promise<ScoreComparisonPoint[]> {
     const res = await apiClient.get('/analytics/defender/correlation/scores', { params: { days } });
+    return res.data;
+  },
+
+  async getTechniqueCoverage(window: TimeWindow): Promise<TechniqueCoverageResponse> {
+    const res = await apiClient.get('/analytics/defender/correlation/technique-coverage', { params: window });
     return res.data;
   },
 

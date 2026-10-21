@@ -18,6 +18,7 @@ import CrowdStrikeDetectionAnalysisCard from './CrowdStrikeDetectionAnalysisCard
 import CrowdStrikeTechniqueOverlapChart from './CrowdStrikeTechniqueOverlapChart';
 import CrowdStrikeAlertDetailsDrawer from './CrowdStrikeAlertDetailsDrawer';
 import CoveragePips from './CoveragePips';
+import type { DateRangeValue } from '@/lib/timeRange';
 
 const TREND_DAYS = 30;
 
@@ -41,7 +42,13 @@ function inverseDeltaTone(delta: number | undefined): DeltaTone | undefined {
   return 'neutral';
 }
 
-export default function CrowdStrikeTab() {
+interface CrowdStrikeTabProps {
+  /** Page date range; drives the tab's window from the redesign onward. */
+  dateRange: DateRangeValue;
+}
+
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+export default function CrowdStrikeTab(_props: CrowdStrikeTabProps) {
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
   const [ztaScore, setZtaScore] = useState<ZtaScoreSummary | null>(null);

@@ -151,3 +151,47 @@ export function timeRangeButtonLabel(preset: string): string {
   if (preset === 'all') return 'All';
   return preset;
 }
+
+/**
+ * Resolve a range to a concrete ISO `{from, to}` window (relative presets are
+ * anchored to `now`). 'all' maps to the last 90 days unless `allTime` is set,
+ * which sends ALL_TIME_FROM. Null when the range is unusable or from >= to.
+ */
+export function resolveTimeWindow(
+  range: DateRangeValue,
+  opts: { allTime?: boolean; now?: Date } = {},
+): { from: string; to: string } | null {
+  const now = opts.now ?? new Date();
+
+  if (range.preset === 'custom' && range.from && range.to) {
+    const from = new Date(range.from);
+    const to = new Date(range.to);
+    // A date-only 'to' bound should include that whole day
+    if (!range.to.includes('T')) to.setHours(23, 59, 59, 999);
+    if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime()) || from >= to) return null;
+    return { from: from.toISOString(), to: to.toISOString() };
+  }
+
+  if (range.preset === 'all' && opts.allTime) {
+    return { from: ALL_TIME_FROM, to: now.toISOString() };
+  }
+
+  const preset = range.preset === 'all' ? '90d' : range.preset;
+  const match = preset.match(/^(\d+)([dhw])$/);
+  if (!match) return null;
+  const unitMs: Record<string, number> = { d: DAY_MS, h: 3_600_000, w: 7 * DAY_MS };
+  const from = new Date(now.getTime() - parseInt(match[1], 10) * unitMs[match[2]]);
+  return { from: from.toISOString(), to: now.toISOString() };
+}
+
+/** Lower-case phrase for headings and captions: "last 30 days", "all time". */
+export function timeRangeLabel(range: DateRangeValue): string {
+  if (range.preset === 'custom') return 'selected range';
+  if (range.preset === 'all') return 'all time';
+  if (range.preset === '1d') return 'last 24 hours';
+  const match = range.preset.match(/^(\d+)([dhw])$/);
+  if (!match) return 'selected range';
+  const unit = { d: 'day', h: 'hour', w: 'week' }[match[2]]!;
+  const n = parseInt(match[1], 10);
+  return `last ${n} ${unit}${n === 1 ? '' : 's'}`;
+}

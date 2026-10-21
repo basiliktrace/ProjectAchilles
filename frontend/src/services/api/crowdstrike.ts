@@ -2,6 +2,56 @@
 
 import { apiClient } from '@/hooks/useAuthenticatedApi';
 
+/** ISO from/to window sent to the integration endpoints. */
+export type TimeWindow = { from: string; to: string };
+
+/** Alert feed source filter. Linked = Achilles-correlated; organic = everything else. */
+export type AlertSource = 'all' | 'test' | 'organic';
+
+/** Facet counts behind the alert feed's filter segments and summary strip. */
+export interface AlertFacetCounts {
+  /** All filters except source. */
+  bySource: { all: number; test: number; organic: number };
+  /** All filters except severity. */
+  bySeverity: Record<string, number>;
+  /** Alerts Achilles really resolved (enabled, error-free receipt). */
+  autoResolved: number;
+  /** Window only: linked AND status NOT IN ('closed','resolved'). */
+  linkedOpen: number;
+  /** CrowdStrike only. */
+  byPrevention?: { prevented: number; detected_only: number; kill_failed: number };
+  /** Defender only. */
+  byProduct?: Record<string, number>;
+}
+
+export interface TechniqueCoverageItem {
+  technique: string;
+  name: string | null;
+  executions: number;
+  prevented: number;
+  detectedOnly: number;
+  missed: number;
+  /** Vendor alerts tagged with this exact technique id in the window. */
+  alerts: number;
+}
+
+export interface TechniqueCoverageResponse {
+  overall: {
+    executions: number;
+    prevented: number;
+    detectedOnly: number;
+    missed: number;
+    /** % of distinct executions, 1 dp, 0 when executions = 0. */
+    detectionRate: number;
+    /** % of distinct executions, 1 dp, 0 when executions = 0. */
+    preventionRate: number;
+    testedTechniques: number;
+    detectedTechniques: number;
+  };
+  /** Detected first, then executions desc. */
+  byTechnique: TechniqueCoverageItem[];
+}
+
 // ---------------------------------------------------------------------------
 // Response types (mirrors backend analytics service)
 // ---------------------------------------------------------------------------
@@ -38,11 +88,16 @@ export interface CrowdStrikeAlertSummary {
   byStatus: Record<string, number>;
   recentHigh: CrowdStrikeRecentAlertItem[];
   recentMedium: CrowdStrikeRecentAlertItem[];
+  counts: AlertFacetCounts;
 }
 
 export interface CrowdStrikeAlertTrendPoint {
   date: string;
   count: number;
+  /** Alerts in the bucket linked to an Achilles test. */
+  linked: number;
+  /** Bucket width: day for windows up to 90 days, week beyond. */
+  interval: 'day' | 'week';
   critical: number;
   high: number;
   medium: number;
@@ -59,13 +114,16 @@ export interface CrowdStrikeAlertItem {
   tactic: string;
   product: string;
   scenario: string;
-  hostname: string;
+  hostname: string | null;
   filename: string;
   filepath: string;
   mitre_techniques: string[];
   created_at: string;
   updated_at: string;
   resolved_at: string | null;
+  achilles_correlated: boolean;
+  achilles_test_uuid?: string;
+  achilles_test_name?: string;
   /**
    * 'stage' when the alert's evidence carries a `<bundle_uuid>-<technique>.exe`
    * binary that pins it to a specific stage; 'bundle' otherwise (orchestrator
@@ -100,6 +158,7 @@ export interface PaginatedCrowdStrikeAlerts {
   total: number;
   page: number;
   pageSize: number;
+  counts: AlertFacetCounts;
 }
 
 export interface ZtaScoreComparisonPoint {
@@ -157,8 +216,8 @@ export const crowdstrikeApi = {
   },
 
   // Alerts
-  async getAlertSummary(): Promise<CrowdStrikeAlertSummary> {
-    const res = await apiClient.get('/analytics/crowdstrike/alerts/summary');
+  async getAlertSummary(window?: TimeWindow): Promise<CrowdStrikeAlertSummary> {
+    const res = await apiClient.get('/analytics/crowdstrike/alerts/summary', { params: window });
     return res.data;
   },
 
@@ -172,10 +231,19 @@ export const crowdstrikeApi = {
     techniques?: string[];
     sortField?: string;
     sortOrder?: 'asc' | 'desc';
+    /** Linked (Achilles test) vs organic alerts. */
+    source?: AlertSource;
+    /** Severity OR-filter; sent as a comma-separated `severity` param. */
+    severities?: string[];
+    from?: string;
+    to?: string;
   }): Promise<PaginatedCrowdStrikeAlerts> {
     // Server expects techniques as comma-separated string
-    const { techniques, ...rest } = params ?? {};
+    const { techniques, severities, ...rest } = params ?? {};
     const queryParams: Record<string, unknown> = { ...rest };
+    if (severities && severities.length > 0) {
+      queryParams.severity = severities.join(',');
+    }
     if (techniques && techniques.length > 0) {
       queryParams.techniques = techniques.join(',');
     }
@@ -183,14 +251,19 @@ export const crowdstrikeApi = {
     return res.data;
   },
 
-  async getAlertTrend(days = 30): Promise<CrowdStrikeAlertTrendPoint[]> {
-    const res = await apiClient.get('/analytics/crowdstrike/alerts/trend', { params: { days } });
+  async getAlertTrend(days = 30, window?: TimeWindow): Promise<CrowdStrikeAlertTrendPoint[]> {
+    const res = await apiClient.get('/analytics/crowdstrike/alerts/trend', { params: { days, ...window } });
     return res.data;
   },
 
   // Cross-correlation
   async getScoreCorrelation(days = 90): Promise<ZtaScoreComparisonPoint[]> {
     const res = await apiClient.get('/analytics/crowdstrike/correlation/scores', { params: { days } });
+    return res.data;
+  },
+
+  async getTechniqueCoverage(window: TimeWindow): Promise<TechniqueCoverageResponse> {
+    const res = await apiClient.get('/analytics/crowdstrike/correlation/technique-coverage', { params: window });
     return res.data;
   },
 

@@ -105,7 +105,7 @@ describe('CrowdStrikeTab', () => {
       lastError: null,
     });
 
-    render(<MemoryRouter><CrowdStrikeTab /></MemoryRouter>);
+    render(<MemoryRouter><CrowdStrikeTab dateRange={{ preset: '30d' }} /></MemoryRouter>);
 
     await waitFor(() => expect(screen.getByText('ZTA Score')).toBeInTheDocument());
     expect(screen.getByText('82.5')).toBeInTheDocument();
@@ -121,7 +121,7 @@ describe('CrowdStrikeTab', () => {
       lastError: null,
     });
 
-    render(<MemoryRouter><CrowdStrikeTab /></MemoryRouter>);
+    render(<MemoryRouter><CrowdStrikeTab dateRange={{ preset: '30d' }} /></MemoryRouter>);
 
     await waitFor(() =>
       expect(screen.getByText('Posture score requires Falcon Insight licensing')).toBeInTheDocument()
@@ -142,7 +142,7 @@ describe('CrowdStrikeTab', () => {
       lastError: null,
     });
 
-    render(<MemoryRouter><CrowdStrikeTab /></MemoryRouter>);
+    render(<MemoryRouter><CrowdStrikeTab dateRange={{ preset: '30d' }} /></MemoryRouter>);
 
     await waitFor(() =>
       expect(screen.getByText(/No posture score data yet/)).toBeInTheDocument()
@@ -158,7 +158,7 @@ describe('CrowdStrikeTab', () => {
       lastError: { stage: 'alerts', message: 'crowdstrike API 429: rate limited', at: '2026-10-11T03:00:00.000Z' },
     });
 
-    render(<MemoryRouter><CrowdStrikeTab /></MemoryRouter>);
+    render(<MemoryRouter><CrowdStrikeTab dateRange={{ preset: '30d' }} /></MemoryRouter>);
 
     await waitFor(() => expect(screen.getByText('CrowdStrike sync failed')).toBeInTheDocument());
     expect(screen.getByText(/rate limited/)).toBeInTheDocument();

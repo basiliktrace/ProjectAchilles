@@ -1,8 +1,11 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import {
+  ALL_TIME_FROM,
   DEFAULT_TIME_RANGE,
   readStoredTimeRange,
   resolveTimeRange,
+  resolveTimeWindow,
+  timeRangeLabel,
   storeTimeRange,
   timeRangeButtonLabel,
   timeRangeDays,
@@ -77,5 +80,47 @@ describe('timeRange', () => {
 
   it('labels the preset buttons', () => {
     expect(['1d', '7d', '30d', '90d', 'all'].map(timeRangeButtonLabel)).toEqual(['24h', '7d', '30d', '90d', 'All']);
+  });
+});
+
+describe('resolveTimeWindow', () => {
+  const now = new Date('2026-10-20T12:00:00.000Z');
+
+  it('maps all to ALL_TIME_FROM with allTime and to 90 days without', () => {
+    expect(resolveTimeWindow({ preset: 'all' }, { allTime: true, now })).toEqual({
+      from: ALL_TIME_FROM,
+      to: now.toISOString(),
+    });
+    expect(resolveTimeWindow({ preset: 'all' }, { now })).toEqual({
+      from: new Date(now.getTime() - 90 * 86_400_000).toISOString(),
+      to: now.toISOString(),
+    });
+  });
+
+  it('resolves a relative preset against now', () => {
+    expect(resolveTimeWindow({ preset: '7d' }, { now })?.from).toBe('2026-10-13T12:00:00.000Z');
+  });
+
+  it('extends a date-only custom to-bound to end of day', () => {
+    const w = resolveTimeWindow({ preset: 'custom', from: '2026-10-01', to: '2026-10-05' }, { now });
+    expect(w).not.toBeNull();
+    const to = new Date(w!.to);
+    expect(to.getHours()).toBe(23);
+    expect(to.getMinutes()).toBe(59);
+  });
+
+  it('returns null for from >= to', () => {
+    expect(
+      resolveTimeWindow({ preset: 'custom', from: '2026-10-05T00:00:00Z', to: '2026-10-01T00:00:00Z' }, { now }),
+    ).toBeNull();
+  });
+});
+
+describe('timeRangeLabel', () => {
+  it('describes presets, all time and custom ranges', () => {
+    expect(timeRangeLabel({ preset: '30d' })).toBe('last 30 days');
+    expect(timeRangeLabel({ preset: '1d' })).toBe('last 24 hours');
+    expect(timeRangeLabel({ preset: 'all' })).toBe('all time');
+    expect(timeRangeLabel(CUSTOM)).toBe('selected range');
   });
 });
