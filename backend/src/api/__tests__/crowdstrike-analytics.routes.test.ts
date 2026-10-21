@@ -173,8 +173,9 @@ describe('CrowdStrike analytics routes', () => {
 
       expect(res.status).toBe(200);
       expect(res.body).toEqual({ overall: { executions: 0 }, byTechnique: [] });
+      // Bounds are normalised to toISOString() before reaching the service.
       expect(mockGetTechniqueCoverage).toHaveBeenCalledWith({
-        from: '2026-09-20T00:00:00Z', to: '2026-10-20T00:00:00Z',
+        from: '2026-09-20T00:00:00.000Z', to: '2026-10-20T00:00:00.000Z',
       });
     });
 
@@ -191,6 +192,19 @@ describe('CrowdStrike analytics routes', () => {
       expect(to).toBeLessThanOrEqual(after);
       expect(to - Date.parse(window.from)).toBe(30 * 86_400_000);
     });
+
+    it.each(['Oct%2020%202026', '2026%2F10%2F20', '2026-10-20%2010%3A00', '1', '2026-10-20T10%3A00%3A00'])(
+      'returns 400 Invalid from/to for the non-strict-ISO from=%s without querying ES',
+      async (from) => {
+        const res = await request(createApp()).get(
+          `/api/analytics/crowdstrike/correlation/technique-coverage?from=${from}&to=2026-10-21T00:00:00Z`,
+        );
+
+        expect(res.status).toBe(400);
+        expect(res.body).toEqual({ success: false, error: 'Invalid from/to' });
+        expect(mockGetTechniqueCoverage).not.toHaveBeenCalled();
+      },
+    );
 
     it('returns 400 Invalid from/to for ?from=x', async () => {
       const res = await request(createApp()).get('/api/analytics/crowdstrike/correlation/technique-coverage?from=x');

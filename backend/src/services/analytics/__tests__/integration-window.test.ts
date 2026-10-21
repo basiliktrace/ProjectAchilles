@@ -27,11 +27,44 @@ describe('integration-window', () => {
     expect400({ from: '2026-01-01T00:00:00Z', to: '2026-01-01T00:00:00Z' });
   });
 
-  it('parseWindowQuery returns the window for valid bounds', () => {
+  it('parseWindowQuery returns the window for valid bounds, normalised to toISOString()', () => {
     expect(parseWindowQuery({ from: '2026-01-01T00:00:00Z', to: '2026-01-02T00:00:00Z' })).toEqual({
-      from: '2026-01-01T00:00:00Z',
-      to: '2026-01-02T00:00:00Z',
+      from: '2026-01-01T00:00:00.000Z',
+      to: '2026-01-02T00:00:00.000Z',
     });
+    expect(parseWindowQuery({ from: '2026-01-01T00:00:00.000Z', to: '2026-01-02T00:00:00.123Z' })).toEqual({
+      from: '2026-01-01T00:00:00.000Z',
+      to: '2026-01-02T00:00:00.123Z',
+    });
+  });
+
+  it('parseWindowQuery accepts date-only bounds (UTC midnight) and ±HH:MM offsets', () => {
+    expect(parseWindowQuery({ from: '2026-10-01', to: '2026-10-20' })).toEqual({
+      from: '2026-10-01T00:00:00.000Z',
+      to: '2026-10-20T00:00:00.000Z',
+    });
+    expect(parseWindowQuery({ from: '2026-10-01T02:00:00+02:00', to: '2026-10-20T00:00:00.5-05:30' })).toEqual({
+      from: '2026-10-01T00:00:00.000Z',
+      to: '2026-10-20T05:30:00.500Z',
+    });
+  });
+
+  it('parseWindowQuery rejects every non-strict-ISO form Date.parse would accept', () => {
+    const to = '2026-10-21T00:00:00Z';
+    for (const from of [
+      'Oct 20 2026',            // free-form date
+      '2026/10/20',             // slashes
+      '2026-10-20 10:00',       // space separator, no zone
+      '2026-10-20T10:00:00',    // zone-less date-time (local in JS, UTC in ES)
+      '2026-10-20T10:00Z',      // no seconds
+      '1',                      // 2001 in JS, epoch_millis in ES
+      '1760918400000',          // epoch millis
+      '2026-02-30',             // not a calendar date
+      '2026-13-01T00:00:00Z',   // month 13
+    ]) {
+      expect400({ from, to });
+      expect400({ from: '2026-01-01T00:00:00Z', to: from });
+    }
   });
 
   it('trendInterval is day at exactly 90 days and week at 91', () => {

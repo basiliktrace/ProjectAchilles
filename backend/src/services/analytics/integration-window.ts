@@ -27,10 +27,28 @@ export interface AlertFacetCounts {
 
 const DAY_MS = 86_400_000;
 
+// Strict ISO 8601 only: a date (`YYYY-MM-DD`, UTC midnight) or a date-time
+// with seconds, an optional fraction and an explicit `Z` / `±HH:MM` zone.
+// Anything Date.parse merely tolerates ("Oct 20 2026", "2026/10/20", "1",
+// zone-less date-times) is rejected, because ES would read it differently
+// (epoch_millis, UTC) or answer with a parse_exception.
+const ISO_BOUND =
+  /^(\d{4})-(\d{2})-(\d{2})(?:T([01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d+)?(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d))?$/;
+
+/** Epoch ms of a strict ISO bound, or NaN. Rejects non-calendar dates (2026-02-30). */
+function parseIsoBound(value: string): number {
+  const m = ISO_BOUND.exec(value);
+  if (!m) return NaN;
+  const [y, mo, d] = [Number(m[1]), Number(m[2]), Number(m[3])];
+  const day = new Date(Date.UTC(y, mo - 1, d));
+  if (day.getUTCFullYear() !== y || day.getUTCMonth() !== mo - 1 || day.getUTCDate() !== d) return NaN;
+  return Date.parse(value);
+}
+
 /**
  * Parses req.query.from/to. Returns null when both are absent.
- * Throws AppError(400, 'Invalid from/to') when either is unparsable,
- * only one is given, or from >= to.
+ * Throws AppError(400, 'Invalid from/to') when either is not strict ISO 8601,
+ * only one is given, or from >= to. Both bounds come back as toISOString().
  */
 export function parseWindowQuery(query: Record<string, unknown>): TimeWindow | null {
   const { from, to } = query;
@@ -40,12 +58,12 @@ export function parseWindowQuery(query: Record<string, unknown>): TimeWindow | n
   if (!hasFrom || !hasTo || typeof from !== 'string' || typeof to !== 'string') {
     throw new AppError('Invalid from/to', 400);
   }
-  const f = Date.parse(from);
-  const t = Date.parse(to);
+  const f = parseIsoBound(from);
+  const t = parseIsoBound(to);
   if (Number.isNaN(f) || Number.isNaN(t) || f >= t) {
     throw new AppError('Invalid from/to', 400);
   }
-  return { from, to };
+  return { from: new Date(f).toISOString(), to: new Date(t).toISOString() };
 }
 
 const ALERT_SOURCES: readonly string[] = ['all', 'test', 'organic'];
