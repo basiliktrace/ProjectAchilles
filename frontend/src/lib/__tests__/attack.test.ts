@@ -24,3 +24,9 @@ describe('tacticsForTechnique', () => {
     );
   });
 });
+
+describe('tacticsForTechnique revoked ids', () => {
+  it('resolves a revoked/renumbered technique', () => {
+    expect(tacticsForTechnique('T1077').length).toBeGreaterThan(0);
+  });
+});
