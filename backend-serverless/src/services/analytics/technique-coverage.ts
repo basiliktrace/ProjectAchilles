@@ -61,34 +61,35 @@ export function defaultCoverageWindow(now: number = Date.now()): TimeWindow {
 }
 
 /**
- * Detected per execution = `<v>_stage_detected` when that field exists, else
- * `<v>_detected` (the Executions table's precedence). A doc with
- * `stage_detected: false` and `detected: true` is NOT detected, so a stage is
- * never credited because a sibling stage was caught.
+ * Detected per execution (enrichment only ever writes these flags as `true`):
+ *   - `<v>_stage_detected: true` — the doc's own stage/test was matched; or
+ *   - `<v>_detected: true` on a doc that is NOT a bundle control — a standalone
+ *     test's own detection. On a bundle control the wide flag only means the
+ *     bundle UUID matched, so a stage is never credited because a sibling
+ *     stage was caught; or
+ *   - `<v>_prevented: true` — a vendor-confirmed prevention is a detection.
  */
 export function detectedClause(vendor: CoverageVendor): QueryDslQueryContainer {
-  const stage = `f0rtika.${vendor}_stage_detected`;
   return {
     bool: {
       should: [
-        { term: { [stage]: true } },
+        { term: { [`f0rtika.${vendor}_stage_detected`]: true } },
         {
           bool: {
-            must_not: [{ exists: { field: stage } }],
             filter: [{ term: { [`f0rtika.${vendor}_detected`]: true } }],
+            must_not: [{ term: { 'f0rtika.is_bundle_control': true } }],
           },
         },
+        { term: { [`f0rtika.${vendor}_prevented`]: true } },
       ],
       minimum_should_match: 1,
     },
   };
 }
 
-/** Prevented = detected AND `<v>_prevented: true`. */
+/** Prevented = `<v>_prevented: true` (which the detected predicate also counts). */
 export function preventedClause(vendor: CoverageVendor): QueryDslQueryContainer {
-  return {
-    bool: { filter: [detectedClause(vendor), { term: { [`f0rtika.${vendor}_prevented`]: true } }] },
-  };
+  return { term: { [`f0rtika.${vendor}_prevented`]: true } };
 }
 
 function outcomeAgg(vendor: CoverageVendor): AggregationsAggregationContainer {

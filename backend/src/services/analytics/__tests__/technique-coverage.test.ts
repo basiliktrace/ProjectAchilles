@@ -86,39 +86,47 @@ describe('technique coverage', () => {
     const wide = `f0rtika.${v}_detected`;
     const prev = `f0rtika.${v}_prevented`;
 
-    it(`builds the detected predicate with stage-first precedence for ${v}`, () => {
+    const bundle = 'f0rtika.is_bundle_control';
+
+    it(`builds the R13 detected predicate for ${v}`, () => {
       expect(detectedClause(v)).toEqual({
         bool: {
           should: [
             { term: { [stage]: true } },
-            { bool: { must_not: [{ exists: { field: stage } }], filter: [{ term: { [wide]: true } }] } },
+            { bool: { filter: [{ term: { [wide]: true } }], must_not: [{ term: { [bundle]: true } }] } },
+            { term: { [prev]: true } },
           ],
           minimum_should_match: 1,
         },
       });
-      expect(preventedClause(v)).toEqual({
-        bool: { filter: [detectedClause(v), { term: { [prev]: true } }] },
-      });
+      expect(preventedClause(v)).toEqual({ term: { [prev]: true } });
     });
 
-    it('does NOT count stage_detected:false + detected:true as detected', () => {
-      expect(matches(detectedClause(v), { [stage]: false, [wide]: true })).toBe(false);
-      expect(matches(preventedClause(v), { [stage]: false, [wide]: true, [prev]: true })).toBe(false);
+    // Enrichment only ever writes the flags as `true`; a missing flag means "not matched".
+    it('does NOT credit a bundle stage matched only by the wide (bundle-UUID) query', () => {
+      expect(matches(detectedClause(v), { [bundle]: true, [wide]: true })).toBe(false);
+      expect(matches(preventedClause(v), { [bundle]: true, [wide]: true })).toBe(false);
     });
 
-    it('stage flag wins when present; wide flag applies only when the stage flag is missing', () => {
-      expect(matches(detectedClause(v), { [stage]: true, [wide]: false })).toBe(true);
-      expect(matches(detectedClause(v), { [stage]: true })).toBe(true);
+    it('credits a bundle stage by its own stage flag', () => {
+      expect(matches(detectedClause(v), { [bundle]: true, [stage]: true })).toBe(true);
+      expect(matches(detectedClause(v), { [bundle]: true, [wide]: true, [stage]: true })).toBe(true);
+    });
+
+    it('credits a standalone test by its own detection flag', () => {
       expect(matches(detectedClause(v), { [wide]: true })).toBe(true);
-      expect(matches(detectedClause(v), { [wide]: false })).toBe(false);
+      expect(matches(detectedClause(v), { [bundle]: false, [wide]: true })).toBe(true);
+      expect(matches(detectedClause(v), { [stage]: true })).toBe(true);
       expect(matches(detectedClause(v), {})).toBe(false);
+      expect(matches(detectedClause(v), { [bundle]: true })).toBe(false);
     });
 
-    it('prevented requires detected AND the prevented flag', () => {
-      expect(matches(preventedClause(v), { [stage]: true, [prev]: true })).toBe(true);
-      expect(matches(preventedClause(v), { [wide]: true, [prev]: true })).toBe(true);
-      expect(matches(preventedClause(v), { [stage]: true, [prev]: false })).toBe(false);
-      expect(matches(preventedClause(v), { [prev]: true })).toBe(false);
+    it('a vendor-confirmed prevention counts as prevented and detected', () => {
+      expect(matches(preventedClause(v), { [prev]: true })).toBe(true);
+      expect(matches(detectedClause(v), { [prev]: true })).toBe(true);
+      expect(matches(detectedClause(v), { [bundle]: true, [prev]: true })).toBe(true);
+      expect(matches(preventedClause(v), { [stage]: true })).toBe(false);
+      expect(matches(preventedClause(v), { [wide]: true })).toBe(false);
     });
 
     it(`puts the ${v} predicates into both the overall and per-technique filters aggs`, async () => {
