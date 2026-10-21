@@ -143,7 +143,7 @@ wide right column carrying the shapes you read.
   undetected" (no alert at all), because the Defense Score counts a detection
   as protected while chain depth counts only a block. On a stage row, an amber
   segment means an EDR alerted on an earlier stage.
-  "Not run · binary blocked" (blue) counts chains whose latest run had a stage
+  "Stage not run · binary blocked" (blue) counts chains whose latest run had a stage
   blocked before it ran (exit 260), for example an ASR prevalence rule
   stopping the freshly built test binary. The technique was never evaluated,
   so this is not a protection result and is not counted as protected anywhere.

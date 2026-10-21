@@ -34,7 +34,7 @@ describe('ChainDepthCard', () => {
       'Stage 2',
       'Stage 3',
       'Stage 4+',
-      'Not run',
+      'Stage not run',
       'End to end',
       'End to end',
     ]);
@@ -186,13 +186,13 @@ describe('ChainDepthCard', () => {
     it('is its own row between Stage 4+ and the end-to-end rows', () => {
       render(<ChainDepthCard data={withPreExec} />);
       const labels = screen.getAllByRole('button').map((r) => within(r).getAllByText(/./)[0].textContent);
-      expect(labels).toEqual(['Stage 1', 'Stage 2', 'Stage 3', 'Stage 4+', 'Not run', 'End to end', 'End to end']);
+      expect(labels).toEqual(['Stage 1', 'Stage 2', 'Stage 3', 'Stage 4+', 'Stage not run', 'End to end', 'End to end']);
     });
 
     it('is neutral, never the blocked colour, and says the technique was not tested', () => {
       render(<ChainDepthCard data={withPreExec} />);
       const row = screen.getByRole('button', {
-        name: 'Not run · binary blocked: 2 chains — a control stopped the test binary before it ran, so the technique was not tested. Show these runs',
+        name: 'Stage not run · binary blocked: 2 chains — a control stopped the test binary before it ran, so the technique was not tested. Show these runs',
       });
       expect(within(row).getByText('binary blocked')).toBeInTheDocument();
       const bar = row.querySelector<HTMLElement>('[data-segment="main"]');
@@ -203,7 +203,7 @@ describe('ChainDepthCard', () => {
     it('clicking it passes its bundle names', async () => {
       const onRowClick = vi.fn();
       render(<ChainDepthCard data={withPreExec} onRowClick={onRowClick} />);
-      await userEvent.click(screen.getByRole('button', { name: /^Not run/ }));
+      await userEvent.click(screen.getByRole('button', { name: /^Stage not run/ }));
       expect(onRowClick).toHaveBeenLastCalledWith(['APT33 Chain']);
     });
 
@@ -221,7 +221,7 @@ describe('ChainDepthCard', () => {
       delete legacy.blockedBeforeRunBundleNames;
       delete legacy.stageErrors;
       render(<ChainDepthCard data={legacy as ChainDepthResponse} />);
-      expect(screen.queryByRole('button', { name: /^Not run/ })).toBeNull();
+      expect(screen.queryByRole('button', { name: /^Stage not run/ })).toBeNull();
       expect(screen.getByText('3 chains inconclusive — a stage errored or was blocked before it ran — not shown')).toBeInTheDocument();
     });
 
@@ -240,7 +240,7 @@ describe('ChainDepthCard', () => {
         />,
       );
       expect(screen.queryByText('No multi-stage chains in this window')).toBeNull();
-      expect(screen.getByRole('button', { name: /^Not run/ })).toBeEnabled();
+      expect(screen.getByRole('button', { name: /^Stage not run/ })).toBeEnabled();
     });
   });
 });

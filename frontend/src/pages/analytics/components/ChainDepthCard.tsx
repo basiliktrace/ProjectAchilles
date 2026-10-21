@@ -41,7 +41,7 @@ function rowsOf(data: ChainDepthResponse): Row[] {
   // neutral row, never a blocked stage. Older backends don't send it.
   if (data.blockedBeforeRun !== undefined) {
     rows.push({
-      label: 'Not run',
+      label: 'Stage not run',
       sub: 'binary blocked',
       count: data.blockedBeforeRun,
       alerted: 0,
