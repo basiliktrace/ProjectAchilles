@@ -2,6 +2,8 @@
 
 import { apiClient } from '@/hooks/useAuthenticatedApi';
 
+import type { AlertFacetCounts, AlertSource, TechniqueCoverageResponse, TimeWindow } from './integrationTypes';
+
 // ---------------------------------------------------------------------------
 // Response types (mirrors backend analytics service)
 // ---------------------------------------------------------------------------
@@ -11,11 +13,16 @@ export interface ZtaScoreSummary {
   osScore: number;
   sensorConfigScore: number;
   deviceCount: number;
+  minScore: number;
 }
 
 export interface ZtaScoreTrendPoint {
   date: string;
   overallScore: number;
+  /** Alias of overallScore, kept for the CLI. */
+  score: number;
+  osScore: number;
+  sensorConfigScore: number;
   deviceCount: number;
 }
 
@@ -33,11 +40,16 @@ export interface CrowdStrikeAlertSummary {
   byStatus: Record<string, number>;
   recentHigh: CrowdStrikeRecentAlertItem[];
   recentMedium: CrowdStrikeRecentAlertItem[];
+  counts: AlertFacetCounts;
 }
 
 export interface CrowdStrikeAlertTrendPoint {
   date: string;
   count: number;
+  /** Alerts in the bucket linked to an Achilles test. */
+  linked: number;
+  /** Bucket width: day for windows up to 90 days, week beyond. */
+  interval: 'day' | 'week';
   critical: number;
   high: number;
   medium: number;
@@ -54,13 +66,18 @@ export interface CrowdStrikeAlertItem {
   tactic: string;
   product: string;
   scenario: string;
-  hostname: string;
+  hostname: string | null;
   filename: string;
   filepath: string;
   mitre_techniques: string[];
   created_at: string;
   updated_at: string;
   resolved_at: string | null;
+  achilles_correlated: boolean;
+  achilles_test_uuid?: string;
+  achilles_test_name?: string;
+  /** 'bundle' when achilles_test_uuid is a bundle (name = bundle_name), else 'test'. */
+  achilles_test_kind?: 'test' | 'bundle';
   /**
    * 'stage' when the alert's evidence carries a `<bundle_uuid>-<technique>.exe`
    * binary that pins it to a specific stage; 'bundle' otherwise (orchestrator
@@ -95,6 +112,7 @@ export interface PaginatedCrowdStrikeAlerts {
   total: number;
   page: number;
   pageSize: number;
+  counts: AlertFacetCounts;
 }
 
 export interface ZtaScoreComparisonPoint {
@@ -152,8 +170,8 @@ export const crowdstrikeApi = {
   },
 
   // Alerts
-  async getAlertSummary(): Promise<CrowdStrikeAlertSummary> {
-    const res = await apiClient.get('/analytics/crowdstrike/alerts/summary');
+  async getAlertSummary(window?: TimeWindow): Promise<CrowdStrikeAlertSummary> {
+    const res = await apiClient.get('/analytics/crowdstrike/alerts/summary', { params: window });
     return res.data;
   },
 
@@ -167,10 +185,19 @@ export const crowdstrikeApi = {
     techniques?: string[];
     sortField?: string;
     sortOrder?: 'asc' | 'desc';
+    /** Linked (Achilles test) vs organic alerts. */
+    source?: AlertSource;
+    /** Severity OR-filter; sent as a comma-separated `severity` param. */
+    severities?: string[];
+    from?: string;
+    to?: string;
   }): Promise<PaginatedCrowdStrikeAlerts> {
     // Server expects techniques as comma-separated string
-    const { techniques, ...rest } = params ?? {};
+    const { techniques, severities, ...rest } = params ?? {};
     const queryParams: Record<string, unknown> = { ...rest };
+    if (severities && severities.length > 0) {
+      queryParams.severity = severities.join(',');
+    }
     if (techniques && techniques.length > 0) {
       queryParams.techniques = techniques.join(',');
     }
@@ -178,14 +205,19 @@ export const crowdstrikeApi = {
     return res.data;
   },
 
-  async getAlertTrend(days = 30): Promise<CrowdStrikeAlertTrendPoint[]> {
-    const res = await apiClient.get('/analytics/crowdstrike/alerts/trend', { params: { days } });
+  async getAlertTrend(days = 30, window?: TimeWindow): Promise<CrowdStrikeAlertTrendPoint[]> {
+    const res = await apiClient.get('/analytics/crowdstrike/alerts/trend', { params: { days, ...window } });
     return res.data;
   },
 
   // Cross-correlation
   async getScoreCorrelation(days = 90): Promise<ZtaScoreComparisonPoint[]> {
     const res = await apiClient.get('/analytics/crowdstrike/correlation/scores', { params: { days } });
+    return res.data;
+  },
+
+  async getTechniqueCoverage(window: TimeWindow): Promise<TechniqueCoverageResponse> {
+    const res = await apiClient.get('/analytics/crowdstrike/correlation/technique-coverage', { params: window });
     return res.data;
   },
 

@@ -132,4 +132,16 @@ describe('TopControlsCard', () => {
     );
     expect(mockGetControlCorrelation).not.toHaveBeenCalled();
   });
+
+  it('flows rows into two columns at lg when twoColumn is set', async () => {
+    mockGetControls.mockResolvedValue([makeControl({ control_name: 'mfa', title: 'Enable MFA', max_score: 10 })]);
+    mockGetControlCorrelation.mockResolvedValue({ coveredTechniques: [], alertCount: 0 });
+
+    const { rerender } = render(<TopControlsCard twoColumn />);
+    await waitFor(() => expect(screen.getByText('Enable MFA')).toBeInTheDocument());
+    expect(screen.getByTestId('top-controls-list')).toHaveClass('lg:columns-2');
+
+    rerender(<TopControlsCard compact />);
+    expect(screen.getByTestId('top-controls-list')).not.toHaveClass('lg:columns-2');
+  });
 });

@@ -16,7 +16,7 @@ describe('buildTrendPoints', () => {
       [dp('2026-10-13T23:59:59.999Z', 57)],
       [{ timestamp: '2026-10-13T23:59:59.999Z', errorRate: 0.1, errorCount: 1, conclusiveCount: 9, total: 10 }],
       [{ date: '2026-10-13', score: 80, maxScore: 100, percentage: 86.6 }],
-      [{ date: '2026-10-13', overallScore: 96.3, deviceCount: 3 }],
+      [{ date: '2026-10-13', overallScore: 96.3, score: 96.3, osScore: 0, sensorConfigScore: 0, deviceCount: 3 }],
     );
     expect(points).toEqual([
       { date: 'Oct 13', defense: 57, secure: 86.6, zta: 96.3, errorRate: 0.1 },

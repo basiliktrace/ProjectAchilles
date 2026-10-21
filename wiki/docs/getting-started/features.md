@@ -100,7 +100,7 @@ Quantify your security posture with 30+ query endpoints powered by Elasticsearch
 | **Coverage Treemaps** | Hierarchical category/subcategory coverage visualization |
 | **Execution Table** | Paginated results with advanced filtering (technique, hostname, threat actor, tags) |
 | **Multi-Index** | Switch between Elasticsearch indices, create new ones, view index metadata |
-| **Defender Integration** | Dedicated Defender tab — per-execution detection rate, Secure Score, alert correlation, MITRE technique overlap, and opt-in alert auto-resolution |
+| **Defender Integration** | Dedicated Defender tab — evidence-based detection rate, Secure Score, alert correlation, MITRE technique overlap, and opt-in alert auto-resolution |
 | **Risk Acceptance** | Accept risk on individual controls with audit tracking |
 | **Trend Alerting** | Threshold-based Slack and email notifications with in-app notification bell |
 | **Archive Executions** | Archive old execution results to declutter active views |
@@ -163,8 +163,8 @@ Automate test execution across agent pools with flexible scheduling.
 ### Microsoft Defender
 
 Sync Secure Score, alerts, and control profiles from Microsoft 365 Defender. A
-dedicated **Defender tab** reports the **per-execution detection rate** — what
-share of your attack simulations Defender actually caught — alongside alert
+dedicated **Defender tab** reports the **evidence-based detection rate** — what
+share of your attack simulations Defender actually caught (from per-run enrichment flags) — alongside alert
 drill-downs, control ↔ alert linking, and MITRE technique overlap. The opt-in
 **[auto-resolve](../user-guide/integrations/defender-auto-resolve)** pillar can
 programmatically resolve Achilles-correlated alerts in Defender so

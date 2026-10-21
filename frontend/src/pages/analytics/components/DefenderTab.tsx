@@ -1,117 +1,123 @@
-import { useState, useEffect } from 'react';
-import { ShieldCheck, Bell, Crosshair } from 'lucide-react';
+import { useState, useEffect, useRef, useCallback } from 'react';
+import { ShieldCheck } from 'lucide-react';
 import {
   defenderApi,
   type SecureScoreSummary,
   type AlertSummary,
   type SecureScoreTrendPoint,
   type AlertTrendPoint,
-  type DetectionRateResponse,
 } from '@/services/api/defender';
 import { integrationsApi } from '@/services/api/integrations';
+import type { TechniqueCoverageResponse, TimeWindow } from '@/services/api/integrationTypes';
+import type { DateRangeValue } from '@/lib/timeRange';
 import DefenderTabHeader from './DefenderTabHeader';
-import HeroStatTile, { type DeltaTone } from './HeroStatTile';
+import HeroStatTile from './HeroStatTile';
 import AutoResolveStatTile from './AutoResolveStatTile';
-import AlertsSummaryCard from './AlertsSummaryCard';
 import TopControlsCard from './TopControlsCard';
-import TestVsAlertTimelineCard from './TestVsAlertTimelineCard';
-import DetectionAnalysisCard from './DetectionAnalysisCard';
-import TechniqueOverlapChart from './TechniqueOverlapChart';
 import AlertDetailsDrawer from './AlertDetailsDrawer';
-import CoveragePips from './CoveragePips';
+import IntegrationTimelineCard from './integrations/IntegrationTimelineCard';
+import IntegrationAlertFeed from './integrations/IntegrationAlertFeed';
+import TechniqueCoverageCard from './integrations/TechniqueCoverageCard';
+import { AlertsHeroTile, CoverageHeroTile } from './integrations/IntegrationHeroTiles';
+import { stillOpenFootnote } from './integrations/heroMetrics';
+import { useTabWindow } from './integrations/useTabWindow';
+import { VENDORS } from './integrations/vendorConfig';
 
-const TREND_DAYS = 30;
+const vendor = VENDORS.defender;
+
+/** The Secure Score tile keeps its fixed 30-day trend (unchanged by the redesign). */
+const SECURE_SCORE_TREND_DAYS = 30;
 
 function secureScoreDelta(trend: SecureScoreTrendPoint[]): number {
   if (trend.length < 2) return 0;
   return trend[trend.length - 1].percentage - trend[0].percentage;
 }
 
-function alertCountWindowDelta(trend: AlertTrendPoint[], windowDays: number): number {
-  const recentStart = Math.max(0, trend.length - windowDays);
-  const priorStart = Math.max(0, trend.length - windowDays * 2);
-  const recent = trend.slice(recentStart).reduce((s, p) => s + p.count, 0);
-  const prior = trend.slice(priorStart, recentStart).reduce((s, p) => s + p.count, 0);
-  return recent - prior;
+interface TabData {
+  secureScore: SecureScoreSummary | null;
+  secureScoreTrend: SecureScoreTrendPoint[];
+  summary: AlertSummary | null;
+  summaryFailed: boolean;
+  trend: AlertTrendPoint[];
+  coverage: TechniqueCoverageResponse | null;
+  coverageFailed: boolean;
 }
 
-function inverseDeltaTone(delta: number | undefined): DeltaTone | undefined {
-  if (delta === undefined) return undefined;
-  if (delta > 0) return 'negative';
-  if (delta < 0) return 'positive';
-  return 'neutral';
+interface DrawerState {
+  open: boolean;
+  techniques?: string[];
+  title?: string;
+  window?: TimeWindow;
 }
 
-export default function DefenderTab() {
+interface DefenderTabProps {
+  /** Page date range: the window every card on the tab uses. */
+  dateRange: DateRangeValue;
+}
+
+export default function DefenderTab({ dateRange }: DefenderTabProps) {
+  const { window, windowLabel, refreshKey, refresh } = useTabWindow(dateRange);
   const [loading, setLoading] = useState(true);
+  const [data, setData] = useState<TabData | null>(null);
   const [syncing, setSyncing] = useState(false);
-  const [secureScore, setSecureScore] = useState<SecureScoreSummary | null>(null);
-  const [secureScoreTrend, setSecureScoreTrend] = useState<SecureScoreTrendPoint[]>([]);
-  const [alertSummary, setAlertSummary] = useState<AlertSummary | null>(null);
-  const [alertTrend, setAlertTrend] = useState<AlertTrendPoint[]>([]);
-  const [detectionRate, setDetectionRate] = useState<DetectionRateResponse | null>(null);
   const [lastSync, setLastSync] = useState<string | null>(null);
   const [syncError, setSyncError] = useState<string | null>(null);
-  const [drawerOpen, setDrawerOpen] = useState(false);
-  const [drawerTechniques, setDrawerTechniques] = useState<string[] | undefined>(undefined);
-  const [drawerTitle, setDrawerTitle] = useState<string | undefined>(undefined);
+  const [drawer, setDrawer] = useState<DrawerState>({ open: false });
+  const loadSeq = useRef(0);
+  const closeDrawer = useCallback(() => setDrawer((d) => ({ ...d, open: false })), []);
 
+  /** A coverage row: that technique's alerts in the tab window, so the count matches the row. */
   function openDrawerForTechnique(t: string) {
-    setDrawerTechniques([t]);
-    setDrawerTitle(undefined);
-    setDrawerOpen(true);
-  }
-
-  function openDrawerForAll() {
-    setDrawerTechniques(undefined);
-    setDrawerTitle(undefined);
-    setDrawerOpen(true);
+    setDrawer({ open: true, techniques: [t], window });
   }
 
   /**
    * Open the drawer for the alerts addressed by a Top Remediation Control.
    * Passes the FULL covered-techniques array — backend ORs them via the
    * /alerts?techniques=... filter, so a multi-technique control surfaces
-   * alerts for every covered technique.
+   * alerts for every covered technique. No window: the control's badge counts
+   * its own fixed 30 days, and the drawer keeps its unbounded behaviour.
    */
-  function openDrawerForControl(techniques: string[], controlTitle: string) {
-    setDrawerTechniques(techniques);
-    setDrawerTitle(`Alerts addressed by '${controlTitle}'`);
-    setDrawerOpen(true);
-  }
-
-  useEffect(() => {
-    loadData();
-    loadSyncStatus();
+  const openDrawerForControl = useCallback((techniques: string[], controlTitle: string) => {
+    setDrawer({ open: true, techniques, title: `Alerts addressed by '${controlTitle}'` });
   }, []);
 
-  async function loadData() {
+  // Every load reruns when the window changes (new range, or Sync Now).
+  useEffect(() => {
+    const seq = ++loadSeq.current;
     setLoading(true);
-    const [scoreR, scoreTrendR, alertR, alertTrendR, detectR] = await Promise.allSettled([
-      defenderApi.getSecureScore(),
-      defenderApi.getSecureScoreTrend(TREND_DAYS),
-      defenderApi.getAlertSummary(),
-      defenderApi.getAlertTrend(TREND_DAYS),
-      defenderApi.getDetectionRate(TREND_DAYS, 60),
-    ]);
+    (async () => {
+      const [scoreR, scoreTrendR, summaryR, trendR, coverageR] = await Promise.allSettled([
+        defenderApi.getSecureScore(),
+        defenderApi.getSecureScoreTrend(SECURE_SCORE_TREND_DAYS),
+        defenderApi.getAlertSummary(window),
+        defenderApi.getAlertTrend(30, window),
+        defenderApi.getTechniqueCoverage(window),
+      ]);
+      if (seq !== loadSeq.current) return; // a newer window superseded this load
 
-    if (scoreR.status === 'fulfilled') setSecureScore(scoreR.value);
-    else console.error('Failed to load Defender secure score:', scoreR.reason);
+      if (scoreR.status === 'rejected') console.error('Failed to load Defender secure score:', scoreR.reason);
+      if (scoreTrendR.status === 'rejected') console.error('Failed to load secure score trend:', scoreTrendR.reason);
+      if (summaryR.status === 'rejected') console.error('Failed to load Defender alert summary:', summaryR.reason);
+      if (trendR.status === 'rejected') console.error('Failed to load alert trend:', trendR.reason);
+      if (coverageR.status === 'rejected') console.error('Failed to load technique coverage:', coverageR.reason);
 
-    if (scoreTrendR.status === 'fulfilled') setSecureScoreTrend(scoreTrendR.value);
-    else console.error('Failed to load secure score trend:', scoreTrendR.reason);
+      setData({
+        secureScore: scoreR.status === 'fulfilled' ? scoreR.value : null,
+        secureScoreTrend: scoreTrendR.status === 'fulfilled' ? scoreTrendR.value : [],
+        summary: summaryR.status === 'fulfilled' ? summaryR.value : null,
+        summaryFailed: summaryR.status === 'rejected',
+        trend: trendR.status === 'fulfilled' ? trendR.value : [],
+        coverage: coverageR.status === 'fulfilled' ? coverageR.value : null,
+        coverageFailed: coverageR.status === 'rejected',
+      });
+      setLoading(false);
+    })();
+  }, [window]);
 
-    if (alertR.status === 'fulfilled') setAlertSummary(alertR.value);
-    else console.error('Failed to load Defender alert summary:', alertR.reason);
-
-    if (alertTrendR.status === 'fulfilled') setAlertTrend(alertTrendR.value);
-    else console.error('Failed to load alert trend:', alertTrendR.reason);
-
-    if (detectR.status === 'fulfilled') setDetectionRate(detectR.value);
-    else console.error('Failed to load detection rate:', detectR.reason);
-
-    setLoading(false);
-  }
+  useEffect(() => {
+    loadSyncStatus();
+  }, []);
 
   async function loadSyncStatus() {
     try {
@@ -133,7 +139,7 @@ export default function DefenderTab() {
       const result = await integrationsApi.triggerDefenderSync();
       const failed = (['scores', 'controls', 'alerts'] as const).find((s) => result[s].errors.length > 0);
       if (failed) setSyncError(`${failed}: ${result[failed].errors[0]}`);
-      await loadData();
+      refresh();
       await loadSyncStatus();
     } catch (err) {
       const apiError = (err as { response?: { data?: { error?: string } } }).response?.data?.error;
@@ -143,11 +149,9 @@ export default function DefenderTab() {
     }
   }
 
+  const secureScore = data?.secureScore ?? null;
+  const secureScoreTrend = data?.secureScoreTrend ?? [];
   const scoreDelta = secureScoreTrend.length >= 2 ? secureScoreDelta(secureScoreTrend) : undefined;
-  const alertDeltaWeek = alertTrend.length >= 14 ? alertCountWindowDelta(alertTrend, 7) : undefined;
-
-  const totalAlerts = alertSummary?.total ?? 0;
-  const highAlerts = alertSummary?.bySeverity.high ?? 0;
 
   return (
     <div className="space-y-6">
@@ -167,94 +171,62 @@ export default function DefenderTab() {
                 : undefined
             }
             delta={scoreDelta}
-            deltaLabel={`pts vs ${TREND_DAYS}d ago`}
+            deltaLabel={`pts vs ${SECURE_SCORE_TREND_DAYS}d ago`}
             sparklineData={secureScoreTrend.map((p) => p.percentage)}
             sparklineClass="text-emerald-500"
             loading={loading}
           />
         </div>
         <div className="col-span-12 sm:col-span-6 md:col-span-3">
-          <HeroStatTile
-            title="Defender Alerts"
-            icon={<Bell className="w-4 h-4 text-primary" />}
-            value={totalAlerts.toLocaleString()}
-            subValue={alertSummary ? `${highAlerts.toLocaleString()} high severity` : undefined}
-            delta={alertDeltaWeek}
-            deltaTone={inverseDeltaTone(alertDeltaWeek)}
-            deltaLabel="vs prev 7d"
-            sparklineData={alertTrend.map((p) => p.count)}
-            sparklineClass="text-red-500"
+          <AlertsHeroTile
+            vendor={vendor}
+            summary={data?.summary ?? null}
+            trend={data?.trend ?? []}
+            window={window}
             loading={loading}
-            onClick={openDrawerForAll}
+            failed={!!data?.summaryFailed}
+            windowLabel={windowLabel}
           />
         </div>
         <div className="col-span-12 sm:col-span-6 md:col-span-3">
-          <HeroStatTile
-            title="Detection Rate"
-            icon={<Crosshair className="w-4 h-4 text-primary" />}
-            value={detectionRate?.overall.detectionRate.toFixed(1) ?? '—'}
-            valueSuffix="%"
-            subValue={
-              detectionRate
-                ? `${detectionRate.overall.correlatedExecutions.toLocaleString()} / ${detectionRate.overall.totalExecutions.toLocaleString()} executions detected`
-                : undefined
-            }
-            chartSlot={
-              detectionRate && detectionRate.byTechnique.length > 0 ? (
-                <CoveragePips
-                  items={detectionRate.byTechnique.map((t) => ({
-                    technique: t.technique,
-                    detected: t.detected,
-                  }))}
-                />
-              ) : undefined
-            }
+          <CoverageHeroTile
+            coverage={data?.coverage ?? null}
             loading={loading}
+            failed={!!data?.coverageFailed}
+            windowLabel={windowLabel}
           />
         </div>
         <div className="col-span-12 sm:col-span-6 md:col-span-3">
-          <AutoResolveStatTile />
+          <AutoResolveStatTile footnote={stillOpenFootnote(data?.summary?.counts)} />
         </div>
       </div>
 
-      {/* Correlation timeline */}
-      <TestVsAlertTimelineCard />
+      <IntegrationTimelineCard vendor={vendor} window={window} refreshKey={refreshKey} />
 
-      {/* Detail row: alert breakdown + remediation controls. Both cells get
-          an explicit max-h so the row stays compact; each card uses h-full
-          + internal overflow-y-auto, so whichever has more content scrolls
-          inside instead of stretching the row. */}
-      <div className="grid grid-cols-12 gap-4">
-        <div className="col-span-12 md:col-span-5 max-h-[600px]">
-          <AlertsSummaryCard data={alertSummary} loading={loading} />
-        </div>
-        <div className="col-span-12 md:col-span-7 max-h-[600px]">
-          <TopControlsCard compact onSelectControlAlerts={openDrawerForControl} />
-        </div>
-      </div>
+      <IntegrationAlertFeed
+        key={vendor.id}
+        vendor={vendor}
+        window={window}
+        windowLabel={windowLabel}
+        refreshKey={refreshKey}
+      />
 
-      {/* Detection analysis + Technique overlap side-by-side — both are
-          per-technique horizontal-bar charts and share visual rhythm at
-          half width. The cards are DIRECT grid children (no wrapper divs):
-          DetectionAnalysisCard returns null when it has no data, and the
-          only-child rule lets the overlap card take the full row instead
-          of sitting beside an invisible half-width hole. */}
-      <div className="grid grid-cols-12 gap-4 [&>:only-child]:col-span-12">
-        <DetectionAnalysisCard
-          className="col-span-12 max-h-[480px] lg:col-span-6"
-          onSelectTechnique={openDrawerForTechnique}
-        />
-        <TechniqueOverlapChart
-          className="col-span-12 max-h-[480px] lg:col-span-6"
-          onSelectTechnique={openDrawerForTechnique}
-        />
-      </div>
+      <TechniqueCoverageCard
+        vendor={vendor}
+        data={data?.coverage ?? null}
+        loading={loading}
+        error={!!data?.coverageFailed}
+        onSelectTechnique={openDrawerForTechnique}
+      />
+
+      <TopControlsCard twoColumn onSelectControlAlerts={openDrawerForControl} />
 
       <AlertDetailsDrawer
-        open={drawerOpen}
-        onClose={() => setDrawerOpen(false)}
-        techniques={drawerTechniques}
-        title={drawerTitle}
+        open={drawer.open}
+        onClose={closeDrawer}
+        techniques={drawer.techniques}
+        title={drawer.title}
+        window={drawer.window}
       />
     </div>
   );

@@ -77,6 +77,8 @@ function makeStage(overrides: Partial<EnrichedTestExecution>): EnrichedTestExecu
 function makeAlert(overrides: Partial<DefenderAlertItem> = {}): DefenderAlertItem {
   return {
     alert_id: 'alert-001',
+    hostname: null,
+    achilles_correlated: false,
     alert_title: 'Suspicious file lock race detected',
     description: '',
     severity: 'medium',
@@ -559,6 +561,7 @@ describe('ExecutionsDataTable — toggle removal + parent rollup', () => {
 function makeCsAlert(overrides: Partial<CrowdStrikeAlertItem> = {}): CrowdStrikeAlertItem {
   return {
     alert_id: 'cs-alert-001',
+    achilles_correlated: false,
     alert_title: 'CrowdStrike: suspicious file lock race',
     description: '',
     severity: 'critical',

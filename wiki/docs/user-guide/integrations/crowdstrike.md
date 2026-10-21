@@ -261,20 +261,28 @@ CrowdStrike fails, because the key's index list is per-pattern.)
 The analytics service provides four types of cross-correlation between
 Achilles test results and CrowdStrike data:
 
-**1. Detection Rate (per-execution)**
+**1. Detection Rate (evidence-based)**
 
-The headline metric on the CrowdStrike tab. It is the share of
-attack-simulation executions — counted per MITRE technique — that have a
-temporally-correlated CrowdStrike alert:
+The headline metric on the CrowdStrike tab. It is the share of conclusive
+attack-simulation executions in the selected window that CrowdStrike detected,
+read from the per-run flags the enrichment pass writes onto each test result,
+with the prevented subset reported separately. A bundle stage counts only by
+its own `f0rtika.crowdstrike_stage_detected` flag (never because a sibling stage
+was caught), a standalone test by its own `f0rtika.crowdstrike_detected` flag, and
+a vendor-confirmed prevention (`f0rtika.crowdstrike_prevented`) always counts as
+detected:
 
 ```
-detectionRate = correlatedExecutions / totalExecutions × 100
+detectionRate = (prevented + detectedOnly) / executions × 100
 ```
 
-Correlation is **roll-up aware** (a `T1574.002` test is satisfied by a parent
-`T1574` alert, one-directionally) and **excludes** cyber-hygiene controls and
-skipped bundle stages. The full definition is documented in
+Cyber-hygiene controls and skipped bundle stages are excluded. The full
+definition is in
 [Analytics → CrowdStrike Falcon](../analytics/crowdstrike#detection-rate).
+
+The legacy `/correlation/detection-rate` endpoint (technique plus time-window
+matching, roll-up aware, used by the CLI) is still available; the tab no longer
+uses it.
 
 **2. Per-test evidence correlation (alert drawer)**
 

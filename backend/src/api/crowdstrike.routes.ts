@@ -6,6 +6,12 @@ import { requireClerkAuth, requirePermission } from '../middleware/clerk.middlew
 import { asyncHandler, AppError } from '../middleware/error.middleware.js';
 import { IntegrationsSettingsService } from '../services/integrations/settings.js';
 import { CrowdStrikeAnalyticsService } from '../services/crowdstrike/analytics.service.js';
+import {
+  parseAlertSource,
+  parseSeverityList,
+  parseWindowQuery,
+} from '../services/analytics/integration-window.js';
+import { defaultCoverageWindow } from '../services/analytics/technique-coverage.js';
 
 const router = Router();
 
@@ -49,8 +55,8 @@ router.get('/zta-score/trend', requirePermission('analytics:dashboards:read'), a
 // ---------------------------------------------------------------------------
 
 /** GET /api/analytics/crowdstrike/alerts/summary — Alert counts by severity/status */
-router.get('/alerts/summary', requirePermission('analytics:dashboards:read'), asyncHandler(async (_req, res) => {
-  const data = await analyticsService.getAlertSummary();
+router.get('/alerts/summary', requirePermission('analytics:dashboards:read'), asyncHandler(async (req, res) => {
+  const data = await analyticsService.getAlertSummary(parseWindowQuery(req.query));
   res.json(data);
 }));
 
@@ -59,7 +65,6 @@ router.get('/alerts', requirePermission('analytics:dashboards:read'), asyncHandl
   const data = await analyticsService.getAlerts({
     page: req.query.page ? parseInt(String(req.query.page), 10) : undefined,
     pageSize: req.query.pageSize ? parseInt(String(req.query.pageSize), 10) : undefined,
-    severity: req.query.severity ? String(req.query.severity) : undefined,
     status: req.query.status ? String(req.query.status) : undefined,
     search: req.query.search ? String(req.query.search) : undefined,
     techniques: req.query.techniques
@@ -67,6 +72,9 @@ router.get('/alerts', requirePermission('analytics:dashboards:read'), asyncHandl
       : undefined,
     sortField: req.query.sortField ? String(req.query.sortField) : undefined,
     sortOrder: req.query.sortOrder === 'asc' ? 'asc' : 'desc',
+    source: parseAlertSource(req.query.source),
+    severities: parseSeverityList(req.query.severity),
+    window: parseWindowQuery(req.query),
   });
   res.json(data);
 }));
@@ -74,7 +82,7 @@ router.get('/alerts', requirePermission('analytics:dashboards:read'), asyncHandl
 /** GET /api/analytics/crowdstrike/alerts/trend — Alert creation trend */
 router.get('/alerts/trend', requirePermission('analytics:dashboards:read'), asyncHandler(async (req, res) => {
   const days = parseInt(String(req.query.days ?? '30'), 10);
-  const data = await analyticsService.getAlertTrend(days);
+  const data = await analyticsService.getAlertTrend(days, parseWindowQuery(req.query));
   res.json(data);
 }));
 
@@ -92,6 +100,13 @@ router.get('/correlation/scores', requirePermission('analytics:dashboards:read')
 /** GET /api/analytics/crowdstrike/correlation/techniques — MITRE technique overlap */
 router.get('/correlation/techniques', requirePermission('analytics:dashboards:read'), asyncHandler(async (_req, res) => {
   const data = await analyticsService.getTechniqueOverlap();
+  res.json(data);
+}));
+
+/** GET /api/analytics/crowdstrike/correlation/technique-coverage — Evidence-based per-technique coverage (defaults to the last 30 days) */
+router.get('/correlation/technique-coverage', requirePermission('analytics:dashboards:read'), asyncHandler(async (req, res) => {
+  const window = parseWindowQuery(req.query) ?? defaultCoverageWindow();
+  const data = await analyticsService.getTechniqueCoverage(window);
   res.json(data);
 }));
 

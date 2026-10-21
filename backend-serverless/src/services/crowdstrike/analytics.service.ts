@@ -9,8 +9,16 @@ import { CROWDSTRIKE_INDEX } from './index-management.js';
 import { buildAlertTimeWindowQuery, buildCrowdStrikeEvidenceQuery } from './evidence-correlation.js';
 import { attackSimulationExclusions } from '../analytics/attack-simulation-filter.js';
 import { projectAlertHit } from '../alerts/alertHit.js';
+import { trendInterval, windowRange } from '../analytics/integration-window.js';
+import { alertDocs, alertFacets, allOf, LINKED, firstString, severityFilter, sourceFilter } from '../analytics/alert-facets.js';
+import type { AlertFacetCounts, AlertSource, TimeWindow } from '../analytics/integration-window.js';
+import { resolveTestNames } from '../analytics/test-name-lookup.js';
+import { getTechniqueCoverage } from '../analytics/technique-coverage.js';
+import type { TechniqueCoverageResponse } from '../analytics/technique-coverage.js';
 import type { Client } from '@elastic/elasticsearch';
-import type { QueryDslQueryContainer } from '@elastic/elasticsearch/lib/api/types.js';
+import type {
+  QueryDslQueryContainer,
+} from '@elastic/elasticsearch/lib/api/types.js';
 
 // ---------------------------------------------------------------------------
 // Response types (declared locally, matching the fork's defender convention)
@@ -28,6 +36,8 @@ export interface ZtaScoreSummary {
 
 export interface ZtaScoreTrendPoint {
   date: string;
+  overallScore: number;
+  /** Alias of overallScore, kept for the CLI. */
   score: number;
   osScore: number;
   sensorConfigScore: number;
@@ -40,6 +50,7 @@ interface RecentAlert {
   severity: string;
   created_at: string;
   service_source: string;
+  product: string;
 }
 
 export interface AlertSummary {
@@ -49,11 +60,17 @@ export interface AlertSummary {
   /** Most recent critical+high alerts (CrowdStrike's top severity tiers). */
   recentHigh: RecentAlert[];
   recentMedium: RecentAlert[];
+  /** Facet counts for the hero tiles, over the same window. */
+  counts: AlertFacetCounts;
 }
 
 export interface AlertTrendPoint {
   date: string;
   count: number;
+  /** Alerts the enrichment pass matched to an Achilles test. */
+  linked: number;
+  /** Bucket width of the series. */
+  interval: 'day' | 'week';
   critical: number;
   high: number;
   medium: number;
@@ -76,6 +93,20 @@ export interface CrowdStrikeAlertItem {
   auto_resolved?: boolean;
   auto_resolved_at?: string | null;
   auto_resolve_mode?: 'disabled' | 'dry_run' | 'enabled' | null;
+  /** First of evidence_hostnames, or null. */
+  hostname: string | null;
+  /** quarantined | process_killed | blocked | kill_failed; absent when Falcon only detected. */
+  prevention_action?: string;
+  pattern_disposition_description?: string;
+  /** Deep link to the alert in the Falcon console. */
+  portal_url?: string;
+  /** True when the enrichment pass matched this alert to an Achilles test. */
+  achilles_correlated: boolean;
+  achilles_test_uuid?: string;
+  /** Display name of the matched test or bundle, when it can be resolved. */
+  achilles_test_name?: string;
+  /** 'bundle' when achilles_test_uuid is a bundle (name = bundle_name), else 'test'. */
+  achilles_test_kind?: 'test' | 'bundle';
 }
 
 export interface ScoreComparisonPoint {
@@ -95,6 +126,8 @@ export interface PaginatedAlerts {
   total: number;
   page: number;
   pageSize: number;
+  /** Facet counts for the filter segments and summary strip. */
+  counts: AlertFacetCounts;
 }
 
 export interface DetectionRateTechniqueItem {
@@ -153,18 +186,55 @@ export interface RelatedAlertsResponse {
   total: number;
 }
 
+/** prevention_action values meaning Falcon stopped the activity. */
+const PREVENTED_ACTIONS = ['quarantined', 'process_killed', 'blocked'];
+
 // ---------------------------------------------------------------------------
 // Service
 // ---------------------------------------------------------------------------
 
 export class CrowdStrikeAnalyticsService {
-  private async getEsClient(): Promise<Client> {
+  private async getEsContext() {
     const settingsService = new SettingsService();
     const settings = await settingsService.getSettings();
     if (!settings.configured) {
       throw new Error('Elasticsearch is not configured');
     }
-    return createEsClient(settings);
+    return { client: createEsClient(settings), settings };
+  }
+
+  private async getEsClient(): Promise<Client> {
+    return (await this.getEsContext()).client;
+  }
+
+  /** Facet aggregations for the alert feed; see alert-facets.ts. */
+  private alertFacets(filters: { source?: AlertSource; window: TimeWindow | null }) {
+    return alertFacets({
+      ...filters,
+      closedStatuses: ['closed', 'resolved'],
+      vendorFacet: {
+        key: 'prevention',
+        agg: {
+          filters: {
+            filters: {
+              prevented: { terms: { prevention_action: PREVENTED_ACTIONS } },
+              detected_only: { bool: { must_not: [{ exists: { field: 'prevention_action' } }] } },
+              kill_failed: { term: { prevention_action: 'kill_failed' } },
+            },
+          },
+        },
+        read: (response) => {
+          const buckets = (response as { buckets?: Record<string, { doc_count?: number } | undefined> } | undefined)?.buckets;
+          return {
+            byPrevention: {
+              prevented: buckets?.prevented?.doc_count ?? 0,
+              detected_only: buckets?.detected_only?.doc_count ?? 0,
+              kill_failed: buckets?.kill_failed?.doc_count ?? 0,
+            },
+          };
+        },
+      },
+    });
   }
 
   // ── ZTA Score (CrowdStrike's Secure-Score equivalent) ─────────
@@ -226,6 +296,7 @@ export class CrowdStrikeAnalyticsService {
       const source = hit._source as Record<string, unknown>;
       return {
         date: String(source.timestamp ?? ''),
+        overallScore: Number(source.overall_score ?? 0),
         score: Number(source.overall_score ?? 0),
         osScore: Number(source.os_score ?? 0),
         sensorConfigScore: Number(source.sensor_config_score ?? 0),
@@ -236,16 +307,19 @@ export class CrowdStrikeAnalyticsService {
 
   // ── Alerts ───────────────────────────────────────────────────
 
-  async getAlertSummary(): Promise<AlertSummary> {
+  async getAlertSummary(window: TimeWindow | null = null): Promise<AlertSummary> {
     const client = await this.getEsClient();
+    const range = windowRange('created_at', window);
+    const facets = this.alertFacets({ window });
 
     const result = await client.search({
       index: CROWDSTRIKE_INDEX,
       size: 0,
-      query: { term: { doc_type: 'alert' } },
+      query: alertDocs(window),
       aggs: {
         by_severity: { terms: { field: 'severity', size: 10 } },
         by_status: { terms: { field: 'status', size: 10 } },
+        ...facets.aggs,
       },
     });
 
@@ -276,6 +350,7 @@ export class CrowdStrikeAnalyticsService {
         severity: String(s.severity ?? ''),
         created_at: String(s.created_at ?? ''),
         service_source: String(s.service_source ?? ''),
+        product: String(s.category ?? ''),
       };
     };
 
@@ -287,6 +362,7 @@ export class CrowdStrikeAnalyticsService {
           bool: {
             must: [
               { term: { doc_type: 'alert' } },
+              ...(range ? [range] : []),
               { terms: { severity: severities } },
             ],
           },
@@ -301,7 +377,14 @@ export class CrowdStrikeAnalyticsService {
       recentBySeverity(['medium'], 5),
     ]);
 
-    return { total, bySeverity, byStatus, recentHigh, recentMedium };
+    return {
+      total,
+      bySeverity,
+      byStatus,
+      recentHigh,
+      recentMedium,
+      counts: facets.read(result.aggregations),
+    };
   }
 
   async getAlerts(params: {
@@ -314,11 +397,22 @@ export class CrowdStrikeAnalyticsService {
     techniques?: string[];
     sortField?: string;
     sortOrder?: 'asc' | 'desc';
+    /** Linked (test) vs organic alerts; 'all' or absent = no filter. */
+    source?: AlertSource;
+    /** Severities to OR-filter on. Unlike `severity`, this leaves the severity facet unfiltered. */
+    severities?: string[];
+    /** created_at window; null or absent = all time. */
+    window?: TimeWindow | null;
   }): Promise<PaginatedAlerts> {
-    const client = await this.getEsClient();
-    const { page = 1, pageSize = 25, severity, status, search, techniques, sortField = 'created_at', sortOrder = 'desc' } = params;
+    const { client, settings } = await this.getEsContext();
+    const {
+      page = 1, pageSize = 25, severity, status, search, techniques,
+      sortField = 'created_at', sortOrder = 'desc', source, severities, window = null,
+    } = params;
 
     const must: QueryDslQueryContainer[] = [{ term: { doc_type: 'alert' } }];
+    const range = windowRange('created_at', window);
+    if (range) must.push(range);
     if (severity) must.push({ term: { severity } });
     if (status) must.push({ term: { status } });
     if (search) must.push({ multi_match: { query: search, fields: ['alert_title', 'description', 'category'] } });
@@ -332,11 +426,19 @@ export class CrowdStrikeAnalyticsService {
       must.push({ bool: { should, minimum_should_match: 1 } });
     }
 
+    // Source and severity filter the hits through post_filter so the facet
+    // aggregations still see the alerts those filters exclude.
+    const sourceClause = sourceFilter(source);
+    const severityClause = severityFilter(severities);
+    const facets = this.alertFacets({ source, window });
+
     const result = await client.search({
       index: CROWDSTRIKE_INDEX,
       from: (page - 1) * pageSize,
       size: pageSize,
       query: { bool: { must } },
+      ...(sourceClause || severityClause ? { post_filter: allOf(sourceClause, severityClause) } : {}),
+      aggs: facets.aggs,
       sort: [{ [sortField]: { order: sortOrder } }],
     });
 
@@ -344,9 +446,20 @@ export class CrowdStrikeAnalyticsService {
       ? result.hits.total
       : (result.hits.total as { value: number })?.value ?? 0;
 
-    const data = result.hits.hits.map((hit) => {
-      const s = hit._source as Record<string, unknown>;
+    const sources = result.hits.hits.map((hit) => (hit._source as Record<string, unknown>) ?? {});
+    const testUuids = new Set<string>();
+    for (const s of sources) {
+      const uuid = (s.f0rtika as Record<string, unknown> | undefined)?.achilles_test_uuid;
+      if (typeof uuid === 'string' && uuid) testUuids.add(uuid);
+    }
+    const testNames = await resolveTestNames(client, settings.indexPattern, [...testUuids]);
+
+    const data = sources.map((s) => {
       const f0rtika = (s.f0rtika as Record<string, unknown> | undefined) ?? {};
+      const testUuid = typeof f0rtika.achilles_test_uuid === 'string' && f0rtika.achilles_test_uuid
+        ? f0rtika.achilles_test_uuid
+        : undefined;
+      const linked = testUuid ? testNames.get(testUuid) : undefined;
       const item: CrowdStrikeAlertItem = {
         alert_id: String(s.alert_id ?? ''),
         alert_title: String(s.alert_title ?? ''),
@@ -360,6 +473,15 @@ export class CrowdStrikeAnalyticsService {
         updated_at: String(s.updated_at ?? ''),
         resolved_at: s.resolved_at ? String(s.resolved_at) : null,
         recommended_actions: String(s.recommended_actions ?? ''),
+        hostname: firstString(s.evidence_hostnames),
+        ...(s.prevention_action ? { prevention_action: String(s.prevention_action) } : {}),
+        ...(s.pattern_disposition_description
+          ? { pattern_disposition_description: String(s.pattern_disposition_description) }
+          : {}),
+        ...(s.portal_url ? { portal_url: String(s.portal_url) } : {}),
+        achilles_correlated: f0rtika.achilles_correlated === true,
+        ...(testUuid ? { achilles_test_uuid: testUuid } : {}),
+        ...(linked ? { achilles_test_name: linked.name, achilles_test_kind: linked.kind } : {}),
       };
       if (typeof f0rtika.auto_resolved === 'boolean') {
         item.auto_resolved = f0rtika.auto_resolved;
@@ -371,27 +493,32 @@ export class CrowdStrikeAnalyticsService {
       return item;
     });
 
-    return { data, total, page, pageSize };
+    return { data, total, page, pageSize, counts: facets.read(result.aggregations) };
   }
 
-  async getAlertTrend(days: number): Promise<AlertTrendPoint[]> {
+  async getAlertTrend(days: number, window: TimeWindow | null = null): Promise<AlertTrendPoint[]> {
     const client = await this.getEsClient();
+
+    const interval = window ? trendInterval(window) : 'day';
 
     const result = await client.search({
       index: CROWDSTRIKE_INDEX,
       size: 0,
-      query: {
-        bool: {
-          must: [
-            { term: { doc_type: 'alert' } },
-            { range: { created_at: { gte: `now-${days}d/d` } } },
-          ],
-        },
-      },
+      query: window
+        ? alertDocs(window)
+        : {
+            bool: {
+              must: [
+                { term: { doc_type: 'alert' } },
+                { range: { created_at: { gte: `now-${days}d/d` } } },
+              ],
+            },
+          },
       aggs: {
         by_day: {
-          date_histogram: { field: 'created_at', calendar_interval: 'day' },
+          date_histogram: { field: 'created_at', calendar_interval: interval },
           aggs: {
+            linked: { filter: LINKED },
             critical: { filter: { term: { severity: 'critical' } } },
             high: { filter: { term: { severity: 'high' } } },
             medium: { filter: { term: { severity: 'medium' } } },
@@ -405,6 +532,7 @@ export class CrowdStrikeAnalyticsService {
     const buckets = ((aggs?.by_day as Record<string, unknown>)?.buckets as Array<{
       key_as_string: string;
       doc_count: number;
+      linked: { doc_count: number };
       critical: { doc_count: number };
       high: { doc_count: number };
       medium: { doc_count: number };
@@ -414,6 +542,8 @@ export class CrowdStrikeAnalyticsService {
     return buckets.map((b) => ({
       date: b.key_as_string,
       count: b.doc_count,
+      linked: b.linked?.doc_count ?? 0,
+      interval,
       critical: b.critical.doc_count,
       high: b.high.doc_count,
       medium: b.medium.doc_count,
@@ -529,6 +659,22 @@ export class CrowdStrikeAnalyticsService {
   }
 
   // ── Detection correlation ───────────────────────────────────
+
+  /**
+   * Evidence-based technique coverage: per-execution Detected / Prevented /
+   * Missed from the enrichment-written Falcon flags on test docs, plus
+   * Falcon alert counts per tested technique. Drives the tab's Detection
+   * tile and Technique Coverage table. See analytics/technique-coverage.ts.
+   */
+  async getTechniqueCoverage(window: TimeWindow): Promise<TechniqueCoverageResponse> {
+    const { client, settings } = await this.getEsContext();
+    return getTechniqueCoverage(client, {
+      vendor: 'crowdstrike',
+      resultsIndex: settings.indexPattern,
+      alertIndex: CROWDSTRIKE_INDEX,
+      window,
+    });
+  }
 
   /**
    * Per-execution CrowdStrike detection rate: the share of attack-simulation

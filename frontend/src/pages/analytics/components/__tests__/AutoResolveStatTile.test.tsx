@@ -47,6 +47,22 @@ describe('AutoResolveStatTile', () => {
     expect(screen.getByText(/24h:\s*7/)).toBeInTheDocument();
   });
 
+  it('renders the optional footnote under the mode line', async () => {
+    mockGetStatus.mockResolvedValue({
+      mode: 'enabled',
+      counts: { last24h: 0, last7d: 1, last30d: 4 },
+      lastAutoResolve: null,
+    });
+
+    render(
+      <MemoryRouter>
+        <AutoResolveStatTile footnote="7 of 11 test alerts still open" />
+      </MemoryRouter>
+    );
+
+    await waitFor(() => expect(screen.getByText('7 of 11 test alerts still open')).toBeInTheDocument());
+  });
+
   it('renders Disabled mode with zero counts as the default-quiet state', async () => {
     mockGetStatus.mockResolvedValue({
       mode: 'disabled',

@@ -25,6 +25,13 @@ vi.mock('../index-management.js', () => ({
   CROWDSTRIKE_INDEX: 'achilles-crowdstrike',
 }));
 
+const mockResolveTestNames = vi.fn(
+  async (..._args: unknown[]) => new Map<string, { name: string; kind: 'test' | 'bundle' }>(),
+);
+vi.mock('../../analytics/test-name-lookup.js', () => ({
+  resolveTestNames: (...args: unknown[]) => mockResolveTestNames(...args),
+}));
+
 const { CrowdStrikeAnalyticsService } = await import('../analytics.service.js');
 
 // ── Tests ────────────────────────────────────────────────────────────
@@ -102,6 +109,20 @@ describe('CrowdStrikeAnalyticsService', () => {
       expect(result[1].score).toBe(72);
       expect(result[1].deviceCount).toBe(11);
     });
+
+    it('exposes overallScore and keeps the score alias', async () => {
+      mockSearch.mockResolvedValueOnce({
+        hits: {
+          hits: [
+            { _source: { timestamp: '2026-09-29T00:00:00Z', overall_score: 97, os_score: 91, sensor_config_score: 100, device_count: 6 } },
+          ],
+        },
+      });
+
+      const result = await service.getZtaScoreTrend(30);
+
+      expect(result[0]).toMatchObject({ overallScore: 97, score: 97, osScore: 91, sensorConfigScore: 100, deviceCount: 6 });
+    });
   });
 
   // ── Alerts ─────────────────────────────────────────────────
@@ -166,6 +187,23 @@ describe('CrowdStrikeAnalyticsService', () => {
     });
   });
 
+  describe('getAlertSummary product', () => {
+    it('maps product from category on recent alerts', async () => {
+      mockSearch.mockResolvedValueOnce({
+        hits: { total: { value: 1 }, hits: [] },
+        aggregations: { by_severity: { buckets: [] }, by_status: { buckets: [] } },
+      });
+      mockSearch.mockResolvedValueOnce({
+        hits: { hits: [{ _source: { alert_id: 'a1', alert_title: 'X', severity: 'high', created_at: '2026-10-01T10:00:00Z', service_source: 'Falcon', category: 'NGAV' } }] },
+      });
+      mockSearch.mockResolvedValueOnce({ hits: { hits: [] } });
+
+      const result = await service.getAlertSummary();
+
+      expect(result.recentHigh[0].product).toBe('NGAV');
+    });
+  });
+
   describe('getAlerts', () => {
     it('applies severity/status/search filters and pagination', async () => {
       mockSearch.mockResolvedValueOnce({
@@ -218,6 +256,264 @@ describe('CrowdStrikeAnalyticsService', () => {
       expect(techClause.bool.should).toContainEqual({ term: { mitre_techniques: 'T1059' } });
       expect(techClause.bool.should).toContainEqual({ prefix: { mitre_techniques: 'T1059.' } });
       expect(techClause.bool.should).toContainEqual({ prefix: { mitre_techniques: 'T1486.' } });
+    });
+  });
+
+  describe('getAlerts window, source and facets', () => {
+    const emptyPage = { hits: { total: { value: 0 }, hits: [] } };
+    const WINDOW = { from: '2026-10-01T00:00:00.000Z', to: '2026-10-20T00:00:00.000Z' };
+
+    it('filters organic as must_not achilles_correlated:true', async () => {
+      mockSearch.mockResolvedValueOnce(emptyPage);
+
+      await service.getAlerts({ source: 'organic' });
+
+      const req = mockSearch.mock.calls[0][0];
+      expect(req.post_filter.bool.filter).toContainEqual({
+        bool: { must_not: [{ term: { 'f0rtika.achilles_correlated': true } }] },
+      });
+      // Source is a post_filter, never part of the base query (facets need it out).
+      expect(JSON.stringify(req.query)).not.toContain('achilles_correlated');
+    });
+
+    it('filters test as achilles_correlated:true', async () => {
+      mockSearch.mockResolvedValueOnce(emptyPage);
+
+      await service.getAlerts({ source: 'test' });
+
+      const req = mockSearch.mock.calls[0][0];
+      expect(req.post_filter.bool.filter).toContainEqual({ term: { 'f0rtika.achilles_correlated': true } });
+    });
+
+    it('ORs a comma severity list', async () => {
+      mockSearch.mockResolvedValueOnce(emptyPage);
+
+      await service.getAlerts({ severities: ['high', 'medium'] });
+
+      const req = mockSearch.mock.calls[0][0];
+      expect(req.post_filter.bool.filter).toContainEqual({ terms: { severity: ['high', 'medium'] } });
+    });
+
+    it('sends no post_filter when source is all and no severities are given', async () => {
+      mockSearch.mockResolvedValueOnce(emptyPage);
+
+      await service.getAlerts({ source: 'all', severities: [] });
+
+      expect(mockSearch.mock.calls[0][0].post_filter).toBeUndefined();
+    });
+
+    it('applies created_at window when given and none when absent', async () => {
+      mockSearch.mockResolvedValueOnce(emptyPage);
+      mockSearch.mockResolvedValueOnce(emptyPage);
+
+      await service.getAlerts({ window: WINDOW });
+      await service.getAlerts({});
+
+      const windowed = mockSearch.mock.calls[0][0].query.bool.must;
+      expect(windowed).toContainEqual({ range: { created_at: { gte: WINDOW.from, lte: WINDOW.to } } });
+
+      const unwindowed = mockSearch.mock.calls[1][0].query.bool.must;
+      expect(unwindowed).toEqual([{ term: { doc_type: 'alert' } }]);
+    });
+
+    it('maps hostname, prevention, portal_url and correlation fields', async () => {
+      mockResolveTestNames.mockResolvedValueOnce(new Map([['u1', { name: 'Ransomware chain', kind: 'bundle' as const }]]));
+      mockSearch.mockResolvedValueOnce({
+        hits: {
+          total: { value: 1 },
+          hits: [{
+            _source: {
+              alert_id: 'a1',
+              alert_title: 'Ransomware note dropped',
+              severity: 'high',
+              status: 'new',
+              created_at: '2026-10-01T10:00:00Z',
+              evidence_hostnames: ['LAB-01', 'LAB-02'],
+              prevention_action: 'process_killed',
+              pattern_disposition_description: 'Prevention, process killed.',
+              portal_url: 'https://x',
+              f0rtika: { achilles_correlated: true, achilles_test_uuid: 'u1' },
+            },
+          }],
+        },
+      });
+
+      const result = await service.getAlerts({});
+
+      const item = result.data[0];
+      expect(item.hostname).toBe('LAB-01');
+      expect(item.prevention_action).toBe('process_killed');
+      expect(item.pattern_disposition_description).toBe('Prevention, process killed.');
+      expect(item.portal_url).toBe('https://x');
+      expect(item.achilles_correlated).toBe(true);
+      expect(item.achilles_test_uuid).toBe('u1');
+      expect(item.achilles_test_name).toBe('Ransomware chain');
+      expect(item.achilles_test_kind).toBe('bundle');
+      // Existing item fields are kept.
+      expect(item.alert_title).toBe('Ransomware note dropped');
+
+      // One lookup per page, against the results index, with the distinct uuids.
+      expect(mockResolveTestNames).toHaveBeenCalledTimes(1);
+      expect(mockResolveTestNames.mock.calls[0][1]).toBe('achilles-results-*');
+      expect(mockResolveTestNames.mock.calls[0][2]).toEqual(['u1']);
+    });
+
+    it('maps a bare alert to hostname null and achilles_correlated false', async () => {
+      mockSearch.mockResolvedValueOnce({
+        hits: { total: { value: 1 }, hits: [{ _source: { alert_id: 'a2', severity: 'low' } }] },
+      });
+
+      const result = await service.getAlerts({});
+
+      const item = result.data[0];
+      expect(item.hostname).toBeNull();
+      expect(item.achilles_correlated).toBe(false);
+      expect(item.achilles_test_uuid).toBeUndefined();
+      expect(item.achilles_test_name).toBeUndefined();
+      expect(item.achilles_test_kind).toBeUndefined();
+      expect(item.prevention_action).toBeUndefined();
+      expect(item.portal_url).toBeUndefined();
+    });
+
+    it('returns facet counts from aggregations', async () => {
+      mockSearch.mockResolvedValueOnce({
+        hits: { total: { value: 12 }, hits: [] },
+        aggregations: {
+          facet_source: {
+            doc_count: 20,
+            split: { buckets: { test: { doc_count: 8 }, organic: { doc_count: 12 } } },
+          },
+          facet_severity: {
+            doc_count: 12,
+            split: { buckets: [{ key: 'critical', doc_count: 2 }, { key: 'high', doc_count: 10 }] },
+          },
+          facet_filtered: {
+            doc_count: 12,
+            auto_resolved: { doc_count: 3 },
+            prevention: {
+              buckets: {
+                prevented: { doc_count: 5 },
+                detected_only: { doc_count: 6 },
+                kill_failed: { doc_count: 1 },
+              },
+            },
+          },
+          facet_linked_open: { doc_count: 999, split: { doc_count: 4 } },
+        },
+      });
+
+      const result = await service.getAlerts({ source: 'organic', severities: ['critical', 'high'] });
+
+      expect(result.counts).toEqual({
+        bySource: { all: 20, test: 8, organic: 12 },
+        bySeverity: { critical: 2, high: 10 },
+        autoResolved: 3,
+        linkedOpen: 4,
+        byPrevention: { prevented: 5, detected_only: 6, kill_failed: 1 },
+      });
+    });
+
+    it('scopes facets: source counts ignore source and severity, the strip honours source only', async () => {
+      mockSearch.mockResolvedValueOnce(emptyPage);
+
+      await service.getAlerts({
+        source: 'test', severities: ['high'], search: 'ransom', techniques: ['T1486'], window: WINDOW,
+      });
+
+      const req = mockSearch.mock.calls[0][0];
+      const linked = { term: { 'f0rtika.achilles_correlated': true } };
+      const sev = { terms: { severity: ['high'] } };
+      // R15: bySource ignores source AND severity, so the feed's "All" equals the
+      // alerts tile; the strip (bySeverity, vendor facet, autoResolved) honours
+      // source and ignores severity. Severity only filters the hits.
+      expect(req.aggs.facet_source.filter).toEqual({ match_all: {} });
+      expect(req.aggs.facet_severity.filter.bool.filter).toEqual([linked]);
+      expect(req.aggs.facet_filtered.filter.bool.filter).toEqual([linked]);
+      expect(req.post_filter.bool.filter).toEqual([linked, sev]);
+      expect(req.aggs.facet_filtered.aggs.prevention.filters.filters.prevented).toEqual({
+        terms: { prevention_action: ['quarantined', 'process_killed', 'blocked'] },
+      });
+      // linkedOpen ignores the query (search/techniques) and keeps only the window.
+      expect(req.aggs.facet_linked_open.global).toEqual({});
+      const linkedOpen = JSON.stringify(req.aggs.facet_linked_open.aggs.split.filter);
+      expect(linkedOpen).toContain('"created_at"');
+      expect(linkedOpen).toContain('achilles_correlated');
+      expect(linkedOpen).toContain('"closed"');
+      expect(linkedOpen).toContain('"resolved"');
+      expect(linkedOpen).not.toContain('ransom');
+      expect(linkedOpen).not.toContain('T1486');
+      expect(linkedOpen).not.toContain('"severity"');
+    });
+
+    it('keeps severity out of every facet (bySource carries no severity clause)', async () => {
+      mockSearch.mockResolvedValueOnce(emptyPage);
+
+      await service.getAlerts({ severities: ['critical', 'high'], window: WINDOW });
+
+      const req = mockSearch.mock.calls[0][0];
+      expect(JSON.stringify(req.aggs.facet_source)).not.toContain('"severity"');
+      expect(JSON.stringify(req.aggs.facet_filtered.filter)).not.toContain('"severity"');
+      expect(req.aggs.facet_source.filter).toEqual({ match_all: {} });
+      expect(req.post_filter).toEqual({ bool: { filter: [{ terms: { severity: ['critical', 'high'] } }] } });
+    });
+
+    it('returns zeroed counts when aggregations are missing', async () => {
+      mockSearch.mockResolvedValueOnce(emptyPage);
+
+      const result = await service.getAlerts({});
+
+      expect(result.counts).toEqual({
+        bySource: { all: 0, test: 0, organic: 0 },
+        bySeverity: {},
+        autoResolved: 0,
+        linkedOpen: 0,
+        byPrevention: { prevented: 0, detected_only: 0, kill_failed: 0 },
+      });
+    });
+  });
+
+  describe('getAlertSummary window and counts', () => {
+    it('windows every summary query and returns facet counts', async () => {
+      const WINDOW = { from: '2026-10-01T00:00:00.000Z', to: '2026-10-20T00:00:00.000Z' };
+      mockSearch.mockResolvedValueOnce({
+        hits: { total: { value: 5 }, hits: [] },
+        aggregations: {
+          by_severity: { buckets: [{ key: 'high', doc_count: 5 }] },
+          by_status: { buckets: [] },
+          facet_source: { doc_count: 5, split: { buckets: { test: { doc_count: 2 }, organic: { doc_count: 3 } } } },
+          facet_filtered: {
+            doc_count: 5,
+            auto_resolved: { doc_count: 1 },
+            prevention: { buckets: { prevented: { doc_count: 2 }, detected_only: { doc_count: 3 }, kill_failed: { doc_count: 0 } } },
+          },
+          facet_linked_open: { doc_count: 50, split: { doc_count: 2 } },
+        },
+      });
+      mockSearch.mockResolvedValueOnce({ hits: { hits: [] } });
+      mockSearch.mockResolvedValueOnce({ hits: { hits: [] } });
+
+      const result = await service.getAlertSummary(WINDOW);
+
+      const range = { range: { created_at: { gte: WINDOW.from, lte: WINDOW.to } } };
+      for (const call of mockSearch.mock.calls) {
+        expect(JSON.stringify(call[0].query)).toContain(JSON.stringify(range));
+      }
+      expect(result.counts.bySource).toEqual({ all: 5, test: 2, organic: 3 });
+      expect(result.counts.linkedOpen).toBe(2);
+      expect(result.counts.autoResolved).toBe(1);
+      expect(result.counts.byPrevention).toEqual({ prevented: 2, detected_only: 3, kill_failed: 0 });
+    });
+
+    it('sends no created_at range when no window is given', async () => {
+      mockSearch.mockResolvedValueOnce({ hits: { total: { value: 0 }, hits: [] }, aggregations: {} });
+      mockSearch.mockResolvedValueOnce({ hits: { hits: [] } });
+      mockSearch.mockResolvedValueOnce({ hits: { hits: [] } });
+
+      await service.getAlertSummary();
+
+      for (const call of mockSearch.mock.calls) {
+        expect(JSON.stringify(call[0].query)).not.toContain('created_at');
+      }
     });
   });
 
@@ -572,6 +868,38 @@ describe('CrowdStrikeAnalyticsService', () => {
 
       expect(result.alerts[0].alert_id).toBe('near');
       expect(result.alerts[1].alert_id).toBe('far');
+    });
+  });
+  describe('getAlertTrend linked + window', () => {
+    const bucket = { key_as_string: '2026-10-01T00:00:00.000Z', doc_count: 4, critical: { doc_count: 1 }, high: { doc_count: 1 }, medium: { doc_count: 1 }, low: { doc_count: 1 }, linked: { doc_count: 3 } };
+    const respond = () => mockSearch.mockResolvedValueOnce({ hits: { total: { value: 4 }, hits: [] }, aggregations: { by_day: { buckets: [bucket] } } });
+
+    it('getAlertTrend adds linked from a correlated sub-aggregation', async () => {
+      respond();
+      const result = await service.getAlertTrend(30);
+      const body = mockSearch.mock.calls[0][0];
+      expect(body.aggs.by_day.aggs.linked).toEqual({ filter: { term: { 'f0rtika.achilles_correlated': true } } });
+      expect(result[0].linked).toBe(3);
+    });
+
+    it('getAlertTrend uses week buckets for a 2000-01-01 -> now window', async () => {
+      respond();
+      const window = { from: '2000-01-01T00:00:00.000Z', to: new Date().toISOString() };
+      const result = await service.getAlertTrend(30, window);
+      const body = mockSearch.mock.calls[0][0];
+      expect(body.aggs.by_day.date_histogram.calendar_interval).toBe('week');
+      expect(JSON.stringify(body.query)).toContain(window.from);
+      expect(JSON.stringify(body.query)).not.toContain('now-');
+      expect(result[0].interval).toBe('week');
+    });
+
+    it('getAlertTrend keeps day buckets and days behaviour when no window is given', async () => {
+      respond();
+      const result = await service.getAlertTrend(30);
+      const body = mockSearch.mock.calls[0][0];
+      expect(body.aggs.by_day.date_histogram.calendar_interval).toBe('day');
+      expect(JSON.stringify(body.query)).toContain('now-30d/d');
+      expect(result[0].interval).toBe('day');
     });
   });
 });

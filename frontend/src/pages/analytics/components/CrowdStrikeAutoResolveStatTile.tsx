@@ -1,7 +1,7 @@
 // CrowdStrike auto-resolve hero tile — mirrors AutoResolveStatTile but reads
 // the CrowdStrike auto-resolve endpoints. Mounted in the CrowdStrikeTab hero row.
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { ShieldCheck } from 'lucide-react';
 import {
   integrationsApi,
@@ -48,7 +48,12 @@ function buildDailySparkline(items: AutoResolveReceipt[]): number[] {
   return Array.from(buckets.values());
 }
 
-export default function CrowdStrikeAutoResolveStatTile() {
+interface Props {
+  /** Extra line under the mode line (e.g. "7 of 11 test alerts still open"). */
+  footnote?: ReactNode;
+}
+
+export default function CrowdStrikeAutoResolveStatTile({ footnote }: Props = {}) {
   const [status, setStatus] = useState<AutoResolveStatus | null>(null);
   const [sparkline, setSparkline] = useState<number[] | undefined>(undefined);
   const [loading, setLoading] = useState(true);
@@ -116,6 +121,7 @@ export default function CrowdStrikeAutoResolveStatTile() {
         <span>·</span>
         <span>24h: {status.counts.last24h.toLocaleString()}</span>
       </span>
+      {footnote && <span>{footnote}</span>}
     </span>
   );
 

@@ -33,40 +33,53 @@ Four tiles summarize posture at a glance:
 |------|---------------|
 | **ZTA Score** | Current Zero Trust Assessment posture score (0–100 average across devices), the change versus the trend window, and a sparkline. Shows a not-licensed empty state when Falcon Insight is unavailable. |
 | **CrowdStrike Alerts** | Total alert count in the window, how many are high/critical-severity, and the change versus the previous 7 days. Click the tile to open the alert drawer for all alerts. |
-| **Detection Rate** | The headline metric — the per-execution share of attack simulations that CrowdStrike detected, plus a row of **coverage pips** showing detected vs. missed techniques. |
+| **Detection Rate** | The headline metric — the share of attack simulations in the selected window that CrowdStrike detected (evidence-based, see [Detection Rate](#detection-rate)), with prevented, detected-only and missed counts. |
 | **Auto-Resolve** | Current auto-resolve mode (`disabled` / `dry-run` / `enabled`) and recent receipt counts. See [Auto-Resolve](../integrations/crowdstrike-auto-resolve). |
 
-:::info Detection Rate is per-execution
-The Detection Rate is `correlatedExecutions / totalExecutions`, counted per
-MITRE technique. It is an **organisation-specific operational KPI** — track it
+:::info Detection Rate is evidence-based
+The Detection Rate comes from the per-run detection flags the enrichment pass
+writes onto each test result, not from a technique plus time-window match
+against alerts. It is an **organisation-specific operational KPI** — track it
 over time for your own tenant, but do not use the absolute number to compare
-organisations. The full definition, including MITRE roll-up and exclusions,
-is documented in [Detection Rate](#detection-rate) below.
+organisations. The full definition is in [Detection Rate](#detection-rate)
+below.
 :::
+
+## Date range
+
+The whole tab follows the **Analytics date picker** in the page header. Changing
+the range reloads every card (tiles, timeline, alert feed and Technique
+Coverage) for the same window, and **Sync Now** refreshes the feed and timeline
+as well. The tiles are labelled with the window they cover.
 
 ## Correlation Timeline
 
-The **Test Execution vs CrowdStrike Alert Volume** card plots two series on a
-shared time axis: how many attack simulations Achilles ran, and how many
-CrowdStrike alerts were raised. Aligning the two makes it easy to see whether
-a burst of testing produced a corresponding burst of detections.
+The **Test Execution vs CrowdStrike Alert Volume** card plots test executions against
+alerts on a shared time axis, bucketed by day for windows up to 90 days and by
+week beyond that. Alert bars are split into **linked** alerts (the enrichment
+pass matched them to an Achilles test) and **organic** alerts (everything else,
+including alerts raised by genuine activity). A burst of testing should show up
+as a burst of linked alerts; organic alerts are background noise you did not
+cause.
 
-## Alert Breakdown
+## Alert Feed
 
-**Alerts Summary** — breaks alerts down by severity (`informational` through
-`critical`) and status (`new`, `in_progress`, `reopened`, `closed`) so you can
-see the shape of the queue at a glance.
+A full-width feed lists every alert in the window with severity, status,
+techniques and the auto-resolve receipt when present. Filter it by **source**
+(All / Test / Organic) and by **severity**; the counts on each segment stay
+stable as you filter, and the "All" count equals the Alerts tile total. The
+summary strip above the feed follows the source you pick but not the severity;
+severity only narrows the rows and the page count. A linked alert's **Linked
+test** opens the Executions view filtered to that test, or to the bundle when
+the alert was matched to a bundle. Click a row to open the alert drawer.
 
-## Detection Analysis & Technique Overlap
+## Technique Coverage
 
-Two side-by-side per-technique bar charts:
-
-- **Detection Analysis** — per-technique detection coverage from the detection
-  rate computation. Click a technique to drill into its alerts.
-- **Technique Overlap** — MITRE ATT&CK techniques present in both datasets:
-  - tested by Achilles **and** detected by CrowdStrike (validated coverage),
-  - tested but **not** detected (detection gaps),
-  - detected by CrowdStrike but **not** tested (untested detections).
+Per-technique table for the window, split into **prevented**, **detected only**
+and **missed** executions, with an **Alerts (in window)** column: the number of
+distinct CrowdStrike alerts in the window tagged with that technique or one of its
+sub-techniques, so it matches the drawer the row opens. Detected techniques are listed first. The header total equals the
+Detection Rate tile's denominator, because both come from the same response.
 
 ## Alert Drill-Down Drawer
 
@@ -78,27 +91,29 @@ auto-resolve receipt showing whether and how the alert was closed.
 
 ## Detection Rate
 
-The Detection Rate is **per-execution**:
+The Detection Rate is **evidence-based and per-execution**:
 
 ```
-detectionRate = correlatedExecutions / totalExecutions × 100
+detectionRate = (prevented + detectedOnly) / executions × 100
 ```
 
-- **totalExecutions** — attack-simulation executions in the window, counted
-  per technique. A test exercising N techniques contributes N observations.
-- **correlatedExecutions** — those with a temporally-correlated CrowdStrike
-  alert for the matching technique (or its parent — see MITRE roll-up).
+- **executions** — conclusive attack-simulation executions in the selected
+  window. Each execution is counted once, even if it exercises several
+  techniques.
+- **detected** — the execution's own enrichment flag says CrowdStrike caught it. A
+  bundle stage counts only by its own per-stage flag, so it is never credited
+  because a sibling stage was detected; a standalone test counts by its own
+  detection flag. A prevention CrowdStrike confirmed always counts as detected.
+- **prevented** — CrowdStrike confirmed it blocked the execution. **Detected only** is
+  detected but not blocked; the rest are **missed**.
 
-### MITRE roll-up
-
-CrowdStrike frequently tags alerts at **parent** technique granularity
-(`T1574`) even when the simulated behaviour is a specific sub-technique
-(`T1574.002`). Correlation is roll-up aware:
-
-- A **sub-technique** test (`T1574.002`) is satisfied by a **parent** alert
-  (`T1574`).
-- Roll-up is **one-directional** — a **parent** test (`T1574`) is *not*
-  credited by a **sibling** sub-technique alert.
+:::note Numbers can differ from before
+Earlier versions matched alerts to executions by MITRE technique within a
+±60-minute window. The tab now reads the per-run flags instead, so rates can
+change after this update. The legacy
+heuristic is still available from the API for the CLI; see the
+[API reference](../../api-reference/crowdstrike#technique-coverage).
+:::
 
 ### Exclusions
 
@@ -116,14 +131,6 @@ same thing across the whole tab — identical semantics to the
 [Microsoft Defender](./microsoft-defender) tab. The Dashboard tab's
 [Defense Score](./defense-score) deliberately does **not** apply them — a
 passing hardening check legitimately counts toward that score.
-
-:::warning Known approximations
-The Detection Rate is an analytics rollup, not a per-event join. Test
-executions and alerts are bucketed into 1-hour intervals, and correlation keys
-on the MITRE technique string. Alerts with an empty technique array (common
-for malware-family detections) cannot be correlated by this metric — use the
-per-test evidence correlation in the alert drawer for those cases.
-:::
 
 ## Conditional Display
 

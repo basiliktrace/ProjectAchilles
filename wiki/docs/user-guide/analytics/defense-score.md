@@ -209,20 +209,24 @@ Risk acceptances can be revoked with a single click, which re-includes those res
 ### Defender Tab
 
 When Microsoft Defender is configured, a dedicated **Defender** tab appears
-with a per-execution detection rate, Secure Score, alert correlation, MITRE
+with an evidence-based detection rate, Secure Score, alert correlation, MITRE
 technique overlap, and an alert drill-down drawer. See
 [Microsoft Defender](./microsoft-defender) for the full tab walkthrough.
 
 When CrowdStrike Falcon is configured, a parallel **CrowdStrike** tab appears
-with the same shape — per-execution detection rate, ZTA posture score, alert
+with the same shape — evidence-based detection rate, ZTA posture score, alert
 correlation, technique overlap, and an alert drawer with Falcon console links.
 See [CrowdStrike Falcon](./crowdstrike).
 
 :::info Detection Rate vs. Defense Score
 These are distinct metrics. The **Defense Score** measures whether a test's
 *exit code* reported it as protected; the EDR tabs' **Detection Rate**
-measures whether *Microsoft Defender or CrowdStrike raised a correlated
-alert*. The Defense Score counts cyber-hygiene controls; the Detection Rate
+measures whether *Microsoft Defender or CrowdStrike detected the run*,
+read from the per-run enrichment flags (a bundle stage by its own
+`stage_detected` flag, a standalone test by its `detected` flag, and a
+vendor-confirmed prevention always counts as detected). See the Detection Rate sections of
+[Microsoft Defender](./microsoft-defender#detection-rate) and
+[CrowdStrike Falcon](./crowdstrike#detection-rate). The Defense Score counts cyber-hygiene controls; the Detection Rate
 excludes them. Auto-resolve never affects either score.
 :::
 

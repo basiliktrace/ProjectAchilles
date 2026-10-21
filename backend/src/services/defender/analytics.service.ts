@@ -8,8 +8,16 @@ import { buildAlertTimeWindowQuery, buildDefenderEvidenceQuery } from './evidenc
 import { attackSimulationExclusions } from '../analytics/attack-simulation-filter.js';
 import { projectAlertHit } from '../alerts/alertHit.js';
 import { getControlMitreTechniques } from './control-correlation.service.js';
+import { trendInterval, windowRange } from '../analytics/integration-window.js';
+import { alertDocs, alertFacets, allOf, LINKED, firstString, severityFilter, sourceFilter } from '../analytics/alert-facets.js';
+import type { AlertFacetCounts, AlertSource, TimeWindow } from '../analytics/integration-window.js';
+import { resolveTestNames } from '../analytics/test-name-lookup.js';
+import { getTechniqueCoverage } from '../analytics/technique-coverage.js';
+import type { TechniqueCoverageResponse } from '../analytics/technique-coverage.js';
 import type { Client } from '@elastic/elasticsearch';
-import type { QueryDslQueryContainer } from '@elastic/elasticsearch/lib/api/types.js';
+import type {
+  QueryDslQueryContainer,
+} from '@elastic/elasticsearch/lib/api/types.js';
 import type { DetectionRateResponse, RelatedAlertsResponse } from '../../types/defender.js';
 
 // ---------------------------------------------------------------------------
@@ -44,11 +52,17 @@ export interface AlertSummary {
   byStatus: Record<string, number>;
   recentHigh: RecentAlert[];
   recentMedium: RecentAlert[];
+  /** Facet counts for the hero tiles, over the same window. */
+  counts: AlertFacetCounts;
 }
 
 export interface AlertTrendPoint {
   date: string;
   count: number;
+  /** Alerts the enrichment pass matched to an Achilles test. */
+  linked: number;
+  /** Bucket width of the series. */
+  interval: 'day' | 'week';
   high: number;
   medium: number;
   low: number;
@@ -70,6 +84,21 @@ export interface DefenderAlertItem {
   auto_resolved?: boolean;
   auto_resolved_at?: string | null;
   auto_resolve_mode?: 'disabled' | 'dry_run' | 'enabled' | null;
+  /** First of evidence_hostnames, or null. */
+  hostname: string | null;
+  /** Normalised prevention outcome (process_killed | blocked | quarantined); absent when Defender only detected. */
+  prevention_action?: string;
+  /** Raw Defender remediationStatus behind prevention_action. */
+  remediation_status?: string;
+  /** Deep link to the alert in the Defender portal. */
+  portal_url?: string;
+  /** True when the enrichment pass matched this alert to an Achilles test. */
+  achilles_correlated: boolean;
+  achilles_test_uuid?: string;
+  /** Display name of the matched test or bundle, when it can be resolved. */
+  achilles_test_name?: string;
+  /** 'bundle' when achilles_test_uuid is a bundle (name = bundle_name), else 'test'. */
+  achilles_test_kind?: 'test' | 'bundle';
 }
 
 export interface ControlItem {
@@ -110,6 +139,8 @@ export interface PaginatedAlerts {
   total: number;
   page: number;
   pageSize: number;
+  /** Facet counts for the filter segments and summary strip. */
+  counts: AlertFacetCounts;
 }
 
 export interface ControlCorrelationResult {
@@ -122,13 +153,35 @@ export interface ControlCorrelationResult {
 // ---------------------------------------------------------------------------
 
 export class DefenderAnalyticsService {
-  private getEsClient(): Client {
+  private getEsContext() {
     const settingsService = new SettingsService();
     const settings = settingsService.getSettings();
     if (!settings.configured) {
       throw new Error('Elasticsearch is not configured');
     }
-    return createEsClient(settings);
+    return { client: createEsClient(settings), settings };
+  }
+
+  private getEsClient(): Client {
+    return this.getEsContext().client;
+  }
+
+  /** Facet aggregations for the alert feed; see alert-facets.ts. */
+  private alertFacets(filters: { source?: AlertSource; window: TimeWindow | null }) {
+    return alertFacets({
+      ...filters,
+      closedStatuses: ['resolved'],
+      vendorFacet: {
+        key: 'product',
+        agg: { terms: { field: 'service_source', size: 20 } },
+        read: (response) => {
+          const byProduct: Record<string, number> = {};
+          const buckets = (response as { buckets?: Array<{ key: string; doc_count: number }> } | undefined)?.buckets;
+          for (const b of buckets ?? []) byProduct[b.key] = b.doc_count;
+          return { byProduct };
+        },
+      },
+    });
   }
 
   // ── Secure Score ─────────────────────────────────────────────
@@ -195,16 +248,19 @@ export class DefenderAnalyticsService {
 
   // ── Alerts ───────────────────────────────────────────────────
 
-  async getAlertSummary(): Promise<AlertSummary> {
+  async getAlertSummary(window: TimeWindow | null = null): Promise<AlertSummary> {
     const client = this.getEsClient();
+    const range = windowRange('created_at', window);
+    const facets = this.alertFacets({ window });
 
     const result = await client.search({
       index: DEFENDER_INDEX,
       size: 0,
-      query: { term: { doc_type: 'alert' } },
+      query: alertDocs(window),
       aggs: {
         by_severity: { terms: { field: 'severity', size: 10 } },
         by_status: { terms: { field: 'status', size: 10 } },
+        ...facets.aggs,
       },
     });
 
@@ -248,6 +304,7 @@ export class DefenderAnalyticsService {
           bool: {
             must: [
               { term: { doc_type: 'alert' } },
+              ...(range ? [range] : []),
               { term: { severity } },
             ],
           },
@@ -262,12 +319,24 @@ export class DefenderAnalyticsService {
       recentBySeverity('medium', 5),
     ]);
 
-    return { total, bySeverity, byStatus, recentHigh, recentMedium };
+    return {
+      total,
+      bySeverity,
+      byStatus,
+      recentHigh,
+      recentMedium,
+      counts: facets.read(result.aggregations),
+    };
   }
 
   async getAlerts(params: {
     page?: number;
     pageSize?: number;
+    /**
+     * Single exact-match severity, kept for existing callers.
+     * @deprecated Use `severities`: this goes into the base query, so the
+     * severity facet does not see alerts it excludes (and the counts reflect it).
+     */
     severity?: string;
     status?: string;
     search?: string;
@@ -275,11 +344,22 @@ export class DefenderAnalyticsService {
     techniques?: string[];
     sortField?: string;
     sortOrder?: 'asc' | 'desc';
+    /** Linked (test) vs organic alerts; 'all' or absent = no filter. */
+    source?: AlertSource;
+    /** Severities to OR-filter on. Unlike `severity`, this leaves the severity facet unfiltered. */
+    severities?: string[];
+    /** created_at window; null or absent = all time. */
+    window?: TimeWindow | null;
   }): Promise<PaginatedAlerts> {
-    const client = this.getEsClient();
-    const { page = 1, pageSize = 25, severity, status, search, techniques, sortField = 'created_at', sortOrder = 'desc' } = params;
+    const { client, settings } = this.getEsContext();
+    const {
+      page = 1, pageSize = 25, severity, status, search, techniques,
+      sortField = 'created_at', sortOrder = 'desc', source, severities, window = null,
+    } = params;
 
     const must: QueryDslQueryContainer[] = [{ term: { doc_type: 'alert' } }];
+    const range = windowRange('created_at', window);
+    if (range) must.push(range);
     if (severity) must.push({ term: { severity } });
     if (status) must.push({ term: { status } });
     if (search) must.push({ multi_match: { query: search, fields: ['alert_title', 'description', 'category'] } });
@@ -293,11 +373,19 @@ export class DefenderAnalyticsService {
       must.push({ bool: { should, minimum_should_match: 1 } });
     }
 
+    // Source and severity filter the hits through post_filter so the facet
+    // aggregations still see the alerts those filters exclude.
+    const sourceClause = sourceFilter(source);
+    const severityClause = severityFilter(severities);
+    const facets = this.alertFacets({ source, window });
+
     const result = await client.search({
       index: DEFENDER_INDEX,
       from: (page - 1) * pageSize,
       size: pageSize,
       query: { bool: { must } },
+      ...(sourceClause || severityClause ? { post_filter: allOf(sourceClause, severityClause) } : {}),
+      aggs: facets.aggs,
       sort: [{ [sortField]: { order: sortOrder } }],
     });
 
@@ -305,9 +393,20 @@ export class DefenderAnalyticsService {
       ? result.hits.total
       : (result.hits.total as { value: number })?.value ?? 0;
 
-    const data = result.hits.hits.map((hit) => {
-      const s = hit._source as Record<string, unknown>;
+    const sources = result.hits.hits.map((hit) => (hit._source as Record<string, unknown>) ?? {});
+    const testUuids = new Set<string>();
+    for (const s of sources) {
+      const uuid = (s.f0rtika as Record<string, unknown> | undefined)?.achilles_test_uuid;
+      if (typeof uuid === 'string' && uuid) testUuids.add(uuid);
+    }
+    const testNames = await resolveTestNames(client, settings.indexPattern, [...testUuids]);
+
+    const data = sources.map((s) => {
       const f0rtika = (s.f0rtika as Record<string, unknown> | undefined) ?? {};
+      const testUuid = typeof f0rtika.achilles_test_uuid === 'string' && f0rtika.achilles_test_uuid
+        ? f0rtika.achilles_test_uuid
+        : undefined;
+      const linked = testUuid ? testNames.get(testUuid) : undefined;
       const item: DefenderAlertItem = {
         alert_id: String(s.alert_id ?? ''),
         alert_title: String(s.alert_title ?? ''),
@@ -321,6 +420,13 @@ export class DefenderAnalyticsService {
         updated_at: String(s.updated_at ?? ''),
         resolved_at: s.resolved_at ? String(s.resolved_at) : null,
         recommended_actions: String(s.recommended_actions ?? ''),
+        hostname: firstString(s.evidence_hostnames),
+        ...(s.prevention_action ? { prevention_action: String(s.prevention_action) } : {}),
+        ...(s.remediation_status ? { remediation_status: String(s.remediation_status) } : {}),
+        ...(s.portal_url ? { portal_url: String(s.portal_url) } : {}),
+        achilles_correlated: f0rtika.achilles_correlated === true,
+        ...(testUuid ? { achilles_test_uuid: testUuid } : {}),
+        ...(linked ? { achilles_test_name: linked.name, achilles_test_kind: linked.kind } : {}),
       };
       if (typeof f0rtika.auto_resolved === 'boolean') {
         item.auto_resolved = f0rtika.auto_resolved;
@@ -332,27 +438,32 @@ export class DefenderAnalyticsService {
       return item;
     });
 
-    return { data, total, page, pageSize };
+    return { data, total, page, pageSize, counts: facets.read(result.aggregations) };
   }
 
-  async getAlertTrend(days: number): Promise<AlertTrendPoint[]> {
+  async getAlertTrend(days: number, window: TimeWindow | null = null): Promise<AlertTrendPoint[]> {
     const client = this.getEsClient();
+
+    const interval = window ? trendInterval(window) : 'day';
 
     const result = await client.search({
       index: DEFENDER_INDEX,
       size: 0,
-      query: {
-        bool: {
-          must: [
-            { term: { doc_type: 'alert' } },
-            { range: { created_at: { gte: `now-${days}d/d` } } },
-          ],
-        },
-      },
+      query: window
+        ? alertDocs(window)
+        : {
+            bool: {
+              must: [
+                { term: { doc_type: 'alert' } },
+                { range: { created_at: { gte: `now-${days}d/d` } } },
+              ],
+            },
+          },
       aggs: {
         by_day: {
-          date_histogram: { field: 'created_at', calendar_interval: 'day' },
+          date_histogram: { field: 'created_at', calendar_interval: interval },
           aggs: {
+            linked: { filter: LINKED },
             high: { filter: { term: { severity: 'high' } } },
             medium: { filter: { term: { severity: 'medium' } } },
             low: { filter: { term: { severity: 'low' } } },
@@ -365,6 +476,7 @@ export class DefenderAnalyticsService {
     const buckets = ((aggs?.by_day as Record<string, unknown>)?.buckets as Array<{
       key_as_string: string;
       doc_count: number;
+      linked: { doc_count: number };
       high: { doc_count: number };
       medium: { doc_count: number };
       low: { doc_count: number };
@@ -373,6 +485,8 @@ export class DefenderAnalyticsService {
     return buckets.map((b) => ({
       date: b.key_as_string,
       count: b.doc_count,
+      linked: b.linked?.doc_count ?? 0,
+      interval,
       high: b.high.doc_count,
       medium: b.medium.doc_count,
       low: b.low.doc_count,
@@ -609,6 +723,22 @@ export class DefenderAnalyticsService {
   }
 
   // ── Detection correlation ───────────────────────────────────
+
+  /**
+   * Evidence-based technique coverage: per-execution Detected / Prevented /
+   * Missed from the enrichment-written Defender flags on test docs, plus
+   * Defender alert counts per tested technique. Drives the tab's Detection
+   * tile and Technique Coverage table. See analytics/technique-coverage.ts.
+   */
+  async getTechniqueCoverage(window: TimeWindow): Promise<TechniqueCoverageResponse> {
+    const { client, settings } = this.getEsContext();
+    return getTechniqueCoverage(client, {
+      vendor: 'defender',
+      resultsIndex: settings.indexPattern,
+      alertIndex: DEFENDER_INDEX,
+      window,
+    });
+  }
 
   /**
    * Per-execution Defender detection rate: the share of attack-simulation

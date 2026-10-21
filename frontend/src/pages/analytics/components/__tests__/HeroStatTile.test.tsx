@@ -25,6 +25,13 @@ describe('HeroStatTile', () => {
     expect(screen.getByText('1176 / 1603 pts')).toBeInTheDocument();
   });
 
+  it('renders the secondary value on the value line', () => {
+    renderInRouter(
+      <HeroStatTile title="Detected / Prevented" value="8.2" valueSuffix="%" secondaryValue={<span>5.1% prevented</span>} />
+    );
+    expect(screen.getByText('5.1% prevented')).toBeInTheDocument();
+  });
+
   it('renders a positive delta with green tone by default', () => {
     renderInRouter(<HeroStatTile title="Score" value="73" delta={1.2} deltaLabel="vs 30d" />);
 
