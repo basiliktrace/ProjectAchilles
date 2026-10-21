@@ -143,7 +143,7 @@ export default function IntegrationAlertFeed({ vendor, window, windowLabel }: Pr
   const otherProducts = productEntries.slice(3).reduce((n, [, c]) => n + c, 0);
 
   return (
-    <section id="alert-feed" aria-label={vendor.alertsTitle}>
+    <section id="alert-feed" aria-label={vendor.alertsTitle} tabIndex={-1} className="scroll-mt-4 outline-none">
       <Card>
         <CardHeader>
           <CardTitle className="flex flex-wrap items-baseline gap-2">

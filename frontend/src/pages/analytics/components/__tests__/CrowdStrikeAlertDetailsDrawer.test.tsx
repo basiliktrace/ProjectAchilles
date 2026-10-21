@@ -115,6 +115,29 @@ describe('CrowdStrikeAlertDetailsDrawer', () => {
     expect(screen.getByText(/Alerts for T1078, T1110/)).toBeInTheDocument();
   });
 
+  it('passes window as from/to to getAlerts', async () => {
+    mockGetAlerts.mockResolvedValue({ data: [], total: 0, page: 1, pageSize: 100 });
+    const window = { from: '2026-09-01T00:00:00.000Z', to: '2026-10-01T00:00:00.000Z' };
+
+    render(<CrowdStrikeAlertDetailsDrawer open onClose={() => {}} technique="T1059" window={window} />);
+
+    await waitFor(() => expect(mockGetAlerts).toHaveBeenCalled());
+    expect(mockGetAlerts).toHaveBeenCalledWith(
+      expect.objectContaining({ techniques: ['T1059'], from: window.from, to: window.to }),
+    );
+  });
+
+  it('sends no from/to when no window is given (unbounded, as before)', async () => {
+    mockGetAlerts.mockResolvedValue({ data: [], total: 0, page: 1, pageSize: 100 });
+
+    render(<CrowdStrikeAlertDetailsDrawer open onClose={() => {}} />);
+
+    await waitFor(() => expect(mockGetAlerts).toHaveBeenCalled());
+    const callArgs = mockGetAlerts.mock.calls[0][0] as Record<string, unknown>;
+    expect(callArgs).not.toHaveProperty('from');
+    expect(callArgs).not.toHaveProperty('to');
+  });
+
   it('does not pass techniques when neither prop is set (recent-all view)', async () => {
     mockGetAlerts.mockResolvedValue({ data: [], total: 0, page: 1, pageSize: 100 });
 

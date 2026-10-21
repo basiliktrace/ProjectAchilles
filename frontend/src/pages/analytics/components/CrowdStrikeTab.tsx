@@ -1,112 +1,121 @@
-import { useState, useEffect } from 'react';
-import { Gauge, Bell, Crosshair } from 'lucide-react';
+import { useState, useEffect, useRef, useCallback } from 'react';
+import { Gauge } from 'lucide-react';
 import {
   crowdstrikeApi,
   type ZtaScoreSummary,
   type CrowdStrikeAlertSummary,
   type ZtaScoreTrendPoint,
   type CrowdStrikeAlertTrendPoint,
-  type CrowdStrikeDetectionRateResponse,
 } from '@/services/api/crowdstrike';
 import { integrationsApi, type CrowdStrikeZtaStatus } from '@/services/api/integrations';
-import CrowdStrikeTabHeader from './CrowdStrikeTabHeader';
-import HeroStatTile, { type DeltaTone } from './HeroStatTile';
-import CrowdStrikeAutoResolveStatTile from './CrowdStrikeAutoResolveStatTile';
-import CrowdStrikeAlertsSummaryCard from './CrowdStrikeAlertsSummaryCard';
-import CrowdStrikeTestVsAlertTimelineCard from './CrowdStrikeTestVsAlertTimelineCard';
-import CrowdStrikeDetectionAnalysisCard from './CrowdStrikeDetectionAnalysisCard';
-import CrowdStrikeTechniqueOverlapChart from './CrowdStrikeTechniqueOverlapChart';
-import CrowdStrikeAlertDetailsDrawer from './CrowdStrikeAlertDetailsDrawer';
-import CoveragePips from './CoveragePips';
+import type { TechniqueCoverageResponse } from '@/services/api/integrationTypes';
 import type { DateRangeValue } from '@/lib/timeRange';
+import CrowdStrikeTabHeader from './CrowdStrikeTabHeader';
+import HeroStatTile from './HeroStatTile';
+import Sparkline from './Sparkline';
+import CrowdStrikeAutoResolveStatTile from './CrowdStrikeAutoResolveStatTile';
+import CrowdStrikeAlertDetailsDrawer from './CrowdStrikeAlertDetailsDrawer';
+import IntegrationTimelineCard from './integrations/IntegrationTimelineCard';
+import IntegrationAlertFeed from './integrations/IntegrationAlertFeed';
+import TechniqueCoverageCard from './integrations/TechniqueCoverageCard';
+import { AlertsHeroTile, CoverageHeroTile } from './integrations/IntegrationHeroTiles';
+import { firstToLastDelta, formatScore, stillOpenFootnote, ztaTrendDays } from './integrations/heroMetrics';
+import { useTabWindow } from './integrations/useTabWindow';
+import { VENDORS } from './integrations/vendorConfig';
 
-const TREND_DAYS = 30;
+const vendor = VENDORS.crowdstrike;
 
-function ztaScoreDelta(trend: ZtaScoreTrendPoint[]): number {
-  if (trend.length < 2) return 0;
-  return trend[trend.length - 1].overallScore - trend[0].overallScore;
+interface TabData {
+  zta: ZtaScoreSummary | null;
+  ztaTrend: ZtaScoreTrendPoint[];
+  summary: CrowdStrikeAlertSummary | null;
+  summaryFailed: boolean;
+  trend: CrowdStrikeAlertTrendPoint[];
+  coverage: TechniqueCoverageResponse | null;
+  coverageFailed: boolean;
 }
 
-function alertCountWindowDelta(trend: CrowdStrikeAlertTrendPoint[], windowDays: number): number {
-  const recentStart = Math.max(0, trend.length - windowDays);
-  const priorStart = Math.max(0, trend.length - windowDays * 2);
-  const recent = trend.slice(recentStart).reduce((s, p) => s + p.count, 0);
-  const prior = trend.slice(priorStart, recentStart).reduce((s, p) => s + p.count, 0);
-  return recent - prior;
-}
-
-function inverseDeltaTone(delta: number | undefined): DeltaTone | undefined {
-  if (delta === undefined) return undefined;
-  if (delta > 0) return 'negative';
-  if (delta < 0) return 'positive';
-  return 'neutral';
+/** One labelled 0-100 bar on the ZTA tile. Nothing for a non-finite score. */
+function ScoreBar({ label, value }: { label: string; value: number }) {
+  if (!Number.isFinite(value)) return null;
+  const pct = Math.min(100, Math.max(0, value));
+  return (
+    <div className="flex items-center gap-2 text-xs text-muted-foreground">
+      <span className="w-11 shrink-0">{label}</span>
+      <div
+        role="meter"
+        aria-label={`${label} score`}
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={value}
+        className="h-1.5 flex-1 overflow-hidden rounded-full bg-muted"
+      >
+        <div className="h-full rounded-full bg-emerald-500" style={{ width: `${pct}%` }} />
+      </div>
+      <span className="w-8 shrink-0 text-right font-mono text-foreground">{formatScore(value)}</span>
+    </div>
+  );
 }
 
 interface CrowdStrikeTabProps {
-  /** Page date range; drives the tab's window from the redesign onward. */
+  /** Page date range: the window every card on the tab uses. */
   dateRange: DateRangeValue;
 }
 
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-export default function CrowdStrikeTab(_props: CrowdStrikeTabProps) {
+export default function CrowdStrikeTab({ dateRange }: CrowdStrikeTabProps) {
+  const { window, windowLabel, refresh } = useTabWindow(dateRange);
   const [loading, setLoading] = useState(true);
+  const [data, setData] = useState<TabData | null>(null);
   const [syncing, setSyncing] = useState(false);
-  const [ztaScore, setZtaScore] = useState<ZtaScoreSummary | null>(null);
-  const [ztaScoreTrend, setZtaScoreTrend] = useState<ZtaScoreTrendPoint[]>([]);
-  const [alertSummary, setAlertSummary] = useState<CrowdStrikeAlertSummary | null>(null);
-  const [alertTrend, setAlertTrend] = useState<CrowdStrikeAlertTrendPoint[]>([]);
-  const [detectionRate, setDetectionRate] = useState<CrowdStrikeDetectionRateResponse | null>(null);
   const [lastSync, setLastSync] = useState<string | null>(null);
   const [syncError, setSyncError] = useState<string | null>(null);
   const [ztaStatus, setZtaStatus] = useState<CrowdStrikeZtaStatus | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [drawerTechniques, setDrawerTechniques] = useState<string[] | undefined>(undefined);
-  const [drawerTitle, setDrawerTitle] = useState<string | undefined>(undefined);
+  const loadSeq = useRef(0);
+  const closeDrawer = useCallback(() => setDrawerOpen(false), []);
 
   function openDrawerForTechnique(t: string) {
     setDrawerTechniques([t]);
-    setDrawerTitle(undefined);
     setDrawerOpen(true);
   }
 
-  function openDrawerForAll() {
-    setDrawerTechniques(undefined);
-    setDrawerTitle(undefined);
-    setDrawerOpen(true);
-  }
+  // Every load reruns when the window changes (new range, or Sync Now).
+  useEffect(() => {
+    const seq = ++loadSeq.current;
+    setLoading(true);
+    (async () => {
+      const [scoreR, scoreTrendR, summaryR, trendR, coverageR] = await Promise.allSettled([
+        crowdstrikeApi.getZtaScore(),
+        crowdstrikeApi.getZtaScoreTrend(ztaTrendDays(window)),
+        crowdstrikeApi.getAlertSummary(window),
+        crowdstrikeApi.getAlertTrend(30, window),
+        crowdstrikeApi.getTechniqueCoverage(window),
+      ]);
+      if (seq !== loadSeq.current) return; // a newer window superseded this load
+
+      if (scoreR.status === 'rejected') console.error('Failed to load CrowdStrike ZTA score:', scoreR.reason);
+      if (scoreTrendR.status === 'rejected') console.error('Failed to load ZTA score trend:', scoreTrendR.reason);
+      if (summaryR.status === 'rejected') console.error('Failed to load CrowdStrike alert summary:', summaryR.reason);
+      if (trendR.status === 'rejected') console.error('Failed to load alert trend:', trendR.reason);
+      if (coverageR.status === 'rejected') console.error('Failed to load technique coverage:', coverageR.reason);
+
+      setData({
+        zta: scoreR.status === 'fulfilled' ? scoreR.value : null,
+        ztaTrend: scoreTrendR.status === 'fulfilled' ? scoreTrendR.value : [],
+        summary: summaryR.status === 'fulfilled' ? summaryR.value : null,
+        summaryFailed: summaryR.status === 'rejected',
+        trend: trendR.status === 'fulfilled' ? trendR.value : [],
+        coverage: coverageR.status === 'fulfilled' ? coverageR.value : null,
+        coverageFailed: coverageR.status === 'rejected',
+      });
+      setLoading(false);
+    })();
+  }, [window]);
 
   useEffect(() => {
-    loadData();
     loadSyncStatus();
   }, []);
-
-  async function loadData() {
-    setLoading(true);
-    const [scoreR, scoreTrendR, alertR, alertTrendR, detectR] = await Promise.allSettled([
-      crowdstrikeApi.getZtaScore(),
-      crowdstrikeApi.getZtaScoreTrend(TREND_DAYS),
-      crowdstrikeApi.getAlertSummary(),
-      crowdstrikeApi.getAlertTrend(TREND_DAYS),
-      crowdstrikeApi.getDetectionRate(TREND_DAYS, 60),
-    ]);
-
-    if (scoreR.status === 'fulfilled') setZtaScore(scoreR.value);
-    else console.error('Failed to load CrowdStrike ZTA score:', scoreR.reason);
-
-    if (scoreTrendR.status === 'fulfilled') setZtaScoreTrend(scoreTrendR.value);
-    else console.error('Failed to load ZTA score trend:', scoreTrendR.reason);
-
-    if (alertR.status === 'fulfilled') setAlertSummary(alertR.value);
-    else console.error('Failed to load CrowdStrike alert summary:', alertR.reason);
-
-    if (alertTrendR.status === 'fulfilled') setAlertTrend(alertTrendR.value);
-    else console.error('Failed to load alert trend:', alertTrendR.reason);
-
-    if (detectR.status === 'fulfilled') setDetectionRate(detectR.value);
-    else console.error('Failed to load detection rate:', detectR.reason);
-
-    setLoading(false);
-  }
 
   async function loadSyncStatus() {
     try {
@@ -129,7 +138,7 @@ export default function CrowdStrikeTab(_props: CrowdStrikeTabProps) {
       const result = await integrationsApi.triggerCrowdStrikeSync();
       const failed = (['alerts', 'zta'] as const).find((s) => (result[s]?.errors.length ?? 0) > 0);
       if (failed) setSyncError(`${failed}: ${result[failed].errors[0] || 'unknown error'}`);
-      await loadData();
+      refresh();
       await loadSyncStatus();
     } catch (err) {
       const apiError = (err as { response?: { data?: { error?: string } } }).response?.data?.error;
@@ -139,22 +148,23 @@ export default function CrowdStrikeTab(_props: CrowdStrikeTabProps) {
     }
   }
 
-  const scoreDelta = ztaScoreTrend.length >= 2 ? ztaScoreDelta(ztaScoreTrend) : undefined;
-  const alertDeltaWeek = alertTrend.length >= 14 ? alertCountWindowDelta(alertTrend, 7) : undefined;
-
-  const totalAlerts = alertSummary?.total ?? 0;
-  const criticalAlerts = alertSummary?.bySeverity.critical ?? 0;
-  const highAlerts = alertSummary?.bySeverity.high ?? 0;
+  const zta = data?.zta ?? null;
+  const ztaSeries = (data?.ztaTrend ?? []).map((p) => p.overallScore).filter((v) => Number.isFinite(v));
 
   // ZTA is a separately-licensed Falcon Insight feature — a 403 during the
   // backend ZTA sync is recorded as zta_status:'not_licensed' and must not
   // break the rest of the tab. No score data at all gets the same graceful
   // empty state.
-  const ztaUnavailable = !loading && (ztaStatus === 'not_licensed' || !ztaScore);
+  const ztaUnavailable = !loading && (ztaStatus === 'not_licensed' || !zta);
   const ztaEmptyState =
     ztaStatus === 'not_licensed'
       ? 'Posture score requires Falcon Insight licensing'
       : 'No posture score data yet — scores appear after the next sync';
+  const ztaDelta = ztaUnavailable ? undefined : firstToLastDelta(ztaSeries);
+  const ztaSubValue =
+    zta && Number.isFinite(zta.deviceCount)
+      ? `${zta.deviceCount.toLocaleString()} hosts${Number.isFinite(zta.minScore) ? ` · lowest ${formatScore(zta.minScore)}` : ''}`
+      : undefined;
 
   return (
     <div className="space-y-6">
@@ -166,103 +176,68 @@ export default function CrowdStrikeTab(_props: CrowdStrikeTabProps) {
           <HeroStatTile
             title="ZTA Score"
             icon={<Gauge className="w-4 h-4 text-primary" />}
-            value={ztaScore?.overallScore.toFixed(1) ?? '—'}
+            value={zta && Number.isFinite(zta.overallScore) ? zta.overallScore.toFixed(1) : '—'}
             valueSuffix="%"
-            subValue={
-              ztaScore
-                ? `${ztaScore.deviceCount.toLocaleString()} devices · OS ${ztaScore.osScore.toFixed(0)} · Sensor ${ztaScore.sensorConfigScore.toFixed(0)}`
-                : undefined
+            subValue={ztaSubValue}
+            chartSlot={
+              zta && !ztaUnavailable ? (
+                <div className="w-full space-y-1.5">
+                  <ScoreBar label="OS" value={zta.osScore} />
+                  <ScoreBar label="Sensor" value={zta.sensorConfigScore} />
+                  {ztaSeries.length >= 2 && (
+                    <div className="text-emerald-500">
+                      <Sparkline data={ztaSeries} width={240} height={24} ariaLabel="ZTA Score trend" />
+                    </div>
+                  )}
+                </div>
+              ) : undefined
             }
-            delta={ztaUnavailable ? undefined : scoreDelta}
-            deltaLabel={`pts vs ${TREND_DAYS}d ago`}
-            sparklineData={ztaUnavailable ? undefined : ztaScoreTrend.map((p) => p.overallScore)}
-            sparklineClass="text-emerald-500"
+            delta={ztaDelta}
+            deltaLabel={`pts over ${windowLabel}`}
             loading={loading}
             emptyState={ztaUnavailable ? ztaEmptyState : undefined}
           />
         </div>
         <div className="col-span-12 sm:col-span-6 md:col-span-3">
-          <HeroStatTile
-            title="CrowdStrike Alerts"
-            icon={<Bell className="w-4 h-4 text-primary" />}
-            value={totalAlerts.toLocaleString()}
-            subValue={
-              alertSummary
-                ? `${(criticalAlerts + highAlerts).toLocaleString()} critical/high severity`
-                : undefined
-            }
-            delta={alertDeltaWeek}
-            deltaTone={inverseDeltaTone(alertDeltaWeek)}
-            deltaLabel="vs prev 7d"
-            sparklineData={alertTrend.map((p) => p.count)}
-            sparklineClass="text-red-500"
+          <AlertsHeroTile
+            vendor={vendor}
+            summary={data?.summary ?? null}
+            trend={data?.trend ?? []}
+            window={window}
             loading={loading}
-            onClick={openDrawerForAll}
+            failed={!!data?.summaryFailed}
           />
         </div>
         <div className="col-span-12 sm:col-span-6 md:col-span-3">
-          <HeroStatTile
-            title="Detection Rate"
-            icon={<Crosshair className="w-4 h-4 text-primary" />}
-            value={detectionRate?.overall.detectionRate.toFixed(1) ?? '—'}
-            valueSuffix="%"
-            subValue={
-              detectionRate
-                ? `${detectionRate.overall.correlatedExecutions.toLocaleString()} / ${detectionRate.overall.totalExecutions.toLocaleString()} executions detected`
-                : undefined
-            }
-            chartSlot={
-              detectionRate && detectionRate.byTechnique.length > 0 ? (
-                <CoveragePips
-                  items={detectionRate.byTechnique.map((t) => ({
-                    technique: t.technique,
-                    detected: t.detected,
-                  }))}
-                />
-              ) : undefined
-            }
+          <CoverageHeroTile
+            coverage={data?.coverage ?? null}
             loading={loading}
+            failed={!!data?.coverageFailed}
+            windowLabel={windowLabel}
           />
         </div>
         <div className="col-span-12 sm:col-span-6 md:col-span-3">
-          <CrowdStrikeAutoResolveStatTile />
+          <CrowdStrikeAutoResolveStatTile footnote={stillOpenFootnote(data?.summary?.counts)} />
         </div>
       </div>
 
-      {/* Correlation timeline */}
-      <CrowdStrikeTestVsAlertTimelineCard />
+      <IntegrationTimelineCard vendor={vendor} window={window} />
 
-      {/* Alert breakdown — CrowdStrike has no Secure Score controls pillar,
-          so the summary card takes the full row instead of sharing it with a
-          TopControlsCard equivalent. */}
-      <div className="grid grid-cols-12 gap-4">
-        <div className="col-span-12 max-h-[600px]">
-          <CrowdStrikeAlertsSummaryCard data={alertSummary} loading={loading} />
-        </div>
-      </div>
+      <IntegrationAlertFeed key={vendor.id} vendor={vendor} window={window} windowLabel={windowLabel} />
 
-      {/* Detection analysis + Technique overlap side-by-side — both are
-          per-technique horizontal-bar charts and share visual rhythm at
-          half width. The cards are DIRECT grid children (no wrapper divs):
-          DetectionAnalysisCard returns null when it has no data, and the
-          only-child rule lets the overlap card take the full row instead
-          of sitting beside an invisible half-width hole. */}
-      <div className="grid grid-cols-12 gap-4 [&>:only-child]:col-span-12">
-        <CrowdStrikeDetectionAnalysisCard
-          className="col-span-12 max-h-[480px] lg:col-span-6"
-          onSelectTechnique={openDrawerForTechnique}
-        />
-        <CrowdStrikeTechniqueOverlapChart
-          className="col-span-12 max-h-[480px] lg:col-span-6"
-          onSelectTechnique={openDrawerForTechnique}
-        />
-      </div>
+      <TechniqueCoverageCard
+        vendor={vendor}
+        data={data?.coverage ?? null}
+        loading={loading}
+        error={!!data?.coverageFailed}
+        onSelectTechnique={openDrawerForTechnique}
+      />
 
       <CrowdStrikeAlertDetailsDrawer
         open={drawerOpen}
-        onClose={() => setDrawerOpen(false)}
+        onClose={closeDrawer}
         techniques={drawerTechniques}
-        title={drawerTitle}
+        window={window}
       />
     </div>
   );

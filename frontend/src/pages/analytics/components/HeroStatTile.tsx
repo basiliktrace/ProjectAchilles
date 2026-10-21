@@ -12,6 +12,8 @@ interface HeroStatTileProps {
   icon?: ReactNode;
   value: string | number;
   valueSuffix?: string;
+  /** Smaller figure on the value line, after the main value (e.g. "5.1% prevented"). */
+  secondaryValue?: ReactNode;
   subValue?: ReactNode;
   delta?: number;
   deltaLabel?: string;
@@ -60,6 +62,7 @@ export default function HeroStatTile(props: HeroStatTileProps) {
     icon,
     value,
     valueSuffix,
+    secondaryValue,
     subValue,
     delta,
     deltaLabel,
@@ -122,11 +125,14 @@ export default function HeroStatTile(props: HeroStatTileProps) {
           <div className="text-sm text-muted-foreground">{emptyState}</div>
         ) : (
           <>
-            <div className="flex items-baseline gap-1">
-              <span className="text-[3.1875rem] leading-tight font-bold tabular-nums">{value}</span>
-              {valueSuffix && (
-                <span className="text-3xl text-muted-foreground">{valueSuffix}</span>
-              )}
+            <div className="flex flex-wrap items-baseline gap-x-3">
+              <div className="flex items-baseline gap-1">
+                <span className="text-[3.1875rem] leading-tight font-bold tabular-nums">{value}</span>
+                {valueSuffix && (
+                  <span className="text-3xl text-muted-foreground">{valueSuffix}</span>
+                )}
+              </div>
+              {secondaryValue && <div className="flex items-baseline gap-0.5">{secondaryValue}</div>}
             </div>
             {subValue && (
               <div className="text-xs text-muted-foreground leading-relaxed">{subValue}</div>

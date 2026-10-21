@@ -13,6 +13,8 @@ const CORRELATION_DAYS = 30;
 
 interface TopControlsCardProps {
   compact?: boolean;
+  /** Flow the ranked rows into two columns at `lg` (full-width placements). */
+  twoColumn?: boolean;
   /**
    * Fires when the user clicks the per-control alert correlation badge.
    * techniques: MITRE techniques the control is mapped to (≥1)
@@ -21,7 +23,7 @@ interface TopControlsCardProps {
   onSelectControlAlerts?: (techniques: string[], controlTitle: string) => void;
 }
 
-function TopControlsCard({ compact, onSelectControlAlerts }: TopControlsCardProps) {
+function TopControlsCard({ compact, twoColumn, onSelectControlAlerts }: TopControlsCardProps) {
   const [controls, setControls] = useState<ControlItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
@@ -106,7 +108,10 @@ function TopControlsCard({ compact, onSelectControlAlerts }: TopControlsCardProp
             <p className="text-sm">No controls data — sync Defender first</p>
           </div>
         ) : (
-          <div className="flex flex-col">
+          <div
+            data-testid="top-controls-list"
+            className={twoColumn ? 'lg:columns-2 lg:gap-x-8' : 'flex flex-col'}
+          >
             {controls.map((ctrl, idx) => {
               const corr = correlations.get(ctrl.control_name);
               const showCorrelation =
@@ -117,7 +122,7 @@ function TopControlsCard({ compact, onSelectControlAlerts }: TopControlsCardProp
                   key={ctrl.control_name}
                   className={`flex items-center gap-3 py-2 transition-colors hover:bg-raised/40 max-lg:flex-wrap max-lg:gap-y-1 ${
                     idx < controls.length - 1 ? 'border-b border-raised' : ''
-                  }`}
+                  } ${twoColumn ? 'break-inside-avoid' : ''}`}
                 >
                   {/* Rank */}
                   <span className="w-4 shrink-0 font-mono text-[11px] text-faint">

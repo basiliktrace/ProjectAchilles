@@ -15,6 +15,8 @@ interface Props {
   vendor: IntegrationVendor;
   data: TechniqueCoverageResponse | null;
   loading: boolean;
+  /** The coverage request failed. */
+  error?: boolean;
   onSelectTechnique: (technique: string) => void;
 }
 
@@ -57,7 +59,7 @@ function CountCell({ value, className = '' }: { value: number; className?: strin
   );
 }
 
-export default function TechniqueCoverageCard({ vendor, data, loading, onSelectTechnique }: Props) {
+export default function TechniqueCoverageCard({ vendor, data, loading, error, onSelectTechnique }: Props) {
   const [expanded, setExpanded] = useState(false);
   const product = vendor.id === 'crowdstrike' ? 'Falcon' : 'Defender';
   const overall = data?.overall;
@@ -79,6 +81,12 @@ export default function TechniqueCoverageCard({ vendor, data, loading, onSelectT
             <div role="status" className="flex justify-center py-8">
               <Loader2 className="size-5 animate-spin text-muted-foreground" aria-label="Loading technique coverage" />
             </div>
+          )}
+
+          {error && !loading && !data && (
+            <p role="alert" className="py-8 text-center text-sm text-danger">
+              Unable to load technique coverage
+            </p>
           )}
 
           {overall && overall.executions === 0 && (

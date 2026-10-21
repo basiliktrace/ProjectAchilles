@@ -8,6 +8,8 @@ import { formatServiceSource } from '../utils/defenderServiceSource';
 import { defenderAlertUrl } from '../utils/defenderPortal';
 import PreventionBadge from './PreventionBadge';
 
+import type { TimeWindow } from '@/services/api/integrationTypes';
+
 interface AlertDetailsDrawerProps {
   open: boolean;
   onClose: () => void;
@@ -17,6 +19,8 @@ interface AlertDetailsDrawerProps {
   techniques?: string[];
   /** Optional title override (e.g., "Alerts addressed by 'BlockExeFromEmail'"). */
   title?: string;
+  /** created_at window sent as from/to. Absent = unbounded (as before). */
+  window?: TimeWindow;
 }
 
 const PAGE_SIZE = 100;
@@ -38,6 +42,7 @@ export default function AlertDetailsDrawer({
   technique,
   techniques,
   title,
+  window,
 }: AlertDetailsDrawerProps) {
   const [alerts, setAlerts] = useState<DefenderAlertItem[]>([]);
   const [loading, setLoading] = useState(false);
@@ -110,6 +115,7 @@ export default function AlertDetailsDrawer({
         sortField: 'created_at',
         sortOrder: 'desc',
         techniques: effectiveTechniques,
+        ...(window && { from: window.from, to: window.to }),
       })
       .then((res) => {
         if (cancelled) return;
@@ -127,7 +133,7 @@ export default function AlertDetailsDrawer({
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, techniquesKey]);
+  }, [open, techniquesKey, window?.from, window?.to]);
 
   if (!open) return null;
 

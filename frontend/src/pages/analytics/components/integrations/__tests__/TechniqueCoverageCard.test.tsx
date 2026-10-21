@@ -86,4 +86,9 @@ describe('TechniqueCoverageCard', () => {
     render(<TechniqueCoverageCard vendor={vendor} data={null} loading={true} onSelectTechnique={noop} />);
     expect(screen.getByRole('status')).toBeInTheDocument();
   });
+
+  it('shows an error when the coverage request failed', () => {
+    render(<TechniqueCoverageCard vendor={vendor} data={null} loading={false} error onSelectTechnique={noop} />);
+    expect(screen.getByRole('alert')).toHaveTextContent('Unable to load technique coverage');
+  });
 });

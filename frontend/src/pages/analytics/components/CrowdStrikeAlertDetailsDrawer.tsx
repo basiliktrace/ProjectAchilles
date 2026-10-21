@@ -12,6 +12,8 @@ import {
 } from '../utils/falconConsole';
 import PreventionBadge from './PreventionBadge';
 
+import type { TimeWindow } from '@/services/api/integrationTypes';
+
 interface CrowdStrikeAlertDetailsDrawerProps {
   open: boolean;
   onClose: () => void;
@@ -21,6 +23,8 @@ interface CrowdStrikeAlertDetailsDrawerProps {
   techniques?: string[];
   /** Optional title override (e.g., "Alerts addressed by 'BlockExeFromEmail'"). */
   title?: string;
+  /** created_at window sent as from/to. Absent = unbounded (as before). */
+  window?: TimeWindow;
 }
 
 const PAGE_SIZE = 100;
@@ -42,6 +46,7 @@ export default function CrowdStrikeAlertDetailsDrawer({
   technique,
   techniques,
   title,
+  window,
 }: CrowdStrikeAlertDetailsDrawerProps) {
   const [alerts, setAlerts] = useState<CrowdStrikeAlertItem[]>([]);
   const [loading, setLoading] = useState(false);
@@ -128,6 +133,7 @@ export default function CrowdStrikeAlertDetailsDrawer({
         sortField: 'created_at',
         sortOrder: 'desc',
         techniques: effectiveTechniques,
+        ...(window && { from: window.from, to: window.to }),
       })
       .then((res) => {
         if (cancelled) return;
@@ -145,7 +151,7 @@ export default function CrowdStrikeAlertDetailsDrawer({
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, techniquesKey]);
+  }, [open, techniquesKey, window?.from, window?.to]);
 
   if (!open) return null;
 

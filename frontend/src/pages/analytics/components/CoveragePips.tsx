@@ -4,10 +4,10 @@ interface CoveragePipsProps {
 }
 
 /**
- * Inline coverage visualization for the Detection Rate hero tile.
+ * Inline coverage visualization for the Detected / Prevented hero tile.
  *
- * One dot per tested technique — green = at least one correlated Defender
- * alert in the window, red = no correlation. Lets a viewer eyeball the
+ * One dot per tested technique — green = at least one execution in the window
+ * was detected (prevented or detected only), red = none was. Lets a viewer eyeball the
  * breadth of coverage at a glance ("most red" vs "mostly green") without
  * needing the deeper Detection Analysis card.
  */
