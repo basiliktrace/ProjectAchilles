@@ -557,6 +557,15 @@ router.get('/technique-outcomes', asyncHandler(async (req, res) => {
   res.json(result);
 }));
 
+// GET /api/analytics/chain-depth - Stage each chain's latest run was blocked at
+// (non-cyber-hygiene bundles). Always latest-result posture; basis is ignored.
+router.get('/chain-depth', asyncHandler(async (req, res) => {
+  const es = await getEsService();
+  const { basis: _basis, ...query } = req.query;
+  const result = await es.getChainDepth(extractFilterParams(query));
+  res.json(result);
+}));
+
 // GET /api/analytics/defense-score/by-hostname - Score breakdown by hostname
 router.get('/defense-score/by-hostname', asyncHandler(async (req, res) => {
   const es = await getEsService();

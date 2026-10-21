@@ -3381,6 +3381,171 @@ describe('elasticsearch.ts', () => {
       });
     });
 
+    describe('getChainDepth', () => {
+      const params = makeParams({ from: '2025-01-01T00:00:00Z', to: '2025-01-31T00:00:00Z' });
+      /**
+       * One any-stage bundle run as ES returns it. The posture fetch keeps
+       * conclusive docs only, so skipped stages (exit 0) never reach the
+       * bucket: doc_count is the number of stages that ran.
+       */
+      function chain(r: {
+        bundle: string; host: string; ts: string; stagesRun: number;
+        blocked?: boolean; alertedUnblocked?: number; oid?: string;
+      }) {
+        const strict = r.blocked ? 1 : 0;
+        const alerted = r.alertedUnblocked ?? 0;
+        return {
+          key: { oid: r.oid ?? 'org-a', bundle: r.bundle, host: r.host, ts: Date.parse(r.ts) },
+          doc_count: r.stagesRun,
+          combined: { doc_count: strict + alerted },
+          strict: { doc_count: strict },
+          alerted_unblocked: { doc_count: alerted },
+          codes: { buckets: (r.blocked ? [101, 126] : [101]).map(c => ({ key: c, doc_count: 1 })) },
+          names: { buckets: [] },
+        };
+      }
+      const emptyBuckets = [1, 2, 3, 4].map(stage => ({ stage, blocked: 0, alertedNotBlocked: 0, bundleNames: [] }));
+
+      it('blocked at stage 2 (stage 3 skipped) lands in bucket 2', async () => {
+        routeSearch({
+          bundlePages: [[chain({ bundle: 'b1', host: 'h1', ts: '2025-01-20T09:00:00Z', stagesRun: 2, blocked: true })]],
+          bundleMeta: { b1: { name: 'Chain One', category: 'intel-driven' } },
+        });
+        const res = await createService().getChainDepth(params);
+        expect(res.chains).toBe(1);
+        expect(res.buckets).toEqual([
+          { stage: 1, blocked: 0, alertedNotBlocked: 0, bundleNames: [] },
+          { stage: 2, blocked: 1, alertedNotBlocked: 0, bundleNames: ['Chain One'] },
+          { stage: 3, blocked: 0, alertedNotBlocked: 0, bundleNames: [] },
+          { stage: 4, blocked: 0, alertedNotBlocked: 0, bundleNames: [] },
+        ]);
+        expect(res.endToEnd).toBe(0);
+        // Skipped stages carry exit code 0, which the conclusive filter drops.
+        const bundleQuery = searchesWith('bundle_runs')[0];
+        expect(bundleQuery.query.bool.filter).toContainEqual({ terms: { 'event.ERROR': [101, 105, 126, 127] } });
+      });
+
+      it('a chain with every stage unprotected ran end to end', async () => {
+        routeSearch({
+          bundlePages: [[chain({ bundle: 'b1', host: 'h1', ts: '2025-01-20T09:00:00Z', stagesRun: 5 })]],
+          bundleMeta: { b1: { name: 'Chain One' } },
+        });
+        const res = await createService().getChainDepth(params);
+        expect(res).toEqual({ chains: 1, buckets: emptyBuckets, endToEnd: 1, endToEndAlerted: 0, endToEndBundleNames: ['Chain One'] });
+      });
+
+      it('a detection-only stage does not stop the chain: end to end, alerted', async () => {
+        routeSearch({
+          bundlePages: [[chain({ bundle: 'b1', host: 'h1', ts: '2025-01-20T09:00:00Z', stagesRun: 4, alertedUnblocked: 1 })]],
+          bundleMeta: { b1: { name: 'Chain One' } },
+        });
+        const res = await createService().getChainDepth(params);
+        expect(res.endToEnd).toBe(1);
+        expect(res.endToEndAlerted).toBe(1);
+        expect(res.buckets.every(b => b.blocked === 0)).toBe(true);
+      });
+
+      it('a blocked chain with a detected, unblocked stage before the block counts as alertedNotBlocked', async () => {
+        routeSearch({
+          bundlePages: [[
+            chain({ bundle: 'b1', host: 'h1', ts: '2025-01-20T09:00:00Z', stagesRun: 3, blocked: true, alertedUnblocked: 1 }),
+            chain({ bundle: 'b2', host: 'h1', ts: '2025-01-20T09:00:00Z', stagesRun: 3, blocked: true }),
+          ]],
+          bundleMeta: { b1: { name: 'Chain One' }, b2: { name: 'Chain Two' } },
+        });
+        const res = await createService().getChainDepth(params);
+        expect(res.buckets[2]).toEqual({ stage: 3, blocked: 2, alertedNotBlocked: 1, bundleNames: ['Chain One', 'Chain Two'] });
+      });
+
+      it('stage 4 and deeper share the 4+ bucket', async () => {
+        routeSearch({
+          bundlePages: [[
+            chain({ bundle: 'b1', host: 'h1', ts: '2025-01-20T09:00:00Z', stagesRun: 4, blocked: true }),
+            chain({ bundle: 'b2', host: 'h1', ts: '2025-01-20T09:00:00Z', stagesRun: 7, blocked: true }),
+            chain({ bundle: 'b3', host: 'h1', ts: '2025-01-20T09:00:00Z', stagesRun: 1, blocked: true }),
+          ]],
+          bundleMeta: { b1: { name: 'A' }, b2: { name: 'B' }, b3: { name: 'C' } },
+        });
+        const res = await createService().getChainDepth(params);
+        expect(res.buckets[3]).toMatchObject({ stage: 4, blocked: 2, bundleNames: ['A', 'B'] });
+        expect(res.buckets[0]).toMatchObject({ stage: 1, blocked: 1, bundleNames: ['C'] });
+        expect(res.chains).toBe(3);
+      });
+
+      it('scores the latest run per (org, bundle, host); bundle names are distinct per bucket', async () => {
+        routeSearch({
+          bundlePages: [[
+            chain({ bundle: 'b1', host: 'h1', ts: '2025-01-10T09:00:00Z', stagesRun: 1, blocked: true }),
+            chain({ bundle: 'b1', host: 'h1', ts: '2025-01-20T09:00:00Z', stagesRun: 5 }),
+            chain({ bundle: 'b1', host: 'h2', ts: '2025-01-15T09:00:00Z', stagesRun: 5 }),
+            chain({ bundle: 'b1', host: 'h1', ts: '2025-01-12T09:00:00Z', stagesRun: 2, blocked: true, oid: 'org-b' }),
+          ]],
+          bundleMeta: { b1: { name: 'Chain One' } },
+        });
+        const res = await createService().getChainDepth(params);
+        expect(res.chains).toBe(3);
+        expect(res.endToEnd).toBe(2);
+        expect(res.endToEndBundleNames).toEqual(['Chain One']);
+        expect(res.buckets[0].blocked).toBe(0);
+        expect(res.buckets[1]).toMatchObject({ blocked: 1, bundleNames: ['Chain One'] });
+      });
+
+      it('excludes standalone tests and cyber-hygiene controls (scored per doc, not chains)', async () => {
+        routeSearch({
+          pairPages: [[
+            pairBucket({ test: 'standalone-1', host: 'h1', ts: '2025-01-20T10:00:00Z', code: 126, isProtected: true }),
+            pairBucket({ test: 'ch-bundle::CH-DEF-001', host: 'h1', ts: '2025-01-20T10:00:00Z', code: 101 }),
+          ]],
+          bundlePages: [[]],
+          meta: { 'standalone-1': { name: 'Standalone' }, 'ch-bundle::CH-DEF-001': { name: 'Defender on', category: 'cyber-hygiene' } },
+        });
+        const res = await createService().getChainDepth(params);
+        expect(res).toEqual({ chains: 0, buckets: emptyBuckets, endToEnd: 0, endToEndAlerted: 0, endToEndBundleNames: [] });
+        // Chains come from the non-cyber-hygiene bundle composite only.
+        const bundleQuery = searchesWith('bundle_runs')[0];
+        expect(bundleQuery.query.bool.filter).toContainEqual((createService() as any).PER_BUNDLE_FILTER);
+      });
+
+      it('always uses any-stage bundle runs and follows the filter bar', async () => {
+        routeSearch({ bundlePages: [[]] });
+        await createService().getChainDepth({ ...params, scoringMode: 'all-stages', threatActors: 'APT29' });
+        const bundleQuery = searchesWith('bundle_runs')[0];
+        expect(bundleQuery).toBeDefined();
+        expect(JSON.stringify(bundleQuery.query)).toContain('APT29');
+      });
+
+      it('the bundle composite counts detected-but-unblocked stages per run', async () => {
+        routeSearch({ bundlePages: [[]] });
+        await createService().getChainDepth(params);
+        const sub = searchesWith('bundle_runs')[0].aggs.bundle_runs.aggs;
+        expect(sub.alerted_unblocked).toEqual({
+          filter: {
+            bool: {
+              should: [
+                { term: { 'f0rtika.defender_detected': true } },
+                { term: { 'f0rtika.crowdstrike_detected': true } },
+              ],
+              minimum_should_match: 1,
+              must_not: [{ term: { 'f0rtika.is_protected': true } }],
+            },
+          },
+        });
+      });
+
+      it('applies the outcome filters after the latest pick', async () => {
+        routeSearch({
+          bundlePages: [[
+            chain({ bundle: 'b1', host: 'h1', ts: '2025-01-20T09:00:00Z', stagesRun: 2, blocked: true }),
+            chain({ bundle: 'b2', host: 'h1', ts: '2025-01-20T09:00:00Z', stagesRun: 3 }),
+          ]],
+          bundleMeta: { b1: { name: 'Chain One' }, b2: { name: 'Chain Two' } },
+        });
+        const res = await createService().getChainDepth({ ...params, result: 'unprotected' });
+        expect(res.chains).toBe(1);
+        expect(res.endToEnd).toBe(1);
+      });
+    });
+
     describe('latest-basis breakdowns', () => {
       const params = makeParams({ from: '2025-01-01T00:00:00Z', to: '2025-01-31T00:00:00Z' });
       function pair(o: Partial<PairRunT> & { pairKey: string }): PairRunT {

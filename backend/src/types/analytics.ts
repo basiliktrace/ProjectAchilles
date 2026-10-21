@@ -333,6 +333,23 @@ export interface TechniqueOutcomeItem {
   lastTestedAt: string; // ISO time of the technique's most recent pair result
 }
 
+// How deep attack chains get (basis=latest, any-stage bundle pairs). One
+// chain = the latest run of a non-cyber-hygiene bundle on a host.
+export interface ChainDepthBucket {
+  stage: 1 | 2 | 3 | 4;          // stage the chain was blocked at; 4 = "4+"
+  blocked: number;               // chains blocked at this stage
+  alertedNotBlocked: number;     // of those, an earlier stage was detected but not blocked
+  bundleNames: string[];         // distinct bundle names in this bucket, sorted
+}
+
+export interface ChainDepthResponse {
+  chains: number;                // chains counted (blocked + end to end)
+  buckets: ChainDepthBucket[];   // always stages 1, 2, 3, 4 in order
+  endToEnd: number;              // chains no stage blocked
+  endToEndAlerted: number;       // of those, some stage was detected
+  endToEndBundleNames: string[];
+}
+
 // Defense score by hostname item
 export interface DefenseScoreByHostItem {
   hostname: string;

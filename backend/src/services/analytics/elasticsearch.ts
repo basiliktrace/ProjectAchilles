@@ -42,6 +42,8 @@ import type {
   SubcategoryBreakdownItem,
   ThreatActorCoverageItem,
   TechniqueOutcomeItem,
+  ChainDepthBucket,
+  ChainDepthResponse,
   DefenseScoreByHostItem,
   CanonicalTestCountResponse,
   ErrorRateResponse,
@@ -134,6 +136,22 @@ interface PostureSnapshot {
 interface PairFetchOptions {
   withMetadata: boolean;
   latestOnly: boolean;
+}
+
+/**
+ * An any-stage bundle run with what the chain-depth card needs. Only
+ * fetchBundlePairRuns builds these; per-doc runs are plain PairRuns. Kept out
+ * of posture.ts so the shared pure module stays untouched.
+ */
+interface ChainRun extends PairRun {
+  /** Stages that ran: the run's conclusive control docs (skipped stages are exit 0, filtered out). */
+  stagesRun: number;
+  /** Some stage was Defender/CrowdStrike-detected without being blocked (is_protected false). */
+  alertedUnblocked: boolean;
+}
+
+function isChainRun(run: PairRun): run is ChainRun {
+  return typeof (run as Partial<ChainRun>).stagesRun === 'number';
 }
 
 interface PostureShapeSpec extends PairFetchOptions {
@@ -1149,6 +1167,19 @@ export class ElasticsearchService {
       {
         combined: this.buildDetectedFilter(),
         strict: { filter: { term: { 'f0rtika.is_protected': true } } },
+        // Chain depth: a detection that did not block (the chain went on).
+        alerted_unblocked: {
+          filter: {
+            bool: {
+              should: [
+                { term: { 'f0rtika.defender_detected': true } },
+                { term: { 'f0rtika.crowdstrike_detected': true } },
+              ],
+              minimum_should_match: 1,
+              must_not: [{ term: { 'f0rtika.is_protected': true } }],
+            },
+          },
+        },
         codes: { terms: { field: 'event.ERROR', size: 10 } },
         names: { terms: { field: 'f0rtika.error_name', size: 20 } },
       },
@@ -1162,7 +1193,7 @@ export class ElasticsearchService {
           .filter(n => Number.isFinite(n))
           .sort((x, y) => x - y);
         const storedNames = ((b.names?.buckets ?? []) as any[]).map(n => String(n.key));
-        all.push({
+        const run: ChainRun = {
           pairKey: `${b.key.oid ?? ''}|bundle:${bundleId}|${hostname}`,
           ts,
           protected: (b.combined?.doc_count ?? 0) > 0,
@@ -1172,7 +1203,10 @@ export class ElasticsearchService {
           hostname,
           testName: '',
           techniques: [],
-        });
+          stagesRun: Number(b.doc_count) || 0,
+          alertedUnblocked: (b.alerted_unblocked?.doc_count ?? 0) > 0,
+        };
+        all.push(run);
         allBundles.push(bundleId);
       },
     );
@@ -2852,6 +2886,57 @@ export class ElasticsearchService {
     }
     const total = (i: TechniqueOutcomeItem) => i.protected + i.detected + i.unprotected;
     return items.sort((a, b) => total(b) - total(a) || a.technique.localeCompare(b.technique));
+  }
+
+  /**
+   * How deep attack chains get, basis=latest. A chain is the latest run of a
+   * non-cyber-hygiene bundle on a host: the any-stage bundle pairs the Defense
+   * Score counts, from the same snapshot, so every filter-bar param applies
+   * and the date range is the freshness window. Standalone tests and
+   * cyber-hygiene controls are not chains and are left out.
+   * The f0_library orchestrators stop at the first blocked stage and ingest
+   * the rest as Skipped (exit 0, not conclusive), so the stages that ran are
+   * the run's conclusive docs: a run with a blocked stage was blocked at stage
+   * stagesRun (4 and deeper share the 4+ bucket); otherwise it ran end to end.
+   * A detection without a block doesn't stop a chain. Stages carry no order,
+   * so alertedNotBlocked is "a detected stage other than the blocking one",
+   * which, because the chain stopped at the block, is an earlier stage.
+   */
+  async getChainDepth(params: AnalyticsQueryParams & Partial<ExtendedAnalyticsQueryParams>): Promise<ChainDepthResponse> {
+    const pairs = await this.getLatestPairs({ ...params, scoringMode: 'any-stage' });
+    const stages = [1, 2, 3, 4] as const;
+    const buckets = stages.map(stage => ({ stage, blocked: 0, alertedNotBlocked: 0, names: new Set<string>() }));
+    const endToEndNames = new Set<string>();
+    let chains = 0;
+    let endToEnd = 0;
+    let endToEndAlerted = 0;
+    for (const p of pairs) {
+      if (!isChainRun(p)) continue;
+      chains++;
+      if (p.strictProtected) {
+        const bucket = buckets[Math.min(Math.max(p.stagesRun, 1), 4) - 1];
+        bucket.blocked++;
+        if (p.alertedUnblocked) bucket.alertedNotBlocked++;
+        if (p.testName) bucket.names.add(p.testName);
+      } else {
+        endToEnd++;
+        if (p.alertedUnblocked) endToEndAlerted++;
+        if (p.testName) endToEndNames.add(p.testName);
+      }
+    }
+    const sorted = (names: Set<string>) => [...names].sort((a, b) => a.localeCompare(b));
+    return {
+      chains,
+      buckets: buckets.map((b): ChainDepthBucket => ({
+        stage: b.stage,
+        blocked: b.blocked,
+        alertedNotBlocked: b.alertedNotBlocked,
+        bundleNames: sorted(b.names),
+      })),
+      endToEnd,
+      endToEndAlerted,
+      endToEndBundleNames: sorted(endToEndNames),
+    };
   }
 
   // Get canonical test count (stable denominator for coverage calculations)

@@ -57,6 +57,7 @@ const mockCoverage = vi.fn();
 const mockThreatActorLatest = vi.fn();
 const mockThreatActor = vi.fn();
 const mockTechniqueOutcomes = vi.fn();
+const mockChainDepth = vi.fn();
 vi.mock('../../services/analytics/elasticsearch.js', () => ({
   ElasticsearchService: class MockElasticsearchService {
     testConnection = mockTestConnection;
@@ -79,6 +80,7 @@ vi.mock('../../services/analytics/elasticsearch.js', () => ({
     getThreatActorCoverageLatest = mockThreatActorLatest;
     getThreatActorCoverage = mockThreatActor;
     getTechniqueOutcomes = mockTechniqueOutcomes;
+    getChainDepth = mockChainDepth;
   },
 }));
 
@@ -411,7 +413,7 @@ describe('analytics routes', () => {
   describe('breakdown basis dispatch', () => {
     beforeEach(() => {
       mockGetSettings.mockReturnValue({ configured: true, connectionType: 'direct', node: 'http://localhost:9200' });
-      for (const m of [mockByCategoryLatest, mockByCategory, mockByHostnameLatest, mockByHostname, mockTechniqueLatest, mockTechnique, mockCoverageLatest, mockCoverage, mockThreatActorLatest, mockThreatActor, mockTechniqueOutcomes]) {
+      for (const m of [mockByCategoryLatest, mockByCategory, mockByHostnameLatest, mockByHostname, mockTechniqueLatest, mockTechnique, mockCoverageLatest, mockCoverage, mockThreatActorLatest, mockThreatActor, mockTechniqueOutcomes, mockChainDepth]) {
         m.mockResolvedValue([]);
       }
     });
@@ -451,6 +453,21 @@ describe('analytics routes', () => {
         expect(r.status).toBe(200);
       }
       expect(mockTechniqueOutcomes).toHaveBeenCalledTimes(3);
+    });
+
+    it('/chain-depth always uses the latest chain-depth method and ignores basis', async () => {
+      const body = { chains: 1, buckets: [], endToEnd: 1, endToEndAlerted: 0, endToEndBundleNames: ['Chain One'] };
+      mockChainDepth.mockResolvedValue(body);
+      const res = await request(createApp()).get('/api/analytics/chain-depth?from=now-30d&org=o1&threatActors=APT29&bundleNames=Chain%20One');
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual(body);
+      expect(mockChainDepth).toHaveBeenCalledWith(expect.objectContaining({ from: 'now-30d', org: 'o1', threatActors: 'APT29', bundleNames: 'Chain One' }));
+
+      for (const basis of ['executions', 'bogus']) {
+        const r = await request(createApp()).get(`/api/analytics/chain-depth?basis=${basis}`);
+        expect(r.status).toBe(200);
+      }
+      expect(mockChainDepth).toHaveBeenCalledTimes(3);
     });
   });
 
