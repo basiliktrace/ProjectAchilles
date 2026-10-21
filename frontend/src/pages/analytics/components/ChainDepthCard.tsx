@@ -23,7 +23,7 @@ interface Row {
   /** Stage rows only: chains blocked here after an earlier EDR alert. */
   alerted: number;
   bundleNames: string[];
-  kind: 'stage' | 'detected' | 'undetected';
+  kind: 'stage' | 'preExec' | 'detected' | 'undetected';
 }
 
 const chainCount = (n: number) => `${n} ${n === 1 ? 'chain' : 'chains'}`;
@@ -36,6 +36,19 @@ function rowsOf(data: ChainDepthResponse): Row[] {
     bundleNames: b.bundleNames,
     kind: 'stage' as const,
   }));
+  // A control stopped the test binary before a stage ran (exit 260, e.g. an
+  // ASR prevalence rule). The technique was never evaluated, so this is a
+  // neutral row, never a blocked stage. Older backends don't send it.
+  if (data.blockedBeforeRun !== undefined) {
+    rows.push({
+      label: 'Not run',
+      sub: 'binary blocked',
+      count: data.blockedBeforeRun,
+      alerted: 0,
+      bundleNames: data.blockedBeforeRunBundleNames ?? [],
+      kind: 'preExec',
+    });
+  }
   // Chains nothing blocked, split by whether an EDR at least alerted: the
   // Defense Score counts a detection as protected, chain depth only a block
   rows.push(
@@ -67,12 +80,16 @@ function rowName(row: Row): string {
   if (row.kind === 'stage') {
     return `${name}: ${chainCount(row.count)} blocked, ${row.alerted} after an earlier EDR alert. Show these runs`;
   }
+  if (row.kind === 'preExec') {
+    return `${name}: ${chainCount(row.count)} — a control stopped the test binary before it ran, so the technique was not tested. Show these runs`;
+  }
   const how = row.kind === 'detected' ? 'an EDR alerted' : 'no alert';
   return `${name}: ${chainCount(row.count)} ran every stage, ${how}. Show these runs`;
 }
 
 const MAIN_COLOR: Record<Row['kind'], string> = {
   stage: 'var(--chart-protected)',
+  preExec: 'var(--chart-cat-2)',
   detected: 'var(--chart-warn)',
   undetected: 'var(--chart-bypassed)',
 };
@@ -107,7 +124,7 @@ function ChainDepthCard({ data, loading, onRowClick }: ChainDepthCardProps) {
       </Frame>
     );
   }
-  if (data.chains === 0 && data.inconclusive === 0) {
+  if (data.chains === 0 && data.inconclusive === 0 && (data.blockedBeforeRun ?? 0) === 0) {
     return (
       <Frame>
         <CardContent className="flex h-40 items-center justify-center text-sm text-faint">
@@ -119,9 +136,12 @@ function ChainDepthCard({ data, loading, onRowClick }: ChainDepthCardProps) {
 
   const rows = rowsOf(data);
   const max = Math.max(1, ...rows.map((r) => r.count));
+  // The chip totals the rows; stage errors stay out of both (footer only)
+  const shown = data.chains + (data.blockedBeforeRun ?? 0);
+  const split = data.stageErrors !== undefined;
 
   return (
-    <Frame chip={chainCount(data.chains)}>
+    <Frame chip={chainCount(shown)}>
       <CardContent className="flex flex-1 flex-col gap-3">
         <div className="flex flex-col gap-1.5">
           {rows.map((row) => {
@@ -139,6 +159,7 @@ function ChainDepthCard({ data, loading, onRowClick }: ChainDepthCardProps) {
                 <span
                   className={cn(
                     'flex min-w-0 flex-col text-xs leading-tight',
+                    row.kind === 'preExec' && 'text-info',
                     row.kind === 'detected' && 'text-warning',
                     row.kind === 'undetected' && 'text-danger',
                   )}
@@ -195,12 +216,26 @@ function ChainDepthCard({ data, loading, onRowClick }: ChainDepthCardProps) {
               />
               EDR alerted, didn't block
             </span>
+            {(data.blockedBeforeRun ?? 0) > 0 && (
+              <span className="inline-flex items-center gap-1.5">
+                <span
+                  className="h-2.5 w-2.5 rounded-sm"
+                  style={{ backgroundColor: 'var(--chart-cat-2)' }}
+                  aria-hidden="true"
+                />
+                blocked before running (not a technique result)
+              </span>
+            )}
           </div>
-          {data.inconclusive > 0 && (
-            <span>
-              {`${chainCount(data.inconclusive)} inconclusive — a stage errored or was blocked before it ran — not shown`}
-            </span>
-          )}
+          {split
+            ? (data.stageErrors ?? 0) > 0 && (
+                <span>{`${chainCount(data.stageErrors ?? 0)} with a stage error — not shown`}</span>
+              )
+            : data.inconclusive > 0 && (
+                <span>
+                  {`${chainCount(data.inconclusive)} inconclusive — a stage errored or was blocked before it ran — not shown`}
+                </span>
+              )}
           <span>Follows the filter bar — pick an actor to see how far its chains get. Click a row for those runs.</span>
         </div>
       </CardContent>

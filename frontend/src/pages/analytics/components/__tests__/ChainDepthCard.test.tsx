@@ -18,6 +18,9 @@ const data: ChainDepthResponse = {
   endToEndAlertedBundleNames: ['FIN7 Chain'],
   endToEndUndetectedBundleNames: ['APT29 Chain', 'FIN7 Chain'],
   inconclusive: 0,
+  blockedBeforeRun: 0,
+  blockedBeforeRunBundleNames: [],
+  stageErrors: 0,
 };
 
 describe('ChainDepthCard', () => {
@@ -31,13 +34,15 @@ describe('ChainDepthCard', () => {
       'Stage 2',
       'Stage 3',
       'Stage 4+',
+      'Not run',
       'End to end',
       'End to end',
     ]);
     expect(within(rows[0]).getByText('1 chain')).toBeInTheDocument();
     expect(within(rows[3]).getByText('3 chains')).toBeInTheDocument();
-    expect(within(rows[4]).getByText('1 chain')).toBeInTheDocument();
-    expect(within(rows[5]).getByText('2 chains')).toBeInTheDocument();
+    expect(rows[4]).toBeDisabled(); // no pre-execution blocks in this fixture
+    expect(within(rows[5]).getByText('1 chain')).toBeInTheDocument();
+    expect(within(rows[6]).getByText('2 chains')).toBeInTheDocument();
   });
 
   it('rows are buttons with accessible names that include the alerted count', () => {
@@ -105,8 +110,12 @@ describe('ChainDepthCard', () => {
     expect(screen.queryAllByRole('button')).toHaveLength(0);
   });
 
-  it('notes inconclusive chains in the footer and keeps them out of the rows', () => {
-    render(<ChainDepthCard data={{ ...data, inconclusive: 2 }} />);
+  it('notes inconclusive chains in the footer and keeps them out of the rows (older backend)', () => {
+    const legacy = { ...data, inconclusive: 2 } as Partial<ChainDepthResponse>;
+    delete legacy.blockedBeforeRun;
+    delete legacy.blockedBeforeRunBundleNames;
+    delete legacy.stageErrors;
+    render(<ChainDepthCard data={legacy as ChainDepthResponse} />);
     expect(
       screen.getByText('2 chains inconclusive — a stage errored or was blocked before it ran — not shown'),
     ).toBeInTheDocument();
@@ -163,5 +172,75 @@ describe('ChainDepthCard', () => {
     const row = screen.getByRole('button', { name: /^End to end · detected/ });
     expect(row.className).toContain('grid-cols-[92px_');
     expect(within(row).getByText('detected')).toBeInTheDocument();
+  });
+
+  describe('blocked before running', () => {
+    const withPreExec: ChainDepthResponse = {
+      ...data,
+      inconclusive: 3,
+      blockedBeforeRun: 2,
+      blockedBeforeRunBundleNames: ['APT33 Chain'],
+      stageErrors: 1,
+    };
+
+    it('is its own row between Stage 4+ and the end-to-end rows', () => {
+      render(<ChainDepthCard data={withPreExec} />);
+      const labels = screen.getAllByRole('button').map((r) => within(r).getAllByText(/./)[0].textContent);
+      expect(labels).toEqual(['Stage 1', 'Stage 2', 'Stage 3', 'Stage 4+', 'Not run', 'End to end', 'End to end']);
+    });
+
+    it('is neutral, never the blocked colour, and says the technique was not tested', () => {
+      render(<ChainDepthCard data={withPreExec} />);
+      const row = screen.getByRole('button', {
+        name: 'Not run · binary blocked: 2 chains — a control stopped the test binary before it ran, so the technique was not tested. Show these runs',
+      });
+      expect(within(row).getByText('binary blocked')).toBeInTheDocument();
+      const bar = row.querySelector<HTMLElement>('[data-segment="main"]');
+      expect(bar?.style.backgroundColor).toBe('var(--chart-cat-2)');
+      expect(bar?.style.backgroundColor).not.toBe('var(--chart-protected)');
+    });
+
+    it('clicking it passes its bundle names', async () => {
+      const onRowClick = vi.fn();
+      render(<ChainDepthCard data={withPreExec} onRowClick={onRowClick} />);
+      await userEvent.click(screen.getByRole('button', { name: /^Not run/ }));
+      expect(onRowClick).toHaveBeenLastCalledWith(['APT33 Chain']);
+    });
+
+    it('leaves only stage errors in the footer, and the chip totals every row', () => {
+      render(<ChainDepthCard data={withPreExec} />);
+      expect(screen.getByText('1 chain with a stage error — not shown')).toBeInTheDocument();
+      expect(screen.queryByText(/inconclusive/)).toBeNull();
+      // 8 scored chains + 2 blocked before running
+      expect(screen.getByText('10 chains')).toBeInTheDocument();
+    });
+
+    it('with an older backend (no split fields) keeps the single inconclusive footer and no new row', () => {
+      const legacy = { ...withPreExec } as Partial<ChainDepthResponse>;
+      delete legacy.blockedBeforeRun;
+      delete legacy.blockedBeforeRunBundleNames;
+      delete legacy.stageErrors;
+      render(<ChainDepthCard data={legacy as ChainDepthResponse} />);
+      expect(screen.queryByRole('button', { name: /^Not run/ })).toBeNull();
+      expect(screen.getByText('3 chains inconclusive — a stage errored or was blocked before it ran — not shown')).toBeInTheDocument();
+    });
+
+    it('shows the row (not the empty state) when only pre-execution blocks exist', () => {
+      render(
+        <ChainDepthCard
+          data={{
+            ...withPreExec,
+            chains: 0,
+            buckets: [1, 2, 3, 4].map((stage) => ({ stage: stage as 1 | 2 | 3 | 4, blocked: 0, alertedNotBlocked: 0, bundleNames: [] })),
+            endToEnd: 0,
+            endToEndAlerted: 0,
+            stageErrors: 0,
+            inconclusive: 2,
+          }}
+        />,
+      );
+      expect(screen.queryByText('No multi-stage chains in this window')).toBeNull();
+      expect(screen.getByRole('button', { name: /^Not run/ })).toBeEnabled();
+    });
   });
 });

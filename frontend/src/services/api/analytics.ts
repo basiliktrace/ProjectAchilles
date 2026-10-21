@@ -267,6 +267,11 @@ export interface ChainDepthResponse {
   endToEndUndetectedBundleNames: string[];
   /** Latest run had an errored / pre-execution-blocked stage: in no row. */
   inconclusive: number;
+  /** Of inconclusive: latest run had a stage blocked before it ran (260); technique not evaluated. Absent on older backends. */
+  blockedBeforeRun?: number;
+  blockedBeforeRunBundleNames?: string[];
+  /** Of inconclusive: latest run had a stage error (e.g. 999). Absent on older backends. */
+  stageErrors?: number;
 }
 
 export interface ExecutionActivityDay {
