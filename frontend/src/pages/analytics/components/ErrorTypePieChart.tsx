@@ -35,27 +35,29 @@ function ErrorTypePieChart({ data, loading, title = 'Results by error type' }: E
   const slices = data.map((d, i) => ({ ...d, color: colorFor(d.name, i) }));
 
   return (
-    <Card>
+    <Card className="h-full">
       <CardHeader>
         <CardTitle>{title}</CardTitle>
         <CardDescription>All executions in window</CardDescription>
       </CardHeader>
-      <CardContent>
+      <CardContent className="flex flex-1 flex-col">
         {total === 0 ? (
           <div className="flex h-44 items-center justify-center text-sm text-faint">
             Nothing recorded yet.
           </div>
         ) : (
-          <div className="@container">
-          <div className="flex flex-col items-center gap-4 @sm:flex-row lg:flex-row">
-            <div className="relative h-44 w-44 shrink-0">
+          // The donut grows with the row's height (its neighbours set it), from
+          // 176px up to 192px (more squeezes the legend); extra room centres it
+          <div className="@container flex flex-1 flex-col justify-center">
+          <div className="flex flex-1 flex-col items-center gap-4 @sm:flex-row lg:flex-row">
+            <div className="relative aspect-square h-44 shrink-0 lg:h-full lg:max-h-48 lg:min-h-44">
               <ResponsiveContainer width="100%" height="100%">
                 <PieChart>
                   <Pie
                     data={slices}
                     dataKey="count"
-                    innerRadius={56}
-                    outerRadius={78}
+                    innerRadius="72%"
+                    outerRadius="100%"
                     stroke="none"
                     startAngle={90}
                     endAngle={-270}
