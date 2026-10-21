@@ -2,8 +2,8 @@
 
 import { apiClient } from '@/hooks/useAuthenticatedApi';
 
-import type { AlertFacetCounts, AlertSource, TechniqueCoverageResponse, TimeWindow } from './crowdstrike';
-export type { AlertFacetCounts, AlertSource, TechniqueCoverageItem, TechniqueCoverageResponse, TimeWindow } from './crowdstrike';
+import type { AlertFacetCounts, AlertSource, TechniqueCoverageResponse, TimeWindow } from './integrationTypes';
+
 // ---------------------------------------------------------------------------
 // Response types (mirrors backend analytics service)
 // ---------------------------------------------------------------------------

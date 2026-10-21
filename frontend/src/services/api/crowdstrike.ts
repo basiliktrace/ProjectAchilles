@@ -2,55 +2,7 @@
 
 import { apiClient } from '@/hooks/useAuthenticatedApi';
 
-/** ISO from/to window sent to the integration endpoints. */
-export type TimeWindow = { from: string; to: string };
-
-/** Alert feed source filter. Linked = Achilles-correlated; organic = everything else. */
-export type AlertSource = 'all' | 'test' | 'organic';
-
-/** Facet counts behind the alert feed's filter segments and summary strip. */
-export interface AlertFacetCounts {
-  /** All filters except source. */
-  bySource: { all: number; test: number; organic: number };
-  /** All filters except severity. */
-  bySeverity: Record<string, number>;
-  /** Alerts Achilles really resolved (enabled, error-free receipt). */
-  autoResolved: number;
-  /** Window only: linked AND status NOT IN ('closed','resolved'). */
-  linkedOpen: number;
-  /** CrowdStrike only. */
-  byPrevention?: { prevented: number; detected_only: number; kill_failed: number };
-  /** Defender only. */
-  byProduct?: Record<string, number>;
-}
-
-export interface TechniqueCoverageItem {
-  technique: string;
-  name: string | null;
-  executions: number;
-  prevented: number;
-  detectedOnly: number;
-  missed: number;
-  /** Vendor alerts tagged with this exact technique id in the window. */
-  alerts: number;
-}
-
-export interface TechniqueCoverageResponse {
-  overall: {
-    executions: number;
-    prevented: number;
-    detectedOnly: number;
-    missed: number;
-    /** % of distinct executions, 1 dp, 0 when executions = 0. */
-    detectionRate: number;
-    /** % of distinct executions, 1 dp, 0 when executions = 0. */
-    preventionRate: number;
-    testedTechniques: number;
-    detectedTechniques: number;
-  };
-  /** Detected first, then executions desc. */
-  byTechnique: TechniqueCoverageItem[];
-}
+import type { AlertFacetCounts, AlertSource, TechniqueCoverageResponse, TimeWindow } from './integrationTypes';
 
 // ---------------------------------------------------------------------------
 // Response types (mirrors backend analytics service)

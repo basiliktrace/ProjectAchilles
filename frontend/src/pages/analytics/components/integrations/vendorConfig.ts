@@ -3,7 +3,9 @@
 import { crowdstrikeApi } from '@/services/api/crowdstrike';
 import { defenderApi } from '@/services/api/defender';
 
-export type { TimeWindow } from '@/services/api/crowdstrike';
+import type { IntegrationApi } from '@/services/api/integrationTypes';
+
+export type { TimeWindow } from '@/services/api/integrationTypes';
 
 export type VendorId = 'crowdstrike' | 'defender';
 
@@ -22,12 +24,7 @@ export interface IntegrationVendor {
   knownSeverities: string[];
   severitySegments: SeveritySegment[];
   defaultSeverityKey: string;
-  api: {
-    getAlerts: typeof crowdstrikeApi.getAlerts | typeof defenderApi.getAlerts;
-    getAlertTrend: typeof crowdstrikeApi.getAlertTrend | typeof defenderApi.getAlertTrend;
-    getAlertSummary: typeof crowdstrikeApi.getAlertSummary | typeof defenderApi.getAlertSummary;
-    getTechniqueCoverage: typeof crowdstrikeApi.getTechniqueCoverage | typeof defenderApi.getTechniqueCoverage;
-  };
+  api: IntegrationApi;
 }
 
 export const VENDORS: Record<VendorId, IntegrationVendor> = {
