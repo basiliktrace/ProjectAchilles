@@ -639,6 +639,8 @@ func TestDoneShowsFingerprintsAndNoToken(t *testing.T) {
 	for _, want := range []string{
 		filepath.Join(deps.RepoRoot, "deploy", "onprem", "bootstrap-windows.ps1"),
 		filepath.Join(deps.RepoRoot, "deploy", "onprem", "bootstrap-unix.sh"),
+		// The scripts are 0644: `sudo ./bootstrap-unix.sh` would not run.
+		"sudo bash bootstrap-unix.sh <TOKEN>",
 		"Push root.cer via GPO (Computer Configuration → Policies → Windows Settings → Security Settings → Public Key Policies → Trusted Root Certification Authorities). Never put enrollment tokens in GPO/SYSVOL.",
 		"Register an agent version in the web UI before enrolling",
 		"achilles-installer status", "achilles-installer upgrade", "achilles-installer backup", "achilles-installer restore",

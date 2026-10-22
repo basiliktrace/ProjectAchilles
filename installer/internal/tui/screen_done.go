@@ -128,7 +128,7 @@ func (d *doneScreen) caBlock(add func(string), para func(string, string)) {
 	onprem := filepath.Join(d.s.deps.RepoRoot, "deploy", "onprem")
 	add(t.Title.Render("Enroll a Windows endpoint") + t.Muted.Render(" (as Administrator, next to the script):"))
 	add(t.Code.Render(windowsOneLiner))
-	add("  " + t.Muted.Render("Linux/macOS (as root): ") + t.Code.Render("sudo ./bootstrap-unix.sh <TOKEN>"))
+	add("  " + t.Muted.Render("Linux/macOS (as root): ") + t.Code.Render("sudo bash bootstrap-unix.sh <TOKEN>"))
 	add("  " + t.Muted.Render("Scripts: ") + filepath.Join(onprem, "bootstrap-windows.ps1"))
 	add("           " + filepath.Join(onprem, "bootstrap-unix.sh"))
 	para(t.Muted.Render("Each script fetches root.cer over HTTP, aborts unless it matches the pinned SHA-256, trusts it, then enrolls the agent over HTTPS. Pass a token you create in the web UI."), "  ")

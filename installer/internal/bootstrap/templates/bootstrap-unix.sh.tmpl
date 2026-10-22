@@ -2,8 +2,9 @@
 # ProjectAchilles endpoint bootstrap (Linux/macOS) -- generated, do not edit.
 # Server: {{.Host}}
 #
-# Usage (as root):  sudo ./bootstrap-unix.sh <enrollment-token>
-#                   (or ACHILLES_TOKEN=<token> sudo -E ./bootstrap-unix.sh)
+# Usage (as root):  sudo bash bootstrap-unix.sh <enrollment-token>
+#                   (or ACHILLES_TOKEN=<token> sudo -E bash bootstrap-unix.sh)
+# The file is written mode 0644 (not executable), hence `bash <file>`.
 #
 # Downloads the root CA over HTTP and aborts unless its SHA-256 matches the
 # pinned value, trusts it system-wide, then downloads and enrolls the agent
@@ -15,7 +16,7 @@ TOKEN="${1:-${ACHILLES_TOKEN:-}}"
 
 die() { echo "error: $*" >&2; exit 1; }
 
-[ -n "$TOKEN" ] || die "enrollment token required: $0 <token>"
+[ -n "$TOKEN" ] || die "enrollment token required: sudo bash $0 <token>"
 [ "$(id -u)" -eq 0 ] || die "must run as root (use sudo)"
 command -v curl >/dev/null 2>&1 || die "curl is required"
 

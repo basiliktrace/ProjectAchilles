@@ -148,6 +148,18 @@ func TestRenderFileModes(t *testing.T) {
 	}
 }
 
+// The scripts are written 0644, so the documented invocation must go through
+// bash: `sudo ./bootstrap-unix.sh` would fail with "command not found".
+func TestRenderUnixUsageRunsThroughBash(t *testing.T) {
+	_, unix := render(t)
+	if !strings.Contains(unix, "sudo bash bootstrap-unix.sh <enrollment-token>") {
+		t.Error("usage does not say sudo bash bootstrap-unix.sh")
+	}
+	if strings.Contains(unix, "./bootstrap-unix.sh") {
+		t.Error("usage still suggests ./bootstrap-unix.sh, which is not executable")
+	}
+}
+
 // The service is registered at the path the agent runs from (os.Executable),
 // so the scripts must install the binary at its permanent home first and run
 // it from there. Found in the E2E run: bootstrap-unix.sh enrolled from its

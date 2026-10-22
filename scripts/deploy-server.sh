@@ -713,7 +713,7 @@ case "$TLS_MODE" in
   byo)       echo "  • TLS: using your cert at deploy/caddy/certs/. Ensure clients trust its issuing CA." ;;
   achilles-ca)
              echo "  • TLS: ProjectAchilles CA for ${CA_ZONE}. Endpoints must trust its root BEFORE --enroll:"
-             echo "         run ${ONPREM_DIR}/bootstrap-windows.ps1 (or bootstrap-unix.sh) on each endpoint."
+             echo "         run ${ONPREM_DIR}/bootstrap-windows.ps1 (or: sudo bash bootstrap-unix.sh <TOKEN>) on each endpoint."
              echo "         It fetches http://${ACHILLES_DOMAIN}/ca/root.cer and checks the pinned fingerprint."
              echo "         Fleets: distribute ${CA_DIR}/public/root.cer by GPO (trust only, no tokens)." ;;
 esac
