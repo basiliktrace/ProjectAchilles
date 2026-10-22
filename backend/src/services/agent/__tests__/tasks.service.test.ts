@@ -904,6 +904,104 @@ describe('tasks.service', () => {
       expect(payload.execution_timeout).toBe(300);
       expect(payload.arguments).toEqual([]);
     });
+
+    describe('per-OS binary selection', () => {
+      // build-meta.json produced by a cross-platform build: one artifact per OS.
+      function setupMultiOsMeta() {
+        mockReadFileSync.mockImplementation((p: string) => {
+          if (typeof p === 'string' && p.endsWith('build-meta.json')) {
+            return JSON.stringify({
+              platform: { os: 'linux', arch: 'amd64' },
+              filename: 'cross', // legacy "primary" pointer (linux)
+              binaries: {
+                windows: { filename: 'cross.exe', fileSize: 10, signed: true },
+                linux: { filename: 'cross', fileSize: 20, signed: false },
+              },
+            });
+          }
+          // Return a distinct buffer per OS artifact so SHA256 differs.
+          if (typeof p === 'string' && p.endsWith('cross.exe')) return Buffer.from('WINDOWS-PE');
+          if (typeof p === 'string' && p.endsWith('cross')) return Buffer.from('LINUX-ELF');
+          return Buffer.from('fallback');
+        });
+      }
+
+      it('dispatches the OS-matching binary filename to each agent', () => {
+        setupMultiOsMeta();
+        insertTestAgent(testDb, { id: 'win-agent', os: 'windows' });
+        insertTestAgent(testDb, { id: 'lin-agent', os: 'linux' });
+
+        createTasks({
+          agent_ids: ['win-agent', 'lin-agent'],
+          test_uuid: 'test-uuid-001',
+          test_name: 'Cross Platform',
+          binary_name: 'cross',
+        }, 'org-001', 'user-001');
+
+        const winTask = testDb.prepare('SELECT payload FROM tasks WHERE agent_id = ?').get('win-agent') as any;
+        const linTask = testDb.prepare('SELECT payload FROM tasks WHERE agent_id = ?').get('lin-agent') as any;
+
+        expect(JSON.parse(winTask.payload).binary_name).toBe('cross.exe');
+        expect(JSON.parse(linTask.payload).binary_name).toBe('cross');
+      });
+
+      it('computes a distinct SHA256 per OS artifact', () => {
+        setupMultiOsMeta();
+        insertTestAgent(testDb, { id: 'win-agent', os: 'windows' });
+        insertTestAgent(testDb, { id: 'lin-agent', os: 'linux' });
+
+        createTasks({
+          agent_ids: ['win-agent', 'lin-agent'],
+          test_uuid: 'test-uuid-001',
+          test_name: 'Cross Platform',
+          binary_name: 'cross',
+        }, 'org-001', 'user-001');
+
+        const winTask = testDb.prepare('SELECT payload FROM tasks WHERE agent_id = ?').get('win-agent') as any;
+        const linTask = testDb.prepare('SELECT payload FROM tasks WHERE agent_id = ?').get('lin-agent') as any;
+
+        expect(JSON.parse(winTask.payload).binary_sha256)
+          .not.toBe(JSON.parse(linTask.payload).binary_sha256);
+      });
+
+      it('throws 422 when no binary was built for an agent OS', () => {
+        setupMultiOsMeta(); // only windows + linux built
+        insertTestAgent(testDb, { id: 'mac-agent', os: 'darwin' });
+
+        expect(() =>
+          createTasks({
+            agent_ids: ['mac-agent'],
+            test_uuid: 'test-uuid-001',
+            test_name: 'Cross Platform',
+            binary_name: 'cross',
+          }, 'org-001', 'user-001')
+        ).toThrow(/darwin/);
+      });
+
+      it('falls back to the single legacy binary when build-meta has no binaries map', () => {
+        // Legacy meta (pre-fix builds): one filename, no per-OS map.
+        mockReadFileSync.mockImplementation((p: string) => {
+          if (typeof p === 'string' && p.endsWith('build-meta.json')) {
+            return JSON.stringify({ binary_name: 'legacy.exe', filename: 'legacy.exe' });
+          }
+          return Buffer.from('legacy-content');
+        });
+        insertTestAgent(testDb, { id: 'win-agent', os: 'windows' });
+        insertTestAgent(testDb, { id: 'lin-agent', os: 'linux' });
+
+        createTasks({
+          agent_ids: ['win-agent', 'lin-agent'],
+          test_uuid: 'test-uuid-001',
+          test_name: 'Legacy',
+          binary_name: 'legacy.exe',
+        }, 'org-001', 'user-001');
+
+        const winTask = testDb.prepare('SELECT payload FROM tasks WHERE agent_id = ?').get('win-agent') as any;
+        const linTask = testDb.prepare('SELECT payload FROM tasks WHERE agent_id = ?').get('lin-agent') as any;
+        expect(JSON.parse(winTask.payload).binary_name).toBe('legacy.exe');
+        expect(JSON.parse(linTask.payload).binary_name).toBe('legacy.exe');
+      });
+    });
   });
 
   describe('deleteTask', () => {

@@ -5,7 +5,7 @@ import * as path from 'path';
 import * as os from 'os';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
-import type { BuildInfo, BuildJob, BuildMetadata, EmbedDependency, PlatformSettings } from '../../types/tests.js';
+import type { BuildArtifact, BuildInfo, BuildJob, BuildMetadata, EmbedDependency, PlatformSettings } from '../../types/tests.js';
 import type { TestsSettingsService } from './settings.js';
 import { BuildJobs } from './buildJobs.js';
 
@@ -341,6 +341,34 @@ const ARTIFACT_DIR = \`${artifactDir}\`
     return this.settingsService.getPlatformSettings().os;
   }
 
+  /**
+   * Resolve the FULL set of target OSes for a test. Unlike resolveTargetOS
+   * (which collapses a dual-platform test to a single primary), this returns
+   * every OS the test's build tags indicate — so a cross-platform build_all.sh
+   * run can record a per-OS artifact for each. Falls back to the global
+   * platform setting when no build tags are present.
+   */
+  private resolveTargetOSes(testDir: string, uuid: string): PlatformSettings['os'][] {
+    const detected = new Set<PlatformSettings['os']>();
+    const mainFile = path.join(testDir, `${uuid}.go`);
+    if (fs.existsSync(mainFile)) {
+      const os = this.detectBuildTagOS(mainFile);
+      if (os) detected.add(os);
+    }
+    const goFiles = fs.readdirSync(testDir).filter(f => f.endsWith('.go') && f !== `${uuid}.go`);
+    for (const goFile of goFiles) {
+      const os = this.detectBuildTagOS(path.join(testDir, goFile));
+      if (os) detected.add(os);
+    }
+    if (detected.size > 0) return [...detected];
+    return [this.settingsService.getPlatformSettings().os];
+  }
+
+  /** Output filename convention: Windows binaries carry `.exe`, others bare. */
+  private osBinaryFilename(uuid: string, targetOs: PlatformSettings['os']): string {
+    return targetOs === 'windows' ? `${uuid}.exe` : uuid;
+  }
+
   // ── Public API ────────────────────────────────────────────
 
   /**
@@ -554,9 +582,16 @@ const ARTIFACT_DIR = \`${artifactDir}\`
       os: this.resolveTargetOS(testDir, uuid),
       arch: globalPlatform.arch,
     };
+    // Full target OS set — a build_all.sh run emits one artifact per OS, and we
+    // record each so dispatch can match it to the agent's OS.
+    const targetOSes = this.resolveTargetOSes(testDir, uuid);
 
-    // 3. Determine output filename
+    // 3. Determine output filename (primary artifact, for back-compat meta fields)
     const filename = platform.os === 'windows' ? `${uuid}.exe` : uuid;
+
+    // Per-OS artifacts collected during the build (populated for build_all.sh
+    // cross-platform builds). The primary OS entry is added at meta-write time.
+    const extraBinaries: Partial<Record<PlatformSettings['os'], BuildArtifact>> = {};
 
     // 4. Ensure build output directory
     const buildDir = this.ensureBuildDir(uuid);
@@ -630,9 +665,12 @@ const ARTIFACT_DIR = \`${artifactDir}\`
       }
 
       // Pass active signing cert to build_all.sh so it can sign inner binaries
-      // (e.g., multi-binary bundles sign validators before embedding)
+      // (e.g., multi-binary bundles sign validators before embedding). Set it
+      // whenever Windows is a TARGET OS — not only the primary — so a
+      // cross-platform build (primary resolved to Linux) still signs the
+      // Windows orchestrator it emits, rather than shipping it unsigned.
       let innerPassFile: string | null = null;
-      if (platform.os === 'windows') {
+      if (targetOSes.includes('windows')) {
         const activeCert = this.settingsService.getActiveCertPfxPath();
         if (activeCert) {
           env.F0_SIGN_CERT_PATH = activeCert.pfxPath;
@@ -689,6 +727,32 @@ const ARTIFACT_DIR = \`${artifactDir}\`
       }
       if (!found) {
         throw new Error('build_all.sh completed but output binary not found');
+      }
+
+      // Collect the SIBLING-OS artifacts build_all.sh produced (every target OS
+      // other than the primary) so dispatch can serve each agent its own binary.
+      // Without this, a Windows agent would receive the Linux orchestrator (no
+      // `.exe`) and fail to launch it. The primary OS is recorded at meta-write.
+      for (const siblingOs of targetOSes) {
+        if (siblingOs === platform.os) continue;
+        const siblingFilename = this.osBinaryFilename(uuid, siblingOs);
+        const siblingCandidates = [
+          path.join(repoRoot, 'build', uuid, siblingFilename),
+          path.join(testDir, 'build', uuid, siblingFilename),
+          path.join(testDir, siblingFilename),
+        ];
+        const sourcePath = siblingCandidates.find(c => fs.existsSync(c));
+        if (!sourcePath) continue; // build_all.sh didn't emit this OS — skip
+        const siblingDest = path.join(buildDir, siblingFilename);
+        fs.copyFileSync(sourcePath, siblingDest);
+        extraBinaries[siblingOs] = {
+          filename: siblingFilename,
+          fileSize: fs.statSync(siblingDest).size,
+          // build_all.sh signs the Windows orchestrator internally (cert passed
+          // above); other OSes are unsigned. `signed` here is informational —
+          // dispatch does not depend on it.
+          signed: siblingOs === 'windows' && Boolean(env.F0_SIGN_CERT_PATH),
+        };
       }
     } else {
       // Standard Go build
@@ -784,12 +848,20 @@ const ARTIFACT_DIR = \`${artifactDir}\`
 
     // 8. Write metadata
     const stats = fs.statSync(outputPath);
+    // Per-OS artifact map: the primary (just built + signed) plus any siblings
+    // collected from a build_all.sh cross-platform run. Dispatch selects the
+    // entry matching each agent's OS.
+    const binaries: NonNullable<BuildMetadata['binaries']> = {
+      ...extraBinaries,
+      [platform.os]: { filename, fileSize: stats.size, signed },
+    };
     const meta: BuildMetadata = {
       platform: { os: platform.os, arch: platform.arch },
       builtAt: new Date().toISOString(),
       signed,
       fileSize: stats.size,
       filename,
+      binaries,
       source: 'built',
     };
     fs.writeFileSync(this.metaPath(uuid), JSON.stringify(meta, null, 2));
