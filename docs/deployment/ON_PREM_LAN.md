@@ -361,6 +361,8 @@ The hand-over screen (also printed to the terminal when you leave):
 
 ![Done screen: URL, LAN IP, root CA files, SHA-256 fingerprint, Windows thumbprint and the bootstrap commands](../../wiki/static/img/screenshots/onprem-done.png)
 
+*Example from a render-only run with placeholder values; the fingerprints belong to a throwaway CA and differ on every install.*
+
 **Save the SHA-256 and the thumbprint**: the GPO team uses them to verify the
 file they import. `sudo /opt/projectachilles/achilles-installer ca export --out <dir>`
 prints both again at any time.

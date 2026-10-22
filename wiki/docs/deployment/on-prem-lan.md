@@ -249,6 +249,8 @@ Frontend API host from the server. An error blocks Next; a warning does not.
 
 ![Login (Clerk) screen (5/10) with a pk_test_ publishable key, the secret key masked, and two warnings](/img/screenshots/onprem-login.png)
 
+*The "Frontend API … not reachable" warning comes from the placeholder `clerk.example.com` key used for this screenshot.*
+
 **6/10 Analytics.** Self-hosted Elasticsearch on this server (unavailable when the
 memory check did not pass) or Elastic Cloud (Cloud ID plus an API key with read
 and write access to the `achilles-*` indices). Optionally load demo data (about
@@ -282,6 +284,8 @@ scripts (`/opt/projectachilles/deploy/onprem/bootstrap-windows.ps1` and
 `bootstrap-unix.sh`) and the next steps.
 
 ![Done screen (10/10): URL, LAN IP, root CA files, SHA-256 fingerprint, Windows thumbprint and the bootstrap commands](/img/screenshots/onprem-done.png)
+
+*Example from a render-only run with placeholder values; the fingerprints belong to a throwaway CA and differ on every install.*
 
 :::tip Save the SHA-256 and the thumbprint
 The GPO team uses them to verify the file they import.
