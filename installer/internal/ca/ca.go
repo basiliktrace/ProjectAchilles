@@ -71,9 +71,10 @@ type Options struct {
 	// excluded, because an absent IP constraint leaves IP SANs unconstrained.
 	IncludeIP bool
 	Rotate    bool // replace an existing root and intermediate with new keys
-	// RotateOnlyIfChanged limits Rotate to an existing root whose constraints
-	// (zone and IP policy) differ from these options, so a re-run with Rotate
-	// set never replaces a root it already rotated.
+	// RotateOnlyIfChanged limits Rotate to an existing root that is read
+	// successfully and whose constraints (zone and IP policy) differ from
+	// these options, so a re-run with Rotate set never replaces a root it
+	// already rotated. An unreadable root is then an error, not a rotation.
 	RotateOnlyIfChanged bool
 	Now                 func() time.Time // defaults to time.Now
 }
@@ -310,9 +311,19 @@ func Init(o Options) (*Bundle, error) {
 	// root.crt is the commit point: it is written after its key and the
 	// intermediate, and before anything is published. Without it, nothing
 	// from an earlier attempt can have reached an endpoint.
-	if _, err := os.Stat(filepath.Join(o.Dir, rootCertFile)); err == nil && (!o.Rotate || o.RotateOnlyIfChanged && !differs(o.Dir, c)) {
-		return converge(o.Dir, c, label, now())
-	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Stat(filepath.Join(o.Dir, rootCertFile)); err == nil {
+		keep := !o.Rotate
+		if o.Rotate && o.RotateOnlyIfChanged {
+			d, err := differs(o.Dir, c)
+			if err != nil {
+				return nil, err
+			}
+			keep = !d
+		}
+		if keep {
+			return converge(o.Dir, c, label, now())
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
 		return nil, err
 	}
 
@@ -347,15 +358,21 @@ func Init(o Options) (*Bundle, error) {
 	return &Bundle{Root: root, Intermediate: inter, Dir: o.Dir}, nil
 }
 
-// differs reports whether the root in dir is missing, unreadable or carries
-// constraints other than want.
-func differs(dir string, want constraints) bool {
-	root, err := readCertFile(filepath.Join(dir, rootCertFile))
+// differs reports whether the existing root in dir carries constraints other
+// than want. A root that can't be read or whose constraints can't be
+// recovered is an error, never "different": rotating on a damaged read
+// would silently replace a root the whole fleet trusts.
+func differs(dir string, want constraints) (bool, error) {
+	path := filepath.Join(dir, rootCertFile)
+	root, err := readCertFile(path)
 	if err != nil {
-		return true
+		return false, fmt.Errorf("cannot read the existing root CA %s (%w); refusing an automatic rotation; fix or remove it, or rotate explicitly with --rotate without --if-changed", path, err)
 	}
 	have, err := constraintsOf(root)
-	return err != nil || !have.equal(want)
+	if err != nil {
+		return false, fmt.Errorf("existing root CA %s: %w; refusing an automatic rotation; rotate explicitly with --rotate without --if-changed", path, err)
+	}
+	return !have.equal(want), nil
 }
 
 // WouldRotate reports whether Init(o) would replace an existing root: there
@@ -376,7 +393,7 @@ func WouldRotate(o Options) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	return differs(o.Dir, c), nil
+	return differs(o.Dir, c)
 }
 
 // converge keeps an existing root and repairs everything derived from it.

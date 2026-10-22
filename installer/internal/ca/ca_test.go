@@ -588,6 +588,78 @@ func TestInitRotateIfChanged(t *testing.T) {
 	}
 }
 
+// With RotateOnlyIfChanged, a root that can't be read or parsed is an error,
+// never a reason to rotate: a sticky CA_ROTATE=true must not silently replace
+// a damaged root that every endpoint trusts.
+func TestInitRotateIfChangedRefusesUnreadableRoot(t *testing.T) {
+	cases := map[string]func(t *testing.T, path string){
+		"corrupt PEM": func(t *testing.T, path string) {
+			if err := os.WriteFile(path, []byte("-----BEGIN CERTIFICATE-----\ngarbage\n-----END CERTIFICATE-----\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"not PEM": func(t *testing.T, path string) {
+			if err := os.WriteFile(path, []byte("hello"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"unreadable": func(t *testing.T, path string) {
+			if os.Geteuid() == 0 {
+				t.Skip("root can read 0000 files")
+			}
+			if err := os.Chmod(path, 0); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { os.Chmod(path, 0o644) })
+		},
+	}
+	for name, damage := range cases {
+		t.Run(name, func(t *testing.T) {
+			o := opts(t)
+			mustInit(t, o)
+			damage(t, filepath.Join(o.Dir, "root.crt"))
+			before := snapshotDir(t, o.Dir)
+			o.Rotate, o.RotateOnlyIfChanged = true, true
+			o.Zone = "other.example.com"
+			if _, err := WouldRotate(o); err == nil {
+				t.Error("WouldRotate: want an error for an unreadable root")
+			}
+			if _, err := Init(o); err == nil {
+				t.Fatal("Init rotated over an unreadable root")
+			}
+			if after := snapshotDir(t, o.Dir); !reflect.DeepEqual(before, after) {
+				t.Fatal("CA files changed after the refused rotation")
+			}
+		})
+	}
+}
+
+// snapshotDir maps every file under dir to its content and mode.
+func snapshotDir(t *testing.T, dir string) map[string]string {
+	t.Helper()
+	m := map[string]string{}
+	err := filepath.Walk(dir, func(p string, fi os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if fi.IsDir() {
+			return nil
+		}
+		os.Chmod(p, fi.Mode().Perm()|0o400) // read even the 0000 case
+		b, rerr := os.ReadFile(p)
+		os.Chmod(p, fi.Mode().Perm())
+		if rerr != nil {
+			return rerr
+		}
+		m[p] = fi.Mode().String() + "\n" + string(b)
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return m
+}
+
 func TestInitSelfHealsDerivedFiles(t *testing.T) {
 	o := opts(t)
 	first := mustInit(t, o)
