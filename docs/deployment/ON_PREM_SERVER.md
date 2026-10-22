@@ -1,5 +1,9 @@
 # Deploying ProjectAchilles On-Premises
 
+> **Installing on a LAN with Windows agents?** See
+> [`ON_PREM_LAN.md`](./ON_PREM_LAN.md): the `achilles-installer` wizard, a
+> name-constrained ProjectAchilles CA, and GPO-based trust for Windows endpoints.
+
 This guide deploys a **fully functional on-prem** ProjectAchilles install on a
 server **you provide** (reachable over SSH), on your own network, with **working
 TLS certificates** — including options that need no public internet exposure.

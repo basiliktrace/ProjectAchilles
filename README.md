@@ -122,6 +122,7 @@ The PowerShell script checks prerequisites, fixes line endings, configures `back
 | **Docker Compose** | `backend/` | SQLite (volume) | Yes | [docker-compose.yml](docker-compose.yml) |
 | **Public server (VPS/droplet)** | `backend/` | SQLite (volume) | Yes | [Public Server Guide](docs/deployment/SELF_HOSTED_SERVER.md) |
 | **On-prem server** | `backend/` | SQLite (volume) | Yes | [On-Prem Guide](docs/deployment/ON_PREM_SERVER.md) |
+| **On-prem LAN (TUI installer)** | `backend/` | SQLite (volume) | Yes | [On-Prem LAN Guide](docs/deployment/ON_PREM_LAN.md) |
 | **Railway** | `backend/` | SQLite (volume) | Partial | [Railway Guide](docs/deployment/RAILWAY.md) |
 | **Render** | `backend/` | SQLite (persistent disk) | Partial | [Render Guide](docs/deployment/RENDER.md) |
 | **Fly.io** | `backend/` | SQLite (volume) | Yes | [Fly.io Guide](docs/deployment/FLY.md) |
@@ -717,6 +718,7 @@ Restart the backend afterwards so it reopens the database cleanly.
 - [Docker Compose guide](docker-compose.yml) — Local deployment with optional Elasticsearch
 - [Public Server Deployment](docs/deployment/SELF_HOSTED_SERVER.md) — Publicly-reachable single-server install (DigitalOcean or any VPS) with Caddy auto-TLS
 - [On-Prem Deployment](docs/deployment/ON_PREM_SERVER.md) — On-premises install over SSH with internal CA, DNS-01, or bring-your-own certificate
+- [On-Prem LAN Deployment](docs/deployment/ON_PREM_LAN.md) — LAN install with the `achilles-installer` wizard, a name-constrained ProjectAchilles CA, and GPO trust for Windows agents
 - [Quick Start Deployment](docs/deployment/QUICK_START_DEPLOYMENT.md) — 50-minute production deployment
 - [Railway Deployment](docs/deployment/RAILWAY.md) — Railway with private networking
 - [Render Deployment](docs/deployment/RENDER.md) — Render with persistent disk and Blueprint
