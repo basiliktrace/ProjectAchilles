@@ -50,7 +50,7 @@ func highestRelease(tags string) (string, bool) {
 	return best, best != ""
 }
 
-// Upgrade moves the checkout to ref (or the next release tag) and re-runs the
+// Upgrade moves the checkout to ref (or the highest release tag) and re-runs the
 // engine with the existing config. A failed engine run is reported with the
 // rollback steps; nothing is rolled back automatically.
 func Upgrade(ctx context.Context, d Deps, ref string, yes bool) error {
