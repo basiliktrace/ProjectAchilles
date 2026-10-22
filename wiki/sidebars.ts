@@ -23,6 +23,7 @@ const sidebars: SidebarsConfig = {
         'deployment/docker-compose',
         'deployment/public-server',
         'deployment/on-prem-server',
+        'deployment/on-prem-lan',
         'deployment/railway',
         'deployment/render',
         'deployment/fly-io',

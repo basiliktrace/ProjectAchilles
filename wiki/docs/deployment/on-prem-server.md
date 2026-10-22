@@ -10,6 +10,10 @@ Deploy a **fully functional on-prem** ProjectAchilles install on a server **you
 provide** (reachable over SSH), on your own network, with **working TLS** —
 including options that need no public internet exposure.
 
+:::tip Windows fleet on a LAN with no public IP?
+The [On-Prem LAN guide](./on-prem-lan) covers the interactive `achilles-installer` wizard, a managed name-constrained CA, and GPO-based trust for Windows endpoints.
+:::
+
 This shares the same automation as the [Public Server](./public-server) install;
 that page holds the architecture, backups, and day-2 reference. This page focuses
 on what's different on-prem: **SSH-based install**, **certificate strategy on a
