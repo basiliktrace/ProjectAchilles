@@ -3,7 +3,7 @@ import express from 'express';
 import request from 'supertest';
 import Database from 'better-sqlite3';
 import { createTestDatabase } from '../../../__tests__/helpers/db.js';
-import { mockClerkMiddleware } from '../../../__tests__/helpers/clerk-mock.js';
+import '../../../__tests__/helpers/clerk-mock.js';
 
 let testDb: Database.Database;
 
@@ -12,7 +12,6 @@ vi.mock('../../../services/agent/database.js', async (importOriginal) => {
   return { ...actual, getDatabase: () => testDb };
 });
 
-mockClerkMiddleware();
 
 const { agentEnrollmentRouter, adminEnrollmentRouter } = await import('../enrollment.routes.js');
 const { createToken } = await import('../../../services/agent/enrollment.service.js');

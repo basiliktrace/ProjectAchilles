@@ -3,7 +3,7 @@ import express from 'express';
 import request from 'supertest';
 import Database from 'better-sqlite3';
 import { createTestDatabase, insertTestAgent, insertTestTask } from '../../../__tests__/helpers/db.js';
-import { mockClerkMiddleware } from '../../../__tests__/helpers/clerk-mock.js';
+import '../../../__tests__/helpers/clerk-mock.js';
 
 let testDb: Database.Database;
 
@@ -53,7 +53,6 @@ vi.mock('../../../services/agent/ingestionWorker.service.js', () => ({
   retryPendingIngestions: vi.fn(),
 }));
 
-mockClerkMiddleware();
 
 const { agentTasksRouter, adminTasksRouter } = await import('../tasks.routes.js');
 const { errorHandler } = await import('../../../middleware/error.middleware.js');
@@ -79,7 +78,7 @@ function createApp() {
     next();
   }, agentTasksRouter);
 
-  // Admin routes: Clerk auth is mocked via mockClerkMiddleware
+  // Admin routes: Clerk auth is mocked by the clerk-mock helper import
   app.use('/admin', adminTasksRouter);
   app.use(errorHandler);
   return app;

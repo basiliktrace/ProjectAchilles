@@ -3,7 +3,7 @@ import express from 'express';
 import request from 'supertest';
 import type { DbHelper } from '../../../services/agent/database.js';
 import { createTestDatabase, insertTestAgent, insertTestTask } from '../../../__tests__/helpers/db.js';
-import { mockClerkMiddleware } from '../../../__tests__/helpers/clerk-mock.js';
+import '../../../__tests__/helpers/clerk-mock.js';
 
 let testDb: DbHelper;
 
@@ -33,7 +33,6 @@ vi.mock('../../../services/agent/results.service.js', () => ({
   ingestResult: vi.fn().mockResolvedValue(undefined),
 }));
 
-mockClerkMiddleware();
 
 const { agentTasksRouter, adminTasksRouter } = await import('../tasks.routes.js');
 const { errorHandler } = await import('../../../middleware/error.middleware.js');
@@ -59,7 +58,7 @@ function createApp() {
     next();
   }, agentTasksRouter);
 
-  // Admin routes: Clerk auth is mocked via mockClerkMiddleware
+  // Admin routes: Clerk auth is mocked by the clerk-mock helper import
   app.use('/admin', adminTasksRouter);
   app.use(errorHandler);
   return app;
