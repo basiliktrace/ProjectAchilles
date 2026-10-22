@@ -666,3 +666,33 @@ func TestBackupZstdModeAndNoPartialOnRenameFailure(t *testing.T) {
 		return nil
 	})
 }
+
+// Upgrade runs the new checkout's engine with this (old) binary, so it says
+// how to update the installer itself.
+func TestUpgradePrintsInstallerUpdateNotice(t *testing.T) {
+	var ran bool
+	f := gitFake("", "", "v2.3.0\nv2.4.0\n", "v2.3.0")
+	var out strings.Builder
+	d := upgradeDeps(t, f, nil, &ran)
+	d.Out, d.InstallerVersion = &out, "v2.3.0"
+	if err := Upgrade(context.Background(), d, "", true); err != nil {
+		t.Fatal(err)
+	}
+	want := "This installer binary is v2.3.0; the checkout is now v2.4.0. To update the installer itself, run: sudo " +
+		filepath.Join(d.RepoDir, "scripts", "install-onprem.sh") + " --dir " + d.RepoDir + " --ref v2.4.0 --no-run"
+	if !strings.Contains(out.String(), want) {
+		t.Fatalf("missing notice %q in:\n%s", want, out.String())
+	}
+
+	// A binary already at the target has nothing to update.
+	out.Reset()
+	f = gitFake("", "", "v2.3.0\nv2.4.0\n", "v2.3.0")
+	d = upgradeDeps(t, f, nil, &ran)
+	d.Out, d.InstallerVersion = &out, "v2.4.0"
+	if err := Upgrade(context.Background(), d, "", true); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out.String(), "To update the installer itself") {
+		t.Fatalf("notice printed for a matching binary:\n%s", out.String())
+	}
+}

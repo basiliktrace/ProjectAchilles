@@ -73,6 +73,9 @@ type Deps struct {
 	// RunEngine re-runs the install engine non-interactively with the
 	// existing config, printing its progress. Upgrade only.
 	RunEngine func(ctx context.Context) error
+	// InstallerVersion is this binary's version (main.version). Upgrade
+	// uses it to tell the operator how to update the installer itself.
+	InstallerVersion string
 }
 
 func (d Deps) now() time.Time {

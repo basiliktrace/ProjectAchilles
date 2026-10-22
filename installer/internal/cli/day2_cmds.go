@@ -47,7 +47,7 @@ func withSignals(h Handler) Handler {
 
 func registerDay2(r *Registry, dio day2IO) {
 	r.Register("status", statusCmd(dio))
-	r.Register("upgrade", withSignals(upgradeCmd(dio)))
+	r.Register("upgrade", withSignals(upgradeCmd(r, dio)))
 	r.Register("backup", withSignals(backupCmd(dio)))
 	r.Register("restore", withSignals(restoreCmd(dio)))
 }
@@ -86,7 +86,7 @@ func statusCmd(dio day2IO) Handler {
 	}
 }
 
-func upgradeCmd(dio day2IO) Handler {
+func upgradeCmd(r *Registry, dio day2IO) Handler {
 	return func(ctx context.Context, args []string) error {
 		flags := newFlagSet("upgrade", dio.stderr)
 		repo := flags.String("repo", "", repoFlagHelp)
@@ -98,6 +98,7 @@ func upgradeCmd(dio day2IO) Handler {
 		}
 		root := repoDir(*repo)
 		d := day2Deps(dio, root, *caDir)
+		d.InstallerVersion = r.version // read at run time: main sets it after init
 		cfgPath := filepath.Join(root, "deploy.config.env")
 		if _, err := os.Stat(cfgPath); err != nil {
 			return fmt.Errorf("%s not found: upgrade re-runs the install with the existing config", cfgPath)

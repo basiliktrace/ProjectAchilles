@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -122,6 +123,16 @@ func Upgrade(ctx context.Context, d Deps, ref string, yes bool) error {
 
 	if _, err := d.git(ctx, "checkout", target); err != nil {
 		return fmt.Errorf("checking out %s: %w", target, err)
+	}
+	// The engine below runs from the new checkout, but this binary stays
+	// the old one; updating it is a separate, explicit step.
+	if d.InstallerVersion != target {
+		v := d.InstallerVersion
+		if v == "" {
+			v = "(unknown)"
+		}
+		fmt.Fprintf(out, "This installer binary is %s; the checkout is now %s. To update the installer itself, run: sudo %s --dir %s --ref %s --no-run\n",
+			v, target, filepath.Join(d.RepoDir, "scripts", "install-onprem.sh"), d.RepoDir, target)
 	}
 	if d.RunEngine == nil {
 		return fmt.Errorf("no installer engine configured")
