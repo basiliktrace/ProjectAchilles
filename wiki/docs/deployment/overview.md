@@ -1,12 +1,12 @@
 ---
 sidebar_position: 1
 title: Overview & Comparison
-description: Compare all ProjectAchilles deployment targets — Docker Compose, public/on-prem server, Railway, Render, Fly.io, and Vercel.
+description: Compare all ProjectAchilles deployment targets — Docker Compose, public/on-prem server, on-prem LAN installer, Railway, Render, Fly.io, and Vercel.
 ---
 
 # Deployment Overview
 
-ProjectAchilles supports seven deployment targets. Choose based on your requirements for database, storage, agent build capability, and budget.
+ProjectAchilles supports eight deployment targets. Choose based on your requirements for database, storage, agent build capability, and budget.
 
 ## Comparison Matrix
 
