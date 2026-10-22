@@ -6,7 +6,13 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"sync"
+	"time"
 )
+
+// drainGrace is how long output may keep flowing after the script exits
+// before the reader is cut off (a daemonised descendant can hold the pipe).
+const drainGrace = 2 * time.Second
 
 // PhaseOrder is every phase id deploy-server.sh can emit, in script order.
 // Some are conditional on the install mode; the checklist shows the superset.
@@ -31,6 +37,12 @@ func (r Runner) Phases() []string { return PhaseOrder }
 // closed once the output ends; the returned func then waits for the process
 // and returns its error (an *exec.ExitError on non-zero exit). Cancelling ctx
 // kills the whole process group.
+//
+// Consumers should either drain the channel until it closes or cancel ctx.
+// The returned wait func is safe to call at any time: calling it stops event
+// delivery (remaining output is discarded) and blocks until the process has
+// exited and the channel is closed. To see every event, drain the channel
+// first and then call wait.
 func (r Runner) Start(ctx context.Context) (<-chan Event, func() error, error) {
 	cmd := exec.CommandContext(ctx, "bash", "scripts/deploy-server.sh", r.ConfigPath)
 	cmd.Dir = r.RepoRoot
@@ -58,31 +70,64 @@ func (r Runner) Start(ctx context.Context) (<-chan Event, func() error, error) {
 
 	events := make(chan Event, 64)
 	done := make(chan struct{})
+	abandon := make(chan struct{}) // closed by wait(): stop delivering events
+	var abandonOnce sync.Once
 	var waitErr error
+
+	exited := make(chan struct{})
 	go func() {
-		defer close(done)
-		defer pr.Close()
+		waitErr = cmd.Wait()
+		close(exited)
+	}()
+
+	readDone := make(chan struct{})
+	go func() {
+		defer close(readDone)
 		br := bufio.NewReaderSize(pr, 64*1024)
 		sending := true
 		for {
 			line, err := readLine(br)
-			if line != "" || err == nil {
-				if sending {
-					select {
-					case events <- ParseLine(line):
-					case <-ctx.Done():
-						sending = false // consumer gone; keep draining
-					}
+			if sending && (line != "" || err == nil) {
+				select {
+				case events <- ParseLine(line):
+				case <-ctx.Done():
+					sending = false // consumer gone; keep draining the pipe
+				case <-abandon:
+					sending = false
 				}
 			}
 			if err != nil {
-				break
+				return
 			}
 		}
-		waitErr = cmd.Wait()
+	}()
+
+	go func() {
+		defer close(done)
+		defer pr.Close()
+		select {
+		case <-readDone:
+			<-exited
+		case <-exited:
+			// The script is gone, but a descendant that left the process
+			// group may still hold the pipe open. Give buffered output a
+			// moment to drain, then force the reader to stop.
+			select {
+			case <-readDone:
+			case <-time.After(drainGrace):
+				pr.Close()
+				<-readDone
+			}
+		}
 		close(events)
 	}()
-	return events, func() error { <-done; return waitErr }, nil
+
+	wait := func() error {
+		abandonOnce.Do(func() { close(abandon) })
+		<-done
+		return waitErr
+	}
+	return events, wait, nil
 }
 
 // readLine reads one full line of any length, without the trailing newline.

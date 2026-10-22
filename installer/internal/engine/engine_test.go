@@ -195,3 +195,62 @@ func TestPhaseOrderMatchesScript(t *testing.T) {
 		t.Fatalf("Phases() = %v", got)
 	}
 }
+
+func TestRunnerDoesNotHangOnEscapedDescendant(t *testing.T) {
+	root := fakeRepo(t, `#!/usr/bin/env bash
+setsid sleep 300 >&1 2>&1 &
+echo "child=$!"
+exit 0
+`)
+	ch, wait, err := Runner{RepoRoot: root, ConfigPath: "c"}.Start(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := <-ch
+	pid := strings.TrimPrefix(e.Text, "child=")
+	defer exec.Command("kill", pid).Run()
+	start := time.Now()
+	collect(t, ch) // must close despite the descendant holding the pipe
+	if err := wait(); err != nil {
+		t.Fatal(err)
+	}
+	if d := time.Since(start); d > 6*time.Second {
+		t.Fatalf("took %v", d)
+	}
+}
+
+func TestRunnerWaitSafeWithoutReading(t *testing.T) {
+	root := fakeRepo(t, `#!/usr/bin/env bash
+for i in $(seq 1 500); do echo "line $i"; done
+`)
+	ctx, cancel := context.WithCancel(context.Background())
+	_, wait, err := Runner{RepoRoot: root, ConfigPath: "c"}.Start(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cancel() // consumer walks away without reading
+	finished := make(chan struct{})
+	go func() { wait(); close(finished) }()
+	select {
+	case <-finished:
+	case <-time.After(10 * time.Second):
+		t.Fatal("wait hung")
+	}
+}
+
+func TestRunnerWaitWithoutCancelOrReading(t *testing.T) {
+	root := fakeRepo(t, `#!/usr/bin/env bash
+for i in $(seq 1 500); do echo "line $i"; done
+`)
+	_, wait, err := Runner{RepoRoot: root, ConfigPath: "c"}.Start(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	finished := make(chan struct{})
+	go func() { wait(); close(finished) }()
+	select {
+	case <-finished:
+	case <-time.After(10 * time.Second):
+		t.Fatal("wait hung")
+	}
+}
