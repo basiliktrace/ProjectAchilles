@@ -26,6 +26,13 @@
 #                              render-only mode
 #   ACHILLES_INSTALLER_BIN     achilles-installer binary, needed for
 #                              TLS_MODE=achilles-ca (default: repo root)
+#   ACHILLES_HOSTS_FILE_OVERRIDE  test hook: hosts file for HOSTS_ENTRY
+#                              (default: /etc/hosts)
+#
+# HOSTS_ENTRY=true makes the config phase keep exactly one
+# "<CADDY_BIND_IP> <ACHILLES_DOMAIN> # projectachilles" line in /etc/hosts
+# (replacing an older one), in every mode including render-only. Any other
+# value leaves the file alone.
 #
 # Phases, in order: config, validate, docker, ca, caddy-render, backend-env,
 # root-env, firewall, up, ca-export, bootstrap, renew-timer. `ca`, `bootstrap`
@@ -154,7 +161,7 @@ CONFIG_FILE=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --render-only) RENDER_ONLY=1 ;;
-    -h|--help) sed -n '2,35p' "${BASH_SOURCE[0]}"; exit 0 ;;
+    -h|--help) sed -n '2,42p' "${BASH_SOURCE[0]}"; exit 0 ;;
     -*) die "unknown option: $1" ;;
     *) [ -z "$CONFIG_FILE" ] || die "unexpected argument: $1"; CONFIG_FILE="$1" ;;
   esac
@@ -188,6 +195,53 @@ SEED_ES="${SEED_ES:-false}"
 CADDY_BIND_IP="${CADDY_BIND_IP:-}"
 CA_INCLUDE_IP="${CA_INCLUDE_IP:-false}"
 ACHILLES_INSTALLER_BIN="${ACHILLES_INSTALLER_BIN:-${REPO_ROOT}/achilles-installer}"
+CA_ROTATE="${CA_ROTATE:-false}"
+
+# HOSTS_ENTRY=true: keep exactly one "<ip> <domain> # projectachilles" line in
+# the hosts file, replacing any earlier one in place. The values are checked
+# first so nothing but an address and a hostname can reach the file.
+HOSTS_FILE="${ACHILLES_HOSTS_FILE_OVERRIDE:-/etc/hosts}"
+HOSTS_MARK="# projectachilles"
+update_hosts() {
+  local line="$1" src="$HOSTS_FILE" tmp
+  [ -e "$src" ] || src=/dev/null
+  tmp="$(mktemp)"
+  if ! awk -v line="$line" -v mark="$HOSTS_MARK" '
+      function ours(s,  n) {
+        n = length(mark)
+        return length(s) > n && substr(s, length(s) - n + 1) == mark && substr(s, length(s) - n, 1) ~ /[ \t]/
+      }
+      ours($0) { if (!done) { print line; done = 1 }; next }
+      { print }
+      END { if (!done) print line }
+    ' "$src" > "$tmp"; then
+    rm -f "$tmp"
+    die "could not read ${HOSTS_FILE}"
+  fi
+  if cmp -s "$tmp" "$HOSTS_FILE"; then
+    rm -f "$tmp"
+    c_ok "${HOSTS_FILE} already maps ${ACHILLES_DOMAIN}"
+    return 0
+  fi
+  if ! as_root tee "$HOSTS_FILE" < "$tmp" > /dev/null; then
+    rm -f "$tmp"
+    die "could not write ${HOSTS_FILE}"
+  fi
+  rm -f "$tmp"
+  c_ok "Mapped ${ACHILLES_DOMAIN} in ${HOSTS_FILE}"
+}
+if [ "${HOSTS_ENTRY:-}" = true ]; then
+  hosts_ip="${CADDY_BIND_IP#\[}"; hosts_ip="${hosts_ip%\]}"
+  hosts_name="${ACHILLES_DOMAIN:-}"; hosts_name="${hosts_name%.}"
+  if [ -z "$hosts_ip" ] || [ -z "$hosts_name" ]; then
+    die "HOSTS_ENTRY=true needs ACHILLES_DOMAIN and CADDY_BIND_IP set in ${CONFIG_FILE}."
+  fi
+  [[ "$hosts_ip" =~ ^[0-9A-Fa-f:.]+$ ]] \
+    || die "HOSTS_ENTRY=true: CADDY_BIND_IP '${CADDY_BIND_IP}' is not an IP address."
+  [[ "$hosts_name" =~ ^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$ ]] \
+    || die "HOSTS_ENTRY=true: ACHILLES_DOMAIN '${ACHILLES_DOMAIN}' is not a hostname."
+  update_hosts "${hosts_ip} ${hosts_name} ${HOSTS_MARK}"
+fi
 ok config
 
 # ---------------------------------------------------------------------------
@@ -223,6 +277,10 @@ case "$TLS_MODE" in
     case "$CA_INCLUDE_IP" in
       true|false) : ;;
       *) die "Invalid CA_INCLUDE_IP='${CA_INCLUDE_IP}' (expected: true | false)" ;;
+    esac
+    case "$CA_ROTATE" in
+      true|false) : ;;
+      *) die "Invalid CA_ROTATE='${CA_ROTATE}' (expected: true | false)" ;;
     esac ;;
   *)
     die "Invalid TLS_MODE='${TLS_MODE}' (expected: acme-http | acme-dns | internal | byo | achilles-ca)" ;;
@@ -299,6 +357,9 @@ if [ "$TLS_MODE" = "achilles-ca" ]; then
   fi
   ca_args=(ca init --dir "$CA_DIR" --zone "$CA_ZONE" --ip "$BIND_IP_BARE")
   if [ "$CA_INCLUDE_IP" = true ]; then ca_args+=(--include-ip); fi
+  # CA_ROTATE replaces only a root whose constraints differ, so re-runs with
+  # the flag still set keep the root they rotated to.
+  if [ "$CA_ROTATE" = true ]; then ca_args+=(--rotate --if-changed); fi
   ca_args+=(--label "${ORGANIZATION_NAME:-$ACHILLES_DOMAIN}")
   installer "${ca_args[@]}" || fail ca "achilles-installer ca init failed (see the output above)."
   c_ok "CA ready in ${CA_DIR}"
