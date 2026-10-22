@@ -22,7 +22,7 @@ Stop hoping your defenses work. Start proving it.
 </div>
 
 <p align="center">
-  <img src="docs/screenshots/security-dashboard.png" alt="ProjectAchilles Security Dashboard — attention banner, KPI strip, trend overview, severity mix, ATT&CK coverage, and category breakdown" width="800">
+  <img src="docs/screenshots/security-dashboard.png" alt="ProjectAchilles Security Dashboard — attention banner, KPI strip with Defense, Secure and ZTA scores, trend overview, testing cadence, ATT&CK outcome matrix, and threat-actor readiness" width="800">
 </p>
 
 ---
@@ -180,7 +180,7 @@ The three server targets share one engine (`scripts/deploy-server.sh` + `docker-
 One landing page for posture across the test library, the endpoint fleet, and Elasticsearch analytics — replacing the three separate module dashboards.
 
 <p align="center">
-  <img src="docs/screenshots/security-dashboard.png" alt="Security Dashboard — attention banner, KPI strip, trend overview, severity mix, ATT&CK coverage, and category breakdown" width="800">
+  <img src="docs/screenshots/security-dashboard.png" alt="Security Dashboard — attention banner, KPI strip, trend overview, testing cadence, ATT&CK outcome matrix, and threat-actor readiness" width="800">
 </p>
 
 - **Attention banner** — derived, never stored: offline agents, stale agents, failed tasks in the last 24 h, outdated binaries, and git sync failures, each linking to the page that resolves it
@@ -232,7 +232,7 @@ Threat Intelligence Article
 | Kill chain diagram | Interactive HTML | Visualizes multi-stage attack flow |
 
 <p align="center">
-  <img src="docs/screenshots/test-detail-killchain.png" alt="Test detail view — multi-stage kill chain diagram with stage progression, source files, and build artifacts" width="800">
+  <img src="docs/screenshots/test-detail-killchain.png" alt="Test detail view — ATT&CK technique cards and a five-stage kill chain diagram beside documentation, build artifacts and source files" width="800">
 </p>
 
 **Test categories:**
@@ -283,7 +283,7 @@ A Bun-powered command-line interface for managing the entire platform from the t
 Browse the full test library with rich metadata and execute tests directly from the UI.
 
 <p align="center">
-  <img src="docs/screenshots/tests.png" alt="Tests — facet rail with category, severity, platform and threat-actor filters beside grouped test cards" width="800">
+  <img src="docs/screenshots/tests.png" alt="Tests — facet rail with category, platform and threat-actor filters beside the list view with techniques, platform, stages, fleet result and score per test" width="800">
 </p>
 
 - **Facet rail** — category, platform, threat actor, and a "not run yet" toggle, with live counts and client-side filtering
@@ -298,7 +298,7 @@ Browse the full test library with rich metadata and execute tests directly from 
 Deploy a lightweight Go agent to endpoints for remote test execution with full lifecycle management.
 
 <p align="center">
-  <img src="docs/screenshots/agents.png" alt="Agents — fleet pulse rail with online/offline ring, version rollout, groups, key rotation and binaries beside the grouped agent table" width="800">
+  <img src="docs/screenshots/agents.png" alt="Agents — outdated-version banner with Update All, fleet pulse rail with online/offline ring, version rollout, groups, key rotation and binaries beside the grouped agent table" width="800">
 </p>
 
 - **Enrollment** — Token-based registration with configurable TTL and max uses
@@ -333,7 +333,7 @@ Deploy a lightweight Go agent to endpoints for remote test execution with full l
 Quantify your security posture with 30+ query endpoints powered by Elasticsearch.
 
 <p align="center">
-  <img src="docs/screenshots/analytics-dashboard.png" alt="Analytics dashboard — results by error type, ATT&CK technique distribution, score by category, Defense Score ledger, and trend overview" width="800">
+  <img src="docs/screenshots/analytics-dashboard.png" alt="Analytics dashboard — results by error type, ATT&CK technique distribution with Defender and CrowdStrike alert badges, attack chain depth, Defense Score ledger, and trend overview" width="800">
 </p>
 
 - **Defense Score** — Latest-result score (`basis=latest`) or per-execution score, with breakdowns by test, technique, category, hostname, and severity
@@ -356,10 +356,10 @@ Quantify your security posture with 30+ query endpoints powered by Elasticsearch
 <summary>More: the posture section</summary>
 <br>
 <p align="center">
-  <img src="docs/screenshots/analytics-posture.png" alt="Analytics posture row — Defense Score ledger and Secure Score beside the trend overview, with test activity and top remediation controls" width="800">
+  <img src="docs/screenshots/analytics-posture.png" alt="Analytics posture row — latest-result Defense Score ledger, Defender Secure Score and CrowdStrike ZTA score beside the trend overview, with test activity and top remediation controls" width="800">
 </p>
 <p align="center">
-  <img src="docs/screenshots/executions-table.png" alt="Executions — master-detail view with grouped bundle runs on the left and per-control Protected/Unprotected results on the right" width="800">
+  <img src="docs/screenshots/executions-table.png" alt="Executions — master-detail view with bundle runs on the left and run detail on the right: attack-chain strip and ordered stages with Prevented, Protected, Unprotected and Detected verdicts" width="800">
 </p>
 
 The Defense Score renders as a **ledger** — a ring gauge beside four reconciling lines (Actual, EDR-only, Risk-accepted, Inconclusive) — rather than one big number with the reconciliation left implicit. Secure Score and Top Remediation Controls appear only when Microsoft Defender is configured; without it the remaining cards reflow to fill the row. A CrowdStrike ZTA score card follows the same pattern when CrowdStrike Falcon is configured.
