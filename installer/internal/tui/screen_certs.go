@@ -67,6 +67,7 @@ type certsScreen struct {
 	bundle    *ca.Bundle
 	bundleErr error
 	keep      string // certDrift: keep | rotate
+	rotateYes bool   // certDrift confirm when keeping is impossible (default No)
 	rotate    bool
 
 	entIP      bool
@@ -274,18 +275,30 @@ func (c *certsScreen) canKeep() bool {
 
 func (c *certsScreen) toDrift() tea.Cmd {
 	c.step = certDrift
-	bz, binc, bip := c.bundlePolicy()
-	var opts []huh.Option[string]
-	if c.canKeep() {
-		opts = append(opts, huh.NewOption("Keep the existing CA (uses "+describePolicy(bz, binc, bip)+")", "keep"))
-	}
-	opts = append(opts, huh.NewOption("Rotate: new root CA; every endpoint must re-trust it", "rotate"))
-	c.keep = opts[0].Value
 	var cmd tea.Cmd
+	if !c.canKeep() {
+		// Rotation is the only way forward, so it must be an explicit Yes:
+		// a bare enter answers No and returns to the zone choice.
+		c.rotateYes = false
+		c.form, cmd = c.s.newForm(huh.NewGroup(
+			huh.NewConfirm().
+				Title("Rotate the root CA?").
+				Description("A new root replaces the existing one; every endpoint must re-trust it before it trusts this server again.").
+				Affirmative("Yes, rotate").
+				Negative("No, go back").
+				Value(&c.rotateYes),
+		))
+		return cmd
+	}
+	bz, binc, bip := c.bundlePolicy()
+	c.keep = "keep"
 	c.form, cmd = c.s.newForm(huh.NewGroup(
 		huh.NewSelect[string]().
 			Title("What should happen to the existing CA?").
-			Options(opts...).
+			Options(
+				huh.NewOption("Keep the existing CA (uses "+describePolicy(bz, binc, bip)+")", "keep"),
+				huh.NewOption("Rotate: new root CA; every endpoint must re-trust it", "rotate"),
+			).
 			Value(&c.keep),
 	))
 	return cmd
@@ -521,6 +534,13 @@ func (c *certsScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return next(done(c))
 	case certDrift:
+		if !c.canKeep() {
+			if !c.rotateYes {
+				return next(c.toZone())
+			}
+			c.rotate = true
+			return next(done(c))
+		}
 		if c.keep == "keep" {
 			c.zone, c.includeIP, _ = c.bundlePolicy()
 			c.rotate = false
@@ -566,7 +586,12 @@ func (c *certsScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (c *certsScreen) Help() string {
 	switch c.step {
-	case certMode, certZone, certDrift:
+	case certDrift:
+		if !c.canKeep() {
+			return "←/→ choose · enter confirm · esc back · ctrl+c quit"
+		}
+		return "↑/↓ choose · enter next · esc back · ctrl+c quit"
+	case certMode, certZone:
 		return "↑/↓ choose · enter next · esc back · ctrl+c quit"
 	case certIP, certEntIP, certModeWarn:
 		return "←/→ choose · enter next · esc back · ctrl+c quit"
@@ -611,7 +636,9 @@ func (c *certsScreen) View() tea.View {
 		b.WriteString("  Chosen:   " + describePolicy(c.zone, c.includeIP, c.bindIP()) + "\n\n")
 		para("A root's constraints can't change without re-issuing the root and re-distributing it to every endpoint (GPO, bootstrap script). Until an endpoint has the new root it won't trust this server.")
 		if !c.canKeep() {
-			b.WriteString(t.Muted.Render(wrap("Keeping it isn't possible: "+c.host()+" is outside "+bz+". Press esc to choose differently.", w)) + "\n\n")
+			b.WriteString(t.Strong.Render("Keeping it isn't possible:") + "\n")
+			b.WriteString(wrap(c.host()+" is outside "+bz+".", w) + "\n")
+			b.WriteString(t.Muted.Render(wrap("Answer No to pick another zone, or go back (esc) to change the hostname.", w)) + "\n\n")
 		}
 		b.WriteString(c.form.View())
 	case certEntIP:

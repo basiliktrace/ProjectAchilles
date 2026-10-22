@@ -719,6 +719,59 @@ func TestCADriftRotate(t *testing.T) {
 	}
 }
 
+// When the hostname is outside the existing CA's zone, keeping it isn't
+// possible. Rotating is then an explicit Yes on a confirm that defaults to
+// No, so a bare enter never commits a fleet-wide root rotation.
+func TestCADriftOutsideZoneEnterDoesNotRotate(t *testing.T) {
+	deps := testDeps(t)
+	mkCA(t, deps, "lab.example.com", false)
+	d := start(t, deps, nil)
+	d.toCerts(testHost)
+	d.enter()
+	d.waitText("name-constrained")
+	d.enter()
+	d.waitText("LAN IP")
+	d.enter()
+	f := d.waitText("Rotate the root CA?", "outside lab.example.com")
+	checkGolden(t, "13-certs-ca-rotate-confirm", f)
+	if !strings.Contains(f, "every endpoint") {
+		t.Errorf("confirm should say every endpoint must re-trust:\n%s", f)
+	}
+	if strings.Contains(f, "Keep the existing CA") {
+		t.Errorf("keep offered although the hostname is outside the zone:\n%s", f)
+	}
+	d.enter() // default: No
+	d.waitFor("back on the zone choice", func(f string) bool {
+		return strings.Contains(f, "name-constrained") && !strings.Contains(f, "Rotate the root CA?")
+	})
+	a := d.quit()
+	if a.Outcome().Action != ActionAbort {
+		t.Fatalf("wizard finished after a bare enter: %v", a.Outcome().Action)
+	}
+	if a.Outcome().Config.CARotate {
+		t.Fatal("CA_ROTATE set by a bare enter")
+	}
+}
+
+func TestCADriftOutsideZoneExplicitYesRotates(t *testing.T) {
+	deps := testDeps(t)
+	mkCA(t, deps, "lab.example.com", false)
+	d := start(t, deps, nil)
+	d.toCerts(testHost)
+	d.enter()
+	d.waitText("name-constrained")
+	d.enter()
+	d.waitText("LAN IP")
+	d.enter()
+	d.waitText("Rotate the root CA?")
+	d.press(tea.KeyLeft) // move to "Yes"
+	d.enter()
+	c := d.final().Outcome().Config
+	if !c.CARotate || c.CAZone != "corp.example.com" {
+		t.Fatalf("rotate=%v zone=%q, want true / corp.example.com", c.CARotate, c.CAZone)
+	}
+}
+
 func TestCANoDriftWhenMatching(t *testing.T) {
 	deps := testDeps(t)
 	mkCA(t, deps, "corp.example.com", false)
