@@ -271,7 +271,7 @@ Use placeholders instead — `<elasticsearch-api-key>`, `pk_live_XXX`, `${ENV_VA
 <type>(<scope>): <description>
 ```
 Types: `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `chore`
-Scopes: `frontend`, `backend`, `backend-serverless`, `agent`, `analytics`, `browser`, `docker`, `render`, `vercel`, `fly`, `settings`, `certs`, `deps`, `ci`, `release`, `wiki`
+Scopes: `frontend`, `backend`, `backend-serverless`, `agent`, `analytics`, `browser`, `docker`, `render`, `vercel`, `fly`, `settings`, `certs`, `deps`, `ci`, `release`, `wiki`, `installer`
 
 ## CI/CD
 
@@ -305,6 +305,8 @@ cp deploy.config.env.example deploy.config.env   # fill in domain, Clerk keys, T
 ./scripts/deploy-remote.sh u@host # install on a remote SSH host (on-prem entry point)
 ./scripts/deploy-do.sh            # create a DigitalOcean droplet, then install
 ```
+
+On-prem LAN installs can instead use the Go TUI installer, `achilles-installer` (`installer/`): a wizard around `scripts/deploy-server.sh` with `TLS_MODE=achilles-ca` (a name-constrained ProjectAchilles root + intermediate CA) and day-2 `status`, `upgrade`, `backup`, `restore`. Its bootstrap script `scripts/install-onprem.sh` lands in Task 15.
 
 `TLS_MODE` selects certificate issuance: `acme-http` (public, Let's Encrypt HTTP-01), `acme-dns` (Let's Encrypt DNS-01, no inbound needed — builds a custom Caddy image with the DNS-provider plugin), `internal` (Caddy local CA; root CA exported for browsers + the agent's `ca_cert`), or `byo` (mount cert/key PEM). `ES_MODE` is `self` (bundled ES container, ≥4 GB RAM) or `cloud` (Elastic Cloud). The installer writes `backend/.env` + root `.env` (mode 600, gitignored) and is idempotent. See the two guides above; the public guide holds the shared reference (architecture, backups, day-2).
 
