@@ -938,8 +938,9 @@ func TestEngineFullRunExistingModes(t *testing.T) {
 // TestEngineFullRunRestartsCaddyOnCAChange: `compose up` leaves a running
 // Caddy alone when only its bind-mounted CA files change, and Caddy reads them
 // only at start. After `up` the engine restarts Caddy (deleting its cached
-// leaves first) exactly when the intermediate is newer than the container, so
-// a rotation takes effect and a plain re-run restarts nothing.
+// leaves first) when the intermediate is newer than the container, or always
+// when this run's `ca` phase changed it, so a rotation takes effect even if
+// `up` recreated Caddy, and a plain re-run restarts nothing.
 func TestEngineFullRunRestartsCaddyOnCAChange(t *testing.T) {
 	s := newSandbox(t, "achilles-ca", "")
 	state := addFullRunStubs(t, s)
@@ -991,9 +992,13 @@ exit 0
 		return calls
 	}
 
-	// First install: Caddy is created by `up`, after the CA: no restart.
-	if calls := run(time.Now().Add(time.Hour), ""); len(calls) != 0 {
-		t.Fatalf("first install restarted Caddy: %v", calls)
+	want := []string{clearLeaves, restart}
+	// First install: the CA is created in this run, so the leaf cache is
+	// cleared and Caddy restarted even though `up` started it after the CA.
+	// (The same run covers an install switching to achilles-ca from another
+	// TLS mode, whose caddy-data volume caches Caddy's own local-CA leaves.)
+	if calls := run(time.Now().Add(time.Hour), ""); strings.Join(calls, "|") != strings.Join(want, "|") {
+		t.Fatalf("first install: want %v, got %v", want, calls)
 	}
 	// Caddy has been running since after the intermediate was written.
 	issued := time.Now().Add(-2 * time.Hour)
@@ -1010,11 +1015,23 @@ exit 0
 		t.Fatalf("re-run rewrote the intermediate (mtime %v, want %v; %v)", fi.ModTime(), issued, err)
 	}
 
-	// CA_ROTATE with changed constraints rotates root + intermediate: one
-	// leaf-cache delete, then one restart, in that order.
-	calls := run(started, "CA_ROTATE=true\nCA_INCLUDE_IP=false\n")
-	if len(calls) != 2 || calls[0] != clearLeaves || calls[1] != restart {
-		t.Fatalf("rotation: want [%q %q], got %v", clearLeaves, restart, calls)
+	// Re-run with nothing changed and a Caddy started after the intermediate
+	// (e.g. `up` recreated it for another reason): still nothing.
+	if calls := run(time.Now().Add(time.Hour), ""); len(calls) != 0 {
+		t.Fatalf("re-run with an unchanged CA and a recreated Caddy restarted it: %v", calls)
+	}
+
+	// CA_ROTATE with changed constraints rotates root + intermediate while
+	// Caddy keeps running: one leaf-cache delete, then one restart.
+	if calls := run(started, "CA_ROTATE=true\nCA_INCLUDE_IP=false\n"); strings.Join(calls, "|") != strings.Join(want, "|") {
+		t.Fatalf("rotation: want %v, got %v", want, calls)
+	}
+
+	// A rotation in a run whose `up` also recreated Caddy: its start time is
+	// newer than the new intermediate, but the caddy-data volume still caches
+	// the old root's leaves, so the delete + restart must happen anyway.
+	if calls := run(time.Now().Add(time.Hour), "CA_INCLUDE_IP=true\n"); strings.Join(calls, "|") != strings.Join(want, "|") {
+		t.Fatalf("rotation + recreated Caddy: want %v, got %v", want, calls)
 	}
 }
 
@@ -1164,5 +1181,33 @@ exit 0
 	}, []string{"/bin/sh", s.path("scripts", "ca-renew.sh"), "--restart-only"})
 	if r.code != 0 || len(stubLines(t, s, "installer")) != 0 || len(restarts()) != 1 {
 		t.Fatalf("--restart-only: want exit 0, no installer call and one restart\n%s\n%v", r, stubLines(t, s, ""))
+	}
+
+	// --force restarts (leaf cache first) even when Caddy started after the
+	// intermediate; without it the same state restarts nothing.
+	restartOnly := func(args ...string) result {
+		t.Helper()
+		if err := os.Remove(s.stubLog); err != nil && !errors.Is(err, os.ErrNotExist) {
+			t.Fatal(err)
+		}
+		return s.exec(t, map[string]string{
+			"ACHILLES_INSTALLER_BIN": "",
+			"ACHILLES_CA_DIR":        s.caDir,
+			"ACHILLES_REPO_ROOT":     s.root,
+			"FAKE_CID":               cid,
+			"FAKE_STARTED":           started.Format(time.RFC3339Nano),
+		}, append([]string{"/bin/sh", s.path("scripts", "ca-renew.sh")}, args...))
+	}
+	setIssued(older)
+	if r = restartOnly("--restart-only"); r.code != 0 || len(restarts()) != 0 {
+		t.Fatalf("--restart-only with a current Caddy: want no restart\n%s", r)
+	}
+	r = restartOnly("--restart-only", "--force")
+	if l := stubLines(t, s, "docker compose"); r.code != 0 || len(restarts()) != 1 ||
+		!strings.Contains(strings.Join(l, "\n"), " exec -T caddy rm -rf /data/caddy/certificates/local") {
+		t.Fatalf("--force: want the leaf cache deleted and one restart\n%s\n%v", r, l)
+	}
+	if r = restartOnly("--bogus"); r.code != 2 {
+		t.Fatalf("unknown argument: want exit 2\n%s", r)
 	}
 }

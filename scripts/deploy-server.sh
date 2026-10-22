@@ -156,6 +156,20 @@ install_root_copy() {
   as_root install -o root -g root -m 0755 "$1" "$2" || fail "$CURRENT_PHASE" "could not install $2"
 }
 
+# Root-only reads of the CA dir; direct under the test override.
+ca_as_root() {
+  if [ -n "${ACHILLES_CA_DIR_OVERRIDE:-}" ]; then "$@"; else as_root "$@"; fi
+}
+
+# ca_intermediate_sum: the intermediate's SHA-256, empty when there is none.
+# The `ca` phase compares it before and after `ca init` (CA_CHANGED).
+CA_CHANGED=0
+ca_intermediate_sum() {
+  local f="${CA_DIR}/caddy/intermediate.crt"
+  ca_as_root test -f "$f" || return 0
+  ca_as_root sha256sum "$f" | cut -d' ' -f1
+}
+
 # Runs achilles-installer; as root for the real CA dir (keys are root-only).
 installer() {
   if [ -n "${ACHILLES_CA_DIR_OVERRIDE:-}" ]; then
@@ -381,6 +395,7 @@ if [ "$TLS_MODE" = "achilles-ca" ]; then
   if [ ! -f "$ACHILLES_INSTALLER_BIN" ] || [ ! -x "$ACHILLES_INSTALLER_BIN" ]; then
     fail ca "achilles-installer binary not found or not executable at ${ACHILLES_INSTALLER_BIN}; set ACHILLES_INSTALLER_BIN to its path."
   fi
+  inter_before="$(ca_intermediate_sum)"
   ca_args=(ca init --dir "$CA_DIR" --zone "$CA_ZONE" --ip "$BIND_IP_BARE")
   if [ "$CA_INCLUDE_IP" = true ]; then ca_args+=(--include-ip); fi
   # CA_ROTATE replaces only a root whose constraints differ, so re-runs with
@@ -388,6 +403,7 @@ if [ "$TLS_MODE" = "achilles-ca" ]; then
   if [ "$CA_ROTATE" = true ]; then ca_args+=(--rotate --if-changed); fi
   ca_args+=(--label "${ORGANIZATION_NAME:-$ACHILLES_DOMAIN}")
   installer "${ca_args[@]}" || fail ca "achilles-installer ca init failed (see the output above)."
+  [ "$(ca_intermediate_sum)" = "$inter_before" ] || CA_CHANGED=1
   c_ok "CA ready in ${CA_DIR}"
   ok ca
 fi
@@ -587,15 +603,16 @@ if [ "$RENDER_ONLY" = 0 ]; then
   # changed (rotation, `ca init --rotate`, `ca renew`), and Caddy reads them
   # only at start. Restart it, with its cached leaves deleted, when the
   # intermediate is newer than the container: the timer's own check
-  # (ca-renew.sh), so a re-run with nothing changed restarts nothing.
+  # (ca-renew.sh), so a re-run with nothing changed restarts nothing. When
+  # this run's `ca` phase changed the intermediate (a rotation, or a CA created
+  # for an install that ran another TLS mode), always do it (--force): `up`
+  # may have recreated Caddy, so its start time is fresh, but the caddy-data
+  # volume still caches leaves from the previous CA.
   if [ "$TLS_MODE" = "achilles-ca" ]; then
     caddy_ca_check=(env "ACHILLES_CA_DIR=${CA_DIR}" "ACHILLES_REPO_ROOT=${REPO_ROOT}"
       /bin/sh "${SCRIPT_DIR}/ca-renew.sh" --restart-only)
-    if [ -n "${ACHILLES_CA_DIR_OVERRIDE:-}" ]; then
-      "${caddy_ca_check[@]}" || fail up "could not restart Caddy onto the current CA (see the output above)."
-    else
-      as_root "${caddy_ca_check[@]}" || fail up "could not restart Caddy onto the current CA (see the output above)."
-    fi
+    [ "$CA_CHANGED" = 0 ] || caddy_ca_check+=(--force)
+    ca_as_root "${caddy_ca_check[@]}" || fail up "could not restart Caddy onto the current CA (see the output above)."
   fi
   ok up
 fi
