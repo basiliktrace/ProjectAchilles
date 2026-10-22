@@ -152,3 +152,50 @@ func TestEngineCARotateInvalidValue(t *testing.T) {
 		t.Fatalf("want ::fail validate\n%s", r)
 	}
 }
+
+// Render-only never touches the real /etc/hosts: without the test override
+// the hosts step is validated but not applied.
+func TestHostsEntrySkippedInRenderOnlyWithoutOverride(t *testing.T) {
+	s, _ := hostsSandbox(t, "HOSTS_ENTRY=true\n", "")
+	delete(s.env, "ACHILLES_HOSTS_FILE_OVERRIDE")
+	for _, tool := range []string{"tee", "awk", "cmp"} {
+		writeFile(t, filepath.Join(s.stubs, tool), "#!/bin/sh\necho \""+tool+" $*\" >> \"$STUB_LOG\"\nexec /usr/bin/"+tool+" \"$@\"\n", 0o755)
+	}
+	r := s.mustRun(t, nil) // ACHILLES_RENDER_ONLY=1 from the sandbox
+	for _, l := range stubLines(t, s, "") {
+		if strings.Contains(l, "/etc/hosts") {
+			t.Errorf("render-only touched /etc/hosts: %s", l)
+		}
+	}
+	if strings.Contains(r.stdout, "Mapped ") || strings.Contains(r.stdout, "already maps") {
+		t.Errorf("hosts step ran in render-only:\n%s", r)
+	}
+
+	// The values are still validated in render-only.
+	s.setConfig(t, readFile(t, s.cfg)+"CADDY_BIND_IP='10.0.5.20 evil'\n")
+	r = s.run(t, nil, s.cfg)
+	if e, ok := failEvent(t, r); r.code == 0 || !ok || e.id != "config" {
+		t.Fatalf("want ::fail config for an unsafe value in render-only\n%s", r)
+	}
+}
+
+// A sticky CA_ROTATE=true never replaces a root that can't be read: the ca
+// phase fails visibly and the CA is left as it was.
+func TestEngineCARotateRefusesCorruptRoot(t *testing.T) {
+	s := newSandbox(t, "achilles-ca", "")
+	s.mustRun(t, nil)
+	rootPath := filepath.Join(s.caDir, "root.crt")
+	writeFile(t, rootPath, "-----BEGIN CERTIFICATE-----\ngarbage\n-----END CERTIFICATE-----\n", 0o644)
+	keyBefore := readFile(t, filepath.Join(s.caDir, "root.key"))
+	s.setConfig(t, readFile(t, s.cfg)+"CA_ZONE=example.com\nCA_ROTATE=true\n")
+	r := s.run(t, map[string]string{"ACHILLES_PROGRESS": "1"}, s.cfg)
+	if e, ok := failEvent(t, r); r.code == 0 || !ok || e.id != "ca" {
+		t.Fatalf("want ::fail ca\n%s", r)
+	}
+	if got := readFile(t, rootPath); !strings.Contains(got, "garbage") {
+		t.Error("corrupt root.crt was replaced")
+	}
+	if readFile(t, filepath.Join(s.caDir, "root.key")) != keyBefore {
+		t.Error("root.key was replaced")
+	}
+}

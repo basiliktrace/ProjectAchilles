@@ -31,8 +31,9 @@
 #
 # HOSTS_ENTRY=true makes the config phase keep exactly one
 # "<CADDY_BIND_IP> <ACHILLES_DOMAIN> # projectachilles" line in /etc/hosts
-# (replacing an older one), in every mode including render-only. Any other
-# value leaves the file alone.
+# (replacing an older one). The values are always validated, but render-only
+# never writes the hosts file (unless ACHILLES_HOSTS_FILE_OVERRIDE points it
+# at a test file). Any other value leaves the file alone.
 #
 # Phases, in order: config, validate, docker, ca, caddy-render, backend-env,
 # root-env, firewall, up, ca-export, bootstrap, renew-timer. `ca`, `bootstrap`
@@ -161,7 +162,7 @@ CONFIG_FILE=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --render-only) RENDER_ONLY=1 ;;
-    -h|--help) sed -n '2,42p' "${BASH_SOURCE[0]}"; exit 0 ;;
+    -h|--help) sed -n '2,43p' "${BASH_SOURCE[0]}"; exit 0 ;;
     -*) die "unknown option: $1" ;;
     *) [ -z "$CONFIG_FILE" ] || die "unexpected argument: $1"; CONFIG_FILE="$1" ;;
   esac
@@ -240,7 +241,13 @@ if [ "${HOSTS_ENTRY:-}" = true ]; then
     || die "HOSTS_ENTRY=true: CADDY_BIND_IP '${CADDY_BIND_IP}' is not an IP address."
   [[ "$hosts_name" =~ ^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$ ]] \
     || die "HOSTS_ENTRY=true: ACHILLES_DOMAIN '${ACHILLES_DOMAIN}' is not a hostname."
-  update_hosts "${hosts_ip} ${hosts_name} ${HOSTS_MARK}"
+  # Like the firewall phase, render-only leaves the host alone; the override
+  # lets tests exercise the write against a temp file.
+  if [ "$RENDER_ONLY" = 0 ] || [ -n "${ACHILLES_HOSTS_FILE_OVERRIDE:-}" ]; then
+    update_hosts "${hosts_ip} ${hosts_name} ${HOSTS_MARK}"
+  else
+    c_ok "Render-only: not writing ${HOSTS_FILE}"
+  fi
 fi
 ok config
 
