@@ -34,7 +34,8 @@ You need root on the server, about an hour, and the items in
 flowchart LR
   subgraph internet["Internet"]
     clerk["Clerk (sign-in)"]
-    hub["Docker Hub, GitHub (images, test library)"]
+    reg["Docker Hub (images)"]
+    gh["GitHub (test library)"]
   end
   subgraph lan["Customer LAN"]
     dns["Internal DNS<br/>achilles.corp.example.com A 10.0.5.20"]
@@ -47,6 +48,7 @@ flowchart LR
       be["backend"]
       es["Elasticsearch (optional)"]
       ca[("ProjectAchilles CA<br/>/etc/projectachilles/ca")]
+      engine["Docker engine"]
       timer["achilles-ca-renew.timer<br/>(weekly)"]
     end
   end
@@ -61,7 +63,8 @@ flowchart LR
   dns -.-> browser
   browser -- "sign-in" --> clerk
   be -- "session verification" --> clerk
-  be -- "images, git sync" --> hub
+  engine -- "image pulls" --> reg
+  be -- "git sync" --> gh
 ```
 
 - **One origin.** Caddy terminates TLS and proxies everything to the frontend,
@@ -133,6 +136,11 @@ from the server.
 
 ### 5.1 Get the installer onto the server
 
+> **Releases up to and including v2.2.0 do not include the installer.** Until a
+> newer release is published, run `install-onprem.sh` with `--ref main`, which
+> builds the installer from source and needs Go 1.26 or later (the version in
+> `installer/go.mod`) and `make` on the server.
+
 `scripts/install-onprem.sh` is the one-command bootstrap. As root, it:
 
 1. checks the OS (Linux) and architecture (x86_64 or aarch64);
@@ -166,9 +174,9 @@ curl -fsSL https://raw.githubusercontent.com/projectachilles/ProjectAchilles/mai
 
 - **No release asset for the tag?** The script falls back to building the
   installer from source, which needs `go` (the version in `installer/go.mod`)
-  and `make`. Releases that predate the installer have no asset and no
-  `installer/` directory: use a release that ships it, or `--ref main` with Go
-  installed.
+  and `make`. Releases up to and including v2.2.0 do not include the installer
+  (no asset and no `installer/` directory). Until a newer release is published,
+  run with `--ref main` (needs Go 1.26 or later and `make`).
 - **Existing checkout:** the script refuses a directory that is not a
   ProjectAchilles git checkout, and refuses local changes. The one exception is
   `deploy/caddy/tls.caddy`, which older engines modified: it is restored
@@ -182,8 +190,9 @@ To start the wizard again later:
 cd /opt/projectachilles && sudo ./achilles-installer install
 ```
 
-The wizard needs a real terminal (80×24 or larger). With `TERM=dumb` or no TTY
-it exits and points you to the unattended form (section 12).
+The wizard needs a real terminal (TTY); it works best at 80×24 or larger. With
+`TERM=dumb` or no TTY it exits and points you to the unattended form
+(section 12).
 
 ### 5.2 The ten screens
 
@@ -387,16 +396,21 @@ own. Leaves are short-lived (Caddy's default is 12 hours).
 
 ### What the constraints cover
 
-- **DNS names.** Name-constraint-aware clients (Windows CryptoAPI, Go, OpenSSL,
-  .NET, current browsers) reject any certificate from this CA for a name outside
-  the zone. A leaf for `login.microsoftonline.com` signed with the real
+The CA keys can technically sign anything. The constraints and the EKU limit what
+**clients that enforce name constraints and EKU chaining** (Windows CryptoAPI,
+Go, OpenSSL, .NET, current browsers) **accept**: certificates this CA signs are
+accepted only as TLS server certificates, only for names in its zone, and for no
+IP address unless you allowed the LAN IP.
+
+- **DNS names.** Those clients reject any certificate from this CA for a name
+  outside the zone. A leaf for `login.microsoftonline.com` signed with the real
   intermediate key fails validation on Windows and Linux.
 - **IP addresses.** By default every IP SAN is excluded (`0.0.0.0/0` and `::/0`),
   because an absent IP constraint would leave IPs unconstrained. With the LAN IP
   allowed, only that single address is permitted.
-- **Usage.** The serverAuth EKU on both CA certificates limits what anything
-  under them is valid for to TLS server authentication: not code signing, client
-  authentication or email.
+- **Usage.** With the serverAuth EKU on both CA certificates, those clients
+  accept certificates under them only for TLS server authentication: not for
+  code signing, client authentication or email.
 - **Depth.** The intermediate cannot create further CAs (path length 0).
 
 ### What they don't cover
@@ -407,12 +421,14 @@ own. Leaves are short-lived (Caddy's default is 12 hours).
   narrowest zone; if `corp.example.com` hosts other important services, consider
   a dedicated subdomain for the server (e.g. `achilles.pa.corp.example.com`
   with zone `pa.corp.example.com`).
-- **Clients that ignore name constraints.** Old or embedded TLS stacks may not
-  enforce them. On Windows, DNS constraints are applied to a certificate with no
+- **Clients that ignore name constraints or EKU chaining.** Old or embedded TLS
+  stacks may enforce neither, and then accept what the keys sign for any name or
+  purpose. On Windows, DNS constraints are applied to a certificate with no
   SAN (CN only) in a server-auth context, which every TLS client uses; custom
   code that builds an `X509Chain` without the serverAuth policy would accept it.
 - **Revocation.** There is no CRL or OCSP. A compromised CA is handled by
-  rotating it and removing the old root from every endpoint.
+  rotating it ([Rotating after a suspected key compromise](#rotating-after-a-suspected-key-compromise))
+  and removing the old root from every endpoint.
 - **The server itself.** Anyone with root on the server can use the CA keys.
 
 ### Key custody
@@ -447,28 +463,76 @@ sudo systemctl start achilles-ca-renew.service        # run the check now
 journalctl -u achilles-ca-renew.service               # its output
 ```
 
-A manual `sudo /opt/projectachilles/achilles-installer ca renew` renews but does
-not restart Caddy; it prints the restart command, and the next timer run or
-engine run picks it up as well. When an install run changes the CA (creation or
-rotation), the engine itself restarts Caddy and clears its leaf cache.
+A manual `sudo /opt/projectachilles/achilles-installer ca renew` renews if due
+(fewer than 180 days left by default; `--if-expiring` changes the threshold) but
+does not restart Caddy. A plain `docker compose restart caddy` is not enough:
+Caddy keeps serving its cached leaf, which chains to the old intermediate, until
+that leaf nears expiry (up to about 12 hours). Instead run
+`sudo systemctl start achilles-ca-renew.service`, which deletes the cached leaves
+(`/data/caddy/certificates/local`) and restarts Caddy because the intermediate
+is newer than the container, or re-run the install (section 12), which does the
+same check. When an install run itself changes the CA (creation or rotation),
+the engine restarts Caddy and clears its leaf cache unconditionally.
 
 ### Rotation
 
 Rotation is never automatic. A new root means every endpoint must re-trust it.
+Until an endpoint has the new root, it does not trust the server, and its agent
+stays offline. To add the new root without re-enrolling, see
+[7.4](#74-manual-trust-only).
+
+#### Changing the zone or IP policy
 
 1. In the wizard choose **Reconfigure**, pick the new zone or IP policy, then
-   **Rotate** on the Certificates screen (or set `CA_ROTATE=true` in
-   `deploy.config.env` and run the unattended install). `CA_ROTATE=true`
-   replaces only a root whose constraints differ from `CA_ZONE` /
+   **Rotate** on the Certificates screen (or set `CA_ZONE` / `CA_INCLUDE_IP` and
+   `CA_ROTATE=true` in `deploy.config.env` and run the unattended install).
+   `CA_ROTATE=true` replaces only a root whose constraints differ from `CA_ZONE` /
    `CA_INCLUDE_IP`, so leaving it set does not rotate on every run.
-2. The engine re-renders the bootstrap scripts with the new pin and restarts
-   Caddy onto the new CA.
+2. The engine creates the new CA, re-renders the bootstrap scripts with the new
+   pin, and, because its own `ca` phase changed the CA, clears Caddy's leaf cache
+   and restarts it.
 3. Replace the root in the GPO (import the new `root.cer`, delete the old one),
    and update any copies of the bootstrap script.
 
-Until an endpoint has the new root, it does not trust the server, and its agent
-stays offline. To add the new root during the transition without re-enrolling,
-see [7.4](#74-manual-trust-only).
+#### Rotating after a suspected key compromise
+
+The wizard offers **Rotate** only when the zone or IP policy changes, and
+`CA_ROTATE=true` is a no-op when they match. To replace a root with the same
+constraints, rotate by hand. As root, in `/opt/projectachilles`:
+
+1. Create the new root and intermediate with the same values the engine uses:
+   `CA_ZONE`, `CADDY_BIND_IP`, `--include-ip` only if `CA_INCLUDE_IP=true`, and
+   `ORGANIZATION_NAME` (or, if that is empty, `ACHILLES_DOMAIN`) as the label:
+
+   ```bash
+   sudo ./achilles-installer ca init --dir /etc/projectachilles/ca      --zone corp.example.com --ip 10.0.5.20 --label 'Acme Corp' --rotate
+   ```
+
+   It prints a warning, the new root's SHA-256 and its SHA-1 thumbprint.
+2. Move Caddy onto the new CA, clearing its cached leaves:
+
+   ```bash
+   sudo systemctl start achilles-ca-renew.service
+   ```
+
+   Its renewal step reports "not due" (the intermediate is new). Its restart step
+   sees an intermediate newer than the running container, so it deletes
+   `/data/caddy/certificates/local` and restarts Caddy.
+3. Re-render the bootstrap scripts with the new pin:
+
+   ```bash
+   sudo ./achilles-installer install --config /opt/projectachilles/deploy.config.env --yes
+   ```
+
+   The engine keeps the new root (same zone), so its own `ca` phase sees no
+   change. Doing step 2 first matters: on its own, the engine restarts Caddy only
+   if the intermediate is newer than the container. If `up` recreates Caddy in
+   that run, that check passes without a restart while the `caddy-data` volume
+   still holds leaves from the old CA.
+4. Check with `status` (the Root CA row shows the new SHA-256), replace the root
+   in the GPO (import the new `root.cer`, delete the old one), and re-trust the
+   endpoints outside GPO (7.4). Re-running the bootstrap script also works, but
+   enrolls each machine again under a new agent ID.
 
 ## 7. Distributing trust and enrolling Windows endpoints
 
@@ -529,10 +593,13 @@ Run it from an **elevated** PowerShell (Windows PowerShell 5.1 or later), in the
 folder that holds it:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\bootstrap-windows.ps1 -Token '<enrollment-token>'
+powershell -ExecutionPolicy Bypass -File .\bootstrap-windows.ps1 -Token "<enrollment-token>"
 ```
 
-Replace `<enrollment-token>` with a token from the web UI (keep the quotes).
+Replace `<enrollment-token>` (and its quotes, if you like) with a token from the
+web UI; tokens need no quoting. Use double quotes, not single quotes:
+`powershell.exe -File` started from `cmd.exe`, SCCM or an RMM tool passes single
+quotes through literally, and enrollment then fails with HTTP 401.
 
 It runs these steps, aborting at the first failure:
 
@@ -567,9 +634,12 @@ write to.
 > normalization run even when the script later aborts (for example on a
 > fingerprint mismatch).
 
-**At scale:** run the same command through Intune, SCCM or an RMM tool that runs
-it elevated, passing the token at run time. Use a token with a short TTL and a
-Max Uses sized to the batch, and don't store it where everyone can read it.
+**At scale:** run the same command through SCCM or an RMM tool that runs it
+elevated, passing the token at run time. Intune platform scripts take no
+parameters, so with Intune the token would have to be embedded in the uploaded
+script: prefer SCCM, an RMM tool or a manual run. Whatever the tool, use a token
+with a short TTL and a Max Uses sized to the batch, and don't store it where
+everyone can read it.
 
 **Re-runs:** running the script again on an enrolled machine replaces the binary
 and enrolls the machine again, as a new agent ID (one more token use). If that
@@ -647,7 +717,13 @@ sudo curl -s --cacert /etc/projectachilles/ca/public/root.crt https://achilles.c
 curl -sI http://achilles.corp.example.com/ca/root.cer    # 200
 curl -sI http://achilles.corp.example.com/                # 308 to https://
 sudo ss -ltnup | grep -E ':(80|443) '                     # only 10.0.5.20
+sudo docker compose -f /opt/projectachilles/docker-compose.server.yml port caddy 443   # 10.0.5.20:443
 ```
+
+The `ss` check lists `docker-proxy` listeners only while Docker's userland proxy
+is enabled (the default). With `"userland-proxy": false` in
+`/etc/docker/daemon.json` it shows nothing for 80/443; use the
+`docker compose … port` line, which prints the published address either way.
 
 `status` reports the containers, the HTTPS health check (verified against the
 ProjectAchilles root), the server certificate's issuer and expiry, the
@@ -670,12 +746,12 @@ sudo ./achilles-installer <command>
 | Command | What it does |
 |---------|--------------|
 | `status` | Health, certificates, disk, last backup (section 9). |
-| `upgrade [--ref TAG] [--yes]` | Moves the checkout to the next release tag (or `--ref`) and re-runs the engine with the existing config. Shows `Upgrade: <from> -> <to>` and the changelog link, and asks for confirmation unless `--yes`. Refuses a working tree with uncommitted changes (it restores an old-engine `deploy/caddy/tls.caddy` first). On failure it prints the rollback steps. |
+| `upgrade [--ref TAG] [--yes]` | Moves the checkout to the highest release tag (or `--ref`) and re-runs the engine with the existing config. Shows `Upgrade: <from> -> <to>` and the changelog link, and asks for confirmation unless `--yes`. Refuses a working tree with uncommitted changes (it restores an old-engine `deploy/caddy/tls.caddy` first). On failure it prints the rollback steps. |
 | `backup [--out DIR]` | Stops the stack briefly and writes `/var/backups/projectachilles/<UTC timestamp>.tar.gz` (or `.tar.zst` when available), mode 0600: the `achilles-data`, `caddy-data` and `esdata` volumes, the CA directory **including the root key**, `deploy.config.env`, `.env` and `backend/.env`. Restarts the stack afterwards, even on failure. |
 | `restore FILE [--yes]` | Overwrites the volumes, configuration, `.env` files and CA with the backup's. Asks you to type the hostname unless `--yes`. |
 | `ca export --out DIR` | Writes `root.crt` and `root.cer` and prints the SHA-256 and SHA-1 thumbprint. |
 | `ca bootstrap --host NAME --out DIR` | Re-renders the bootstrap scripts (the engine does this on every run, into `deploy/onprem/`). |
-| `ca renew [--if-expiring 180d]` | Renews the intermediate if due (prints `renewed` or `not due`); restart Caddy afterwards (section 6). |
+| `ca renew [--if-expiring 180d]` | Renews the intermediate if due (prints `renewed` or `not due`); then run `sudo systemctl start achilles-ca-renew.service` so Caddy drops its cached leaves and restarts (section 6). |
 | `ca init --zone ZONE [--ip IP --include-ip] [--rotate]` | Low-level CA creation, normally run by the engine. `--rotate` replaces the root. |
 | `version` | Prints the installer version. |
 
@@ -734,7 +810,9 @@ In both cases:
 
 The wizard's answers are a plain `deploy.config.env`, so an install can run
 without prompts, for automation or a second identical server. Get the binary
-first (`sudo bash install-onprem.sh --no-run`), then write
+first (`sudo bash install-onprem.sh --no-run`; releases up to and including
+v2.2.0 do not include the installer, so until a newer release is published add
+`--ref main`, which needs Go 1.26 or later and `make`), then write
 `/opt/projectachilles/deploy.config.env` (see `deploy.config.env.example` for
 every key) and `chmod 600` it:
 
@@ -814,7 +892,7 @@ subnets can reach the LAN IP, use your network firewall (or Docker's
 | Login (Clerk) screen: `Production Clerk keys (pk_live_) need a public domain that you own …` | Private-only name: use development keys, or a name under a domain you own. |
 | Sign-in fails with production keys | Clerk's DNS records are not yet verified in the public zone. |
 | `status`: `caddy running (health starting)` | Normal for about a minute after a start. |
-| Server still presents the old intermediate after `ca renew` | Caddy reads the CA only at start: run the printed `docker compose … restart caddy`, or wait for the weekly timer. |
+| Server still presents the old intermediate after `ca renew` | Caddy reads the CA only at start, and a plain restart keeps its cached leaf (up to about 12 hours). Run `sudo systemctl start achilles-ca-renew.service` (clears the cache, then restarts), or re-run the install. |
 | `upgrade`: `… has uncommitted changes; refusing to upgrade over them` | Commit, stash or discard the changes shown, then run it again. |
 | `install-onprem.sh`: `… has local changes` | Same: stash them (`git -C /opt/projectachilles stash`) or keep running `deploy-server.sh` as before. |
 | Preflight: `Port 443 available` fails | Another service holds the port. Stop it, then press **r**. |
@@ -829,13 +907,16 @@ subnets can reach the LAN IP, use your network firewall (or Docker's
   so the script aborts before trusting anything. Protect the script's integrity
   in transit and at rest (admin-only shares), not the root's confidentiality,
   which is public.
-- **The constraints limit, they don't eliminate.** The CA can only sign TLS
-  server certificates (serverAuth) for names in its zone, and no IPs unless you
-  allowed the LAN IP. Inside that zone, the CA keys are as powerful as any CA for
-  clients that trust the root (section 6). Choose the narrowest zone.
-- **Key custody.** The root key never leaves the host: `/etc/projectachilles/ca`
-  is root-only (0700, keys 0600), and Caddy gets only the intermediate. Limit root
-  access to the server accordingly.
+- **The constraints limit, they don't eliminate.** Certificates the CA signs are
+  accepted only as TLS server certificates for names in its zone (and no IPs
+  unless allowed) by clients that enforce name constraints and EKU chaining
+  (Windows CryptoAPI, Go, OpenSSL, .NET, current browsers). Inside that zone, the
+  CA keys are as powerful as any CA for clients that trust the root (section 6).
+  Choose the narrowest zone.
+- **Key custody.** The root key is never mounted into Caddy; it leaves the host
+  only inside backups (see below). `/etc/projectachilles/ca` is root-only (0700,
+  keys 0600), and Caddy gets only the intermediate. Limit root access to the
+  server accordingly.
 - **Backups contain the CA keys and every secret.** Encrypt them and keep them off
   the server (section 10).
 - **Tokens never go into GPO or SYSVOL.** GPO distributes the root only; tokens
@@ -847,5 +928,6 @@ subnets can reach the LAN IP, use your network firewall (or Docker's
   Administrators, with no links and no foreign owners, before the agent binary is
   written. It does not police what administrators, SYSTEM or the agent create
   there later.
-- **No revocation.** If the CA keys may have leaked, rotate (section 6) and remove
-  the old root from every endpoint.
+- **No revocation.** If the CA keys may have leaked, rotate with the same
+  constraints ([Rotating after a suspected key compromise](#rotating-after-a-suspected-key-compromise))
+  and remove the old root from every endpoint.
