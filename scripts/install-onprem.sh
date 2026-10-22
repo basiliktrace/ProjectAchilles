@@ -114,6 +114,28 @@ resolve_ref() {
 
 is_empty_dir() { [ -d "$1" ] && [ -z "$(ls -A "$1")" ]; }
 
+# Tracked file that deploy-server.sh overwrote before it rendered into
+# deploy/caddy/rendered/, so every checkout from that era has it modified.
+TLS_CADDY="deploy/caddy/tls.caddy"
+
+# ensure_clean_tree refuses a checkout with local changes, except that a
+# modified $TLS_CADDY alone is restored (as `achilles-installer upgrade` does).
+# It is left alone when anything else is dirty: the running stack of such an
+# install still mounts it, and nothing below would run.
+ensure_clean_tree() {
+  local others
+  others="$(git -C "$DIR" status --porcelain -- . ":(exclude)$TLS_CADDY")"
+  if [ -n "$others" ]; then
+    die "$DIR has local changes:
+$others
+Commit or stash them (git -C $DIR stash), then re-run this script. To keep this install as it is, run $DIR/scripts/deploy-server.sh as before."
+  fi
+  if [ -n "$(git -C "$DIR" status --porcelain -- "$TLS_CADDY")" ]; then
+    git -C "$DIR" checkout -- "$TLS_CADDY" || die "could not restore $DIR/$TLS_CADDY"
+    log "Restored $TLS_CADDY (an older deploy-server.sh modified it; it is no longer written)"
+  fi
+}
+
 prepare_repo() {
   if [ -e "$DIR" ] && ! is_empty_dir "$DIR"; then
     [ -d "$DIR/.git" ] || die "$DIR exists and is not a ProjectAchilles git checkout; refusing to overwrite"
@@ -125,9 +147,7 @@ prepare_repo() {
       *"$REPO_SLUG"|*"$REPO_SLUG".git) ;;
       *) die "$DIR is a git checkout of '$origin', not $REPO_SLUG; refusing to overwrite" ;;
     esac
-    if [ -n "$(git -C "$DIR" status --porcelain)" ]; then
-      die "$DIR has local changes; commit/stash them, or use '$DIR/achilles-installer upgrade' for an existing install"
-    fi
+    ensure_clean_tree
     log "Updating existing checkout in $DIR"
   else
     log "Cloning $REPO_URL into $DIR"
