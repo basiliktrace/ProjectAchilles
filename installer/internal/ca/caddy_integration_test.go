@@ -368,14 +368,7 @@ func TestCaddyAchillesCA(t *testing.T) {
 		if nb.Intermediate.SerialNumber.Cmp(b.Intermediate.SerialNumber) == 0 {
 			t.Fatal("renewal kept the old intermediate")
 		}
-		// Drop the cached leaf (signed by the old intermediate, still valid) so
-		// Caddy must issue a new one on startup.
-		if _, err := dockerCmd(ctx, "exec", name, "rm", "-rf", "/data/caddy/certificates"); err != nil {
-			t.Fatal(err)
-		}
-		if _, err := dockerCmd(ctx, "restart", name); err != nil {
-			t.Fatal(err)
-		}
+		restartLikeCARenew(t, ctx, name)
 		addr := hostPort(t, ctx, name, "443/tcp") // may change on restart
 		conn, err := dialUntil(addr, tlsCfg, time.Now().Add(60*time.Second))
 		if err != nil {
@@ -387,6 +380,43 @@ func TestCaddyAchillesCA(t *testing.T) {
 			t.Fatalf("after restart Caddy does not chain to the renewed intermediate (serial %x)", nb.Intermediate.SerialNumber)
 		}
 	})
+
+	// A root rotation: the cached leaf chains to the OLD root, and Caddy
+	// would keep serving it after a plain restart (seen in a probe run).
+	t.Run("rotated root is used after a restart", func(t *testing.T) {
+		nb, err := Init(Options{Dir: caDir, Zone: zone, Label: "Integration Test", Rotate: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if nb.Root.Equal(b.Root) {
+			t.Fatal("rotation kept the old root")
+		}
+		restartLikeCARenew(t, ctx, name)
+		newRoots := x509.NewCertPool()
+		newRoots.AddCert(nb.Root)
+		cfg := &tls.Config{RootCAs: newRoots, ServerName: caddyDomain, MinVersion: tls.VersionTLS12}
+		conn, err := dialUntil(hostPort(t, ctx, name, "443/tcp"), cfg, time.Now().Add(60*time.Second))
+		if err != nil {
+			t.Fatalf("after rotation + restart the leaf does not verify against the new root: %v", err)
+		}
+		defer conn.Close()
+		if st := conn.ConnectionState(); len(st.PeerCertificates) < 2 || st.PeerCertificates[1].SerialNumber.Cmp(nb.Intermediate.SerialNumber) != 0 {
+			t.Fatal("after rotation + restart Caddy does not send the new intermediate")
+		}
+	})
+}
+
+// restartLikeCARenew does what scripts/ca-renew.sh does when the intermediate
+// is newer than the container: delete the cached leaves (Caddy would keep
+// serving them, chained to the old intermediate or root), then restart.
+func restartLikeCARenew(t *testing.T, ctx context.Context, name string) {
+	t.Helper()
+	if _, err := dockerCmd(ctx, "exec", name, "rm", "-rf", "/data/caddy/certificates/local"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := dockerCmd(ctx, "restart", name); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // TestCaddyEmptyRendered: a checkout pulled without re-running deploy-server.sh

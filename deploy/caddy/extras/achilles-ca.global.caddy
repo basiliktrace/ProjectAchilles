@@ -8,7 +8,8 @@
 # The root KEY is deliberately absent: Caddy only needs the root certificate
 # (to build the chain), and it never renews an intermediate that is supplied
 # here. The host renews it (`achilles-installer ca renew`, weekly systemd
-# timer) and restarts the Caddy container, which re-reads these files.
+# timer) and restarts the Caddy container, which re-reads these files; the
+# restart first deletes cached leaves, which Caddy would otherwise keep serving.
 skip_install_trust
 pki {
 	ca local {

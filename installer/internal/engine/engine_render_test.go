@@ -935,6 +935,89 @@ func TestEngineFullRunExistingModes(t *testing.T) {
 	}
 }
 
+// TestEngineFullRunRestartsCaddyOnCAChange: `compose up` leaves a running
+// Caddy alone when only its bind-mounted CA files change, and Caddy reads them
+// only at start. After `up` the engine restarts Caddy (deleting its cached
+// leaves first) exactly when the intermediate is newer than the container, so
+// a rotation takes effect and a plain re-run restarts nothing.
+func TestEngineFullRunRestartsCaddyOnCAChange(t *testing.T) {
+	s := newSandbox(t, "achilles-ca", "")
+	state := addFullRunStubs(t, s)
+	// docker stub: `compose ps -q caddy` prints a running container whose
+	// start time is $FAKE_STARTED; every other call succeeds.
+	writeFile(t, filepath.Join(s.stubs, "docker"), `#!/bin/sh
+echo "docker $*" >> "$STUB_LOG"
+case "$*" in
+  --version) echo "Docker version 0.0.0-stub" ;;
+  *" ps -q caddy") echo caddycid ;;
+  "inspect -f {{.State.StartedAt}} caddycid") echo "$FAKE_STARTED" ;;
+esac
+exit 0
+`, 0o755)
+	systemdDir := filepath.Join(s.root, "systemd")
+	if err := os.MkdirAll(systemdDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	ov := map[string]string{
+		"ACHILLES_RENDER_ONLY":      "",
+		"ACHILLES_PROGRESS":         "1",
+		"ACHILLES_SYSTEMD_DIR":      systemdDir,
+		"ACHILLES_LIB_DIR_OVERRIDE": filepath.Join(t.TempDir(), "lib"),
+		"SYSTEMCTL_STATE":           state,
+	}
+	compose := "docker compose -f " + s.path("docker-compose.server.yml") + " --project-directory " + s.root
+	clearLeaves := compose + " exec -T caddy rm -rf /data/caddy/certificates/local"
+	restart := compose + " restart caddy"
+	inter := filepath.Join(s.caDir, "caddy", "intermediate.crt")
+	run := func(started time.Time, extraCfg string) []string {
+		t.Helper()
+		if err := os.Remove(s.stubLog); err != nil && !errors.Is(err, os.ErrNotExist) {
+			t.Fatal(err)
+		}
+		if extraCfg != "" {
+			s.setConfig(t, readFile(t, s.cfg)+extraCfg)
+		}
+		ov["FAKE_STARTED"] = started.UTC().Format(time.RFC3339Nano)
+		r := s.mustRun(t, ov)
+		if got, want := strings.Join(phaseIDs(t, r), ","), "config,validate,docker,ca,caddy-render,backend-env,root-env,firewall,up,bootstrap,renew-timer"; got != want {
+			t.Errorf("phases = %s, want %s", got, want)
+		}
+		var calls []string
+		for _, l := range stubLines(t, s, "docker compose") {
+			if strings.Contains(l, " restart ") || strings.Contains(l, " rm -rf ") {
+				calls = append(calls, l)
+			}
+		}
+		return calls
+	}
+
+	// First install: Caddy is created by `up`, after the CA: no restart.
+	if calls := run(time.Now().Add(time.Hour), ""); len(calls) != 0 {
+		t.Fatalf("first install restarted Caddy: %v", calls)
+	}
+	// Caddy has been running since after the intermediate was written.
+	issued := time.Now().Add(-2 * time.Hour)
+	if err := os.Chtimes(inter, issued, issued); err != nil {
+		t.Fatal(err)
+	}
+	started := issued.Add(time.Hour)
+
+	// Re-run with nothing changed: the CA files keep their mtime, no restart.
+	if calls := run(started, ""); len(calls) != 0 {
+		t.Fatalf("re-run with an unchanged CA restarted Caddy: %v", calls)
+	}
+	if fi, err := os.Stat(inter); err != nil || !fi.ModTime().Equal(issued) {
+		t.Fatalf("re-run rewrote the intermediate (mtime %v, want %v; %v)", fi.ModTime(), issued, err)
+	}
+
+	// CA_ROTATE with changed constraints rotates root + intermediate: one
+	// leaf-cache delete, then one restart, in that order.
+	calls := run(started, "CA_ROTATE=true\nCA_INCLUDE_IP=false\n")
+	if len(calls) != 2 || calls[0] != clearLeaves || calls[1] != restart {
+		t.Fatalf("rotation: want [%q %q], got %v", clearLeaves, restart, calls)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // scripts/ca-renew.sh (what the systemd service runs)
 // ---------------------------------------------------------------------------
@@ -1052,5 +1135,34 @@ exit 0
 	r = run(opts{out: "not due"})
 	if r.code != 0 || len(restarts()) != 0 {
 		t.Fatalf("caddy not running: want exit 0 and no restart\n%s", r)
+	}
+
+	// Every restart first deletes the cached leaves (Caddy would keep serving
+	// them, chained to the old intermediate or root).
+	r = run(opts{out: "renewed", cid: cid})
+	var seq []string
+	for _, l := range stubLines(t, s, "docker compose") {
+		if strings.HasSuffix(l, " restart caddy") || strings.Contains(l, " exec ") {
+			seq = append(seq, strings.TrimPrefix(l, "docker compose -f "+s.path("docker-compose.server.yml")+" --project-directory "+s.root+" "))
+		}
+	}
+	if r.code != 0 || strings.Join(seq, "|") != "exec -T caddy rm -rf /data/caddy/certificates/local|restart caddy" {
+		t.Fatalf("want the leaf cache deleted, then a restart; got %v\n%s", seq, r)
+	}
+
+	// --restart-only (what deploy-server.sh runs after `up`) checks and
+	// restarts the same way but never renews, and needs no installer binary.
+	if err := os.Remove(s.stubLog); err != nil {
+		t.Fatal(err)
+	}
+	r = s.exec(t, map[string]string{
+		"ACHILLES_INSTALLER_BIN": "",
+		"ACHILLES_CA_DIR":        s.caDir,
+		"ACHILLES_REPO_ROOT":     s.root,
+		"FAKE_CID":               cid,
+		"FAKE_STARTED":           started.Format(time.RFC3339Nano),
+	}, []string{"/bin/sh", s.path("scripts", "ca-renew.sh"), "--restart-only"})
+	if r.code != 0 || len(stubLines(t, s, "installer")) != 0 || len(restarts()) != 1 {
+		t.Fatalf("--restart-only: want exit 0, no installer call and one restart\n%s\n%v", r, stubLines(t, s, ""))
 	}
 }

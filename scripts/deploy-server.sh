@@ -583,6 +583,20 @@ if [ "$RENDER_ONLY" = 0 ]; then
   fi
   ( cd "$REPO_ROOT" && $DOCKER compose -f "$COMPOSE_FILE" up -d --build )
   c_ok "Containers started"
+  # `up` leaves a running Caddy alone when only the bind-mounted CA files
+  # changed (rotation, `ca init --rotate`, `ca renew`), and Caddy reads them
+  # only at start. Restart it, with its cached leaves deleted, when the
+  # intermediate is newer than the container: the timer's own check
+  # (ca-renew.sh), so a re-run with nothing changed restarts nothing.
+  if [ "$TLS_MODE" = "achilles-ca" ]; then
+    caddy_ca_check=(env "ACHILLES_CA_DIR=${CA_DIR}" "ACHILLES_REPO_ROOT=${REPO_ROOT}"
+      /bin/sh "${SCRIPT_DIR}/ca-renew.sh" --restart-only)
+    if [ -n "${ACHILLES_CA_DIR_OVERRIDE:-}" ]; then
+      "${caddy_ca_check[@]}" || fail up "could not restart Caddy onto the current CA (see the output above)."
+    else
+      as_root "${caddy_ca_check[@]}" || fail up "could not restart Caddy onto the current CA (see the output above)."
+    fi
+  fi
   ok up
 fi
 
