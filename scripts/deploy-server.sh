@@ -618,8 +618,9 @@ fi
 # ---------------------------------------------------------------------------
 # 11. Weekly intermediate-CA renewal timer (achilles-ca only)
 # ---------------------------------------------------------------------------
-# scripts/ca-renew.sh renews when < 180 days remain and then restarts Caddy,
-# which reads the CA files only at start. The service runs as root, so it runs
+# scripts/ca-renew.sh renews when < 180 days remain, and restarts Caddy (which
+# reads the CA files only at start) whenever the intermediate is newer than the
+# running container. The service runs as root, so it runs
 # root-owned copies of ca-renew.sh and achilles-installer in LIB_DIR: the repo
 # copies may be writable by the (non-root) install user, and running them
 # would hand that user root. Copies and units are rewritten only when their
@@ -644,11 +645,9 @@ After=docker.service
 
 [Service]
 Type=oneshot
-StateDirectory=projectachilles
 Environment="ACHILLES_INSTALLER_BIN=${LIB_DIR}/achilles-installer"
 Environment="ACHILLES_CA_DIR=${CA_DIR}"
 Environment="ACHILLES_REPO_ROOT=${REPO_ROOT}"
-Environment="ACHILLES_STATE_DIR=/var/lib/projectachilles"
 ExecStart=/bin/sh "${LIB_DIR}/ca-renew.sh"
 EOF
     cat > "${unit_tmp}/${RENEW_UNIT}.timer" <<EOF

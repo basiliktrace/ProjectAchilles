@@ -142,6 +142,7 @@ func caRenew(stdout, stderr io.Writer) Handler {
 		fs := newFlagSet("ca renew", stderr)
 		dir := fs.String("dir", defaultCADir, "CA directory")
 		within := fs.String("if-expiring", "180d", "renew when less than this remains on the intermediate (e.g. 180d, 72h)")
+		repo := fs.String("repo", "", repoFlagHelp+"; only names the compose file in the restart hint")
 		if err := parseFlags(fs, args); err != nil {
 			return helpOK(err)
 		}
@@ -155,6 +156,9 @@ func caRenew(stdout, stderr io.Writer) Handler {
 		}
 		if renewed {
 			fmt.Fprintln(stdout, "renewed")
+			// Caddy reads the CA files only at start (admin API off).
+			fmt.Fprintf(stderr, "Caddy must be restarted to use the new intermediate: docker compose -f %s restart caddy (the weekly timer does this automatically)\n",
+				filepath.Join(repoDir(*repo), "docker-compose.server.yml"))
 		} else {
 			fmt.Fprintln(stdout, "not due")
 		}

@@ -943,53 +943,114 @@ func TestCARenewWrapper(t *testing.T) {
 	s := newSandbox(t, "achilles-ca", "")
 	fake := filepath.Join(s.stubs, "fake-installer")
 	writeFile(t, fake, "#!/bin/sh\necho \"installer $*\" >> \"$STUB_LOG\"\n[ -n \"$FAKE_OUT\" ] && echo \"$FAKE_OUT\"\nexit \"${FAKE_RC:-0}\"\n", 0o755)
-	stateDir := filepath.Join(s.root, "state")
-	run := func(out, rc, dockerRC string) result {
+	// docker stub: `compose ps -q caddy` prints $FAKE_CID, `inspect` prints
+	// $FAKE_STARTED, `compose restart` exits $FAKE_RESTART_RC.
+	writeFile(t, filepath.Join(s.stubs, "docker"), `#!/bin/sh
+echo "docker $*" >> "$STUB_LOG"
+case "$*" in
+  *" ps -q caddy") [ -n "${FAKE_CID:-}" ] && echo "$FAKE_CID"; exit 0 ;;
+  "inspect "*) echo "$FAKE_STARTED"; exit 0 ;;
+  *" restart caddy") exit "${FAKE_RESTART_RC:-0}" ;;
+esac
+exit 0
+`, 0o755)
+	inter := filepath.Join(s.caDir, "caddy", "intermediate.crt")
+	if err := os.MkdirAll(filepath.Dir(inter), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(inter); errors.Is(err, os.ErrNotExist) {
+		writeFile(t, inter, "intermediate\n", 0o644)
+	}
+	started := time.Date(2026, 10, 1, 12, 0, 0, 123456789, time.UTC)
+	setIssued := func(at time.Time) {
+		t.Helper()
+		if err := os.Chtimes(inter, at, at); err != nil {
+			t.Fatal(err)
+		}
+	}
+	type opts struct{ out, rc, cid, restartRC string }
+	run := func(o opts) result {
 		t.Helper()
 		if err := os.Remove(s.stubLog); err != nil && !errors.Is(err, os.ErrNotExist) {
 			t.Fatal(err)
 		}
-		writeFile(t, filepath.Join(s.stubs, "docker"), "#!/bin/sh\necho \"docker $*\" >> \"$STUB_LOG\"\nexit "+dockerRC+"\n", 0o755)
 		return s.exec(t, map[string]string{
 			"ACHILLES_INSTALLER_BIN": fake,
 			"ACHILLES_CA_DIR":        s.caDir,
 			"ACHILLES_REPO_ROOT":     s.root,
-			"ACHILLES_STATE_DIR":     stateDir,
-			"FAKE_OUT":               out,
-			"FAKE_RC":                rc,
+			"FAKE_OUT":               o.out,
+			"FAKE_RC":                o.rc,
+			"FAKE_CID":               o.cid,
+			"FAKE_STARTED":           started.Format(time.RFC3339Nano),
+			"FAKE_RESTART_RC":        o.restartRC,
 		}, []string{"/bin/sh", s.path("scripts", "ca-renew.sh")})
 	}
 	restart := "docker compose -f " + s.path("docker-compose.server.yml") + " --project-directory " + s.root + " restart caddy"
+	restarts := func() []string {
+		var r []string
+		for _, l := range stubLines(t, s, "docker") {
+			if strings.HasSuffix(l, " restart caddy") {
+				r = append(r, l)
+			}
+		}
+		return r
+	}
+	const cid = "caddycid"
+	older, newer := started.Add(-time.Hour), started.Add(time.Hour)
 
-	r := run("not due", "0", "0")
-	if r.code != 0 || len(stubLines(t, s, "docker")) != 0 {
-		t.Fatalf("not due: want exit 0 and no restart\n%s\n%v", r, stubLines(t, s, "docker"))
+	// Intermediate older than the running Caddy: nothing to do.
+	setIssued(older)
+	r := run(opts{out: "not due", cid: cid})
+	if r.code != 0 || len(restarts()) != 0 {
+		t.Fatalf("not due, current Caddy: want exit 0 and no restart\n%s\n%v", r, stubLines(t, s, "docker"))
 	}
 	if l := stubLines(t, s, "installer"); len(l) != 1 || l[0] != "installer ca renew --dir "+s.caDir+" --if-expiring 180d" {
 		t.Errorf("installer calls = %v", l)
 	}
+	if !strings.Contains(strings.Join(stubLines(t, s, "docker"), "\n"), "docker inspect -f {{.State.StartedAt}} "+cid) {
+		t.Errorf("want a docker inspect of %s, got %v", cid, stubLines(t, s, "docker"))
+	}
 
-	r = run("renewed", "0", "0")
-	if l := stubLines(t, s, "docker"); r.code != 0 || len(l) != 1 || l[0] != restart {
+	// The timer renewed: the new intermediate is newer than Caddy's start.
+	setIssued(newer)
+	r = run(opts{out: "renewed", cid: cid})
+	if l := restarts(); r.code != 0 || len(l) != 1 || l[0] != restart || !strings.Contains(r.stdout, "caddy restarted") {
 		t.Fatalf("renewed: want exit 0 and one %q\n%s\n%v", restart, r, l)
 	}
 
-	r = run("", "1", "0")
-	if r.code == 0 || len(stubLines(t, s, "docker")) != 0 {
-		t.Fatalf("renew error: want exit != 0 and no restart\n%s", r)
+	// A manual `ca renew` happened since Caddy started; this run is "not due"
+	// but must still restart.
+	r = run(opts{out: "not due", cid: cid})
+	if l := restarts(); r.code != 0 || len(l) != 1 {
+		t.Fatalf("manual renewal not picked up: want one restart\n%s\n%v", r, l)
 	}
 
-	// A failed restart after a renewal is retried by the next (not due) run,
-	// so Caddy cannot keep signing with the old intermediate.
-	if r = run("renewed", "0", "1"); r.code == 0 {
+	// The renewal errors: the restart check still runs, and the renewal's
+	// status is the exit status.
+	r = run(opts{rc: "3", cid: cid})
+	if l := restarts(); r.code != 3 || len(l) != 1 {
+		t.Fatalf("renew error with a newer intermediate: want exit 3 and one restart\n%s\n%v", r, l)
+	}
+	setIssued(older)
+	r = run(opts{rc: "3", cid: cid})
+	if r.code != 3 || len(restarts()) != 0 {
+		t.Fatalf("renew error, current Caddy: want exit 3 and no restart\n%s", r)
+	}
+
+	// A failed restart fails the run; the next run (Caddy still the old
+	// container) retries it.
+	setIssued(newer)
+	if r = run(opts{out: "renewed", cid: cid, restartRC: "1"}); r.code == 0 {
 		t.Fatalf("renewed + failed restart: want exit != 0\n%s", r)
 	}
-	r = run("not due", "0", "0")
-	if l := stubLines(t, s, "docker"); r.code != 0 || len(l) != 1 || l[0] != restart {
-		t.Fatalf("pending restart not retried: %v\n%s", l, r)
+	r = run(opts{out: "not due", cid: cid})
+	if l := restarts(); r.code != 0 || len(l) != 1 || l[0] != restart {
+		t.Fatalf("failed restart not retried: %v\n%s", l, r)
 	}
-	r = run("not due", "0", "0")
-	if r.code != 0 || len(stubLines(t, s, "docker")) != 0 {
-		t.Fatalf("restart repeated after it succeeded\n%s", r)
+
+	// Caddy not running: it reads the new files when it next starts.
+	r = run(opts{out: "not due"})
+	if r.code != 0 || len(restarts()) != 0 {
+		t.Fatalf("caddy not running: want exit 0 and no restart\n%s", r)
 	}
 }

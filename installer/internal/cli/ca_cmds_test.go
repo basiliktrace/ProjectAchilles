@@ -141,13 +141,21 @@ func TestCARenewAndExport(t *testing.T) {
 	if strings.TrimSpace(out.String()) != "not due" {
 		t.Errorf("renew output %q, want \"not due\"", out)
 	}
+	if strings.Contains(errb.String(), "restarted") {
+		t.Errorf("not due printed a restart hint: %q", errb)
+	}
 	out.Reset()
+	errb.Reset()
 	// 3 years is longer than the intermediate's lifetime, so it is due.
-	if code := r.Run([]string{"ca", "renew", "--dir", dir, "--if-expiring", "1095d"}, out, errb); code != 0 {
+	if code := r.Run([]string{"ca", "renew", "--dir", dir, "--if-expiring", "1095d", "--repo", "/srv/pa"}, out, errb); code != 0 {
 		t.Fatalf("renew exit %d: %s", code, errb)
 	}
+	// stdout stays exactly "renewed": scripts/ca-renew.sh logs it.
 	if strings.TrimSpace(out.String()) != "renewed" {
 		t.Errorf("renew output %q, want \"renewed\"", out)
+	}
+	if want := "Caddy must be restarted to use the new intermediate: docker compose -f /srv/pa/docker-compose.server.yml restart caddy (the weekly timer does this automatically)"; !strings.Contains(errb.String(), want) {
+		t.Errorf("renewed stderr %q lacks %q", errb, want)
 	}
 	if code := r.Run([]string{"ca", "renew", "--dir", dir, "--if-expiring", "soon"}, out, errb); code == 0 {
 		t.Error("bad --if-expiring accepted")
