@@ -5,7 +5,7 @@
 # Installs ProjectAchilles as a publicly-reachable OR on-prem service behind a
 # Caddy reverse proxy with working TLS. Run this ON the target server.
 #
-#   ./scripts/deploy-server.sh [path/to/deploy.config.env]
+#   ./scripts/deploy-server.sh [--render-only] [path/to/deploy.config.env]
 #
 # Hybrid: reads deploy.config.env (default: repo-root/deploy.config.env) and
 # prompts for any required value left blank — when running interactively. In a
@@ -13,6 +13,22 @@
 # agent-driven runs fail loudly instead of hanging.
 #
 # Idempotent: safe to re-run to apply config changes or upgrade.
+#
+# Environment (set by the achilles-installer TUI, or by hand):
+#   ACHILLES_PROGRESS=1        also print machine-readable progress lines:
+#                              ::phase <id> <title> | ::ok <id> | ::warn <msg>
+#                              | ::fail <id> <msg>
+#   ACHILLES_NONINTERACTIVE=1  never prompt, even with a TTY
+#   ACHILLES_RENDER_ONLY=1     same as --render-only: write every rendered file
+#                              (env files, Caddy snippets, CA, bootstrap
+#                              scripts) and stop before Docker install/build/up
+#   ACHILLES_INSTALLER_BIN     achilles-installer binary, needed for
+#                              TLS_MODE=achilles-ca (default: repo root)
+#
+# Phases, in order: config, validate, docker, ca, caddy-render, backend-env,
+# root-env, up, ca-export, bootstrap, renew-timer. `ca`, `bootstrap` and
+# `renew-timer` run only for achilles-ca, `ca-export` only for internal;
+# render-only skips docker, up, ca-export and renew-timer.
 # =============================================================================
 set -euo pipefail
 
@@ -21,9 +37,19 @@ set -euo pipefail
 # ---------------------------------------------------------------------------
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
-CONFIG_FILE="${1:-${REPO_ROOT}/deploy.config.env}"
 CADDY_DIR="${REPO_ROOT}/deploy/caddy"
+RENDERED_DIR="${CADDY_DIR}/rendered"
+ONPREM_DIR="${REPO_ROOT}/deploy/onprem"
 COMPOSE_FILE="${REPO_ROOT}/docker-compose.server.yml"
+# Test overrides: point the CA and the systemd units at temp dirs.
+CA_DIR="${ACHILLES_CA_DIR_OVERRIDE:-/etc/projectachilles/ca}"
+SYSTEMD_DIR="${ACHILLES_SYSTEMD_DIR:-/etc/systemd/system}"
+RENEW_UNIT="achilles-ca-renew"
+
+flag_on() { case "${1:-}" in 1|true|yes) return 0 ;; esac; return 1; }
+PROGRESS=0;       flag_on "${ACHILLES_PROGRESS:-}" && PROGRESS=1
+NONINTERACTIVE=0; flag_on "${ACHILLES_NONINTERACTIVE:-}" && NONINTERACTIVE=1
+RENDER_ONLY=0;    flag_on "${ACHILLES_RENDER_ONLY:-}" && RENDER_ONLY=1
 
 # ---------------------------------------------------------------------------
 # Output helpers
@@ -32,10 +58,34 @@ c_info()  { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
 c_ok()    { printf '\033[1;32m  ✓\033[0m %s\n' "$*"; }
 c_warn()  { printf '\033[1;33m  !\033[0m %s\n' "$*"; }
 c_err()   { printf '\033[1;31merror:\033[0m %s\n' "$*" >&2; }
-die()     { c_err "$*"; exit 1; }
+
+# Progress protocol (stdout, one event per line). Silent unless
+# ACHILLES_PROGRESS=1, so human output is unchanged without it.
+CURRENT_PHASE="config"
+FAIL_REPORTED=0
+proto() {
+  [ "$PROGRESS" = 1 ] || return 0
+  local line="$*"
+  printf '%s\n' "${line//$'\n'/ }"
+}
+phase() { CURRENT_PHASE="$1"; proto "::phase $1 $2"; c_info "$2"; }
+ok()    { proto "::ok $1"; }
+warn()  { proto "::warn $*"; c_warn "$*"; }
+fail()  { local id="$1"; shift; FAIL_REPORTED=1; proto "::fail ${id} $*"; c_err "$*"; exit 1; }
+die()   { fail "$CURRENT_PHASE" "$*"; }
+# Anything else that aborts the run (a failing command under set -e) still
+# reports which phase it was in.
+on_exit() {
+  local rc=$?
+  if [ "$rc" -ne 0 ] && [ "$FAIL_REPORTED" = 0 ]; then
+    proto "::fail ${CURRENT_PHASE} exited with status ${rc}"
+  fi
+}
+trap on_exit EXIT
 
 is_tty()  { [ -t 0 ] && [ -t 1 ]; }
 SUDO=""; [ "$(id -u)" -eq 0 ] || SUDO="sudo"
+as_root() { if [ -n "$SUDO" ]; then "$SUDO" "$@"; else "$@"; fi; }
 
 gen_secret() { openssl rand -base64 32; }
 
@@ -45,6 +95,9 @@ prompt_var() {
   local var="$1" msg="$2" secret="${3:-no}" cur
   cur="${!var:-}"
   [ -n "$cur" ] && return 0
+  if [ "$NONINTERACTIVE" = 1 ]; then
+    die "required value '$var' is empty and ACHILLES_NONINTERACTIVE=1 forbids prompting. Set it in ${CONFIG_FILE}."
+  fi
   if ! is_tty; then
     die "required value '$var' is empty and no TTY is available. Set it in ${CONFIG_FILE}."
   fi
@@ -57,10 +110,34 @@ prompt_var() {
   printf -v "$var" '%s' "$cur"
 }
 
+# Runs achilles-installer; as root for the real CA dir (keys are root-only).
+installer() {
+  if [ -n "${ACHILLES_CA_DIR_OVERRIDE:-}" ]; then
+    "$ACHILLES_INSTALLER_BIN" "$@"
+  else
+    as_root "$ACHILLES_INSTALLER_BIN" "$@"
+  fi
+}
+
+# ---------------------------------------------------------------------------
+# Arguments
+# ---------------------------------------------------------------------------
+CONFIG_FILE=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --render-only) RENDER_ONLY=1 ;;
+    -h|--help) sed -n '2,32p' "${BASH_SOURCE[0]}"; exit 0 ;;
+    -*) die "unknown option: $1" ;;
+    *) [ -z "$CONFIG_FILE" ] || die "unexpected argument: $1"; CONFIG_FILE="$1" ;;
+  esac
+  shift
+done
+CONFIG_FILE="${CONFIG_FILE:-${REPO_ROOT}/deploy.config.env}"
+
 # ---------------------------------------------------------------------------
 # 1. Load config
 # ---------------------------------------------------------------------------
-c_info "Loading configuration"
+phase config "Loading configuration"
 if [ -f "$CONFIG_FILE" ]; then
   set -a
   # shellcheck disable=SC1090
@@ -68,7 +145,8 @@ if [ -f "$CONFIG_FILE" ]; then
   set +a
   c_ok "Loaded ${CONFIG_FILE}"
 else
-  c_warn "No config file at ${CONFIG_FILE} — will prompt for required values"
+  [ "$NONINTERACTIVE" = 0 ] || die "No config file at ${CONFIG_FILE} and ACHILLES_NONINTERACTIVE=1 forbids prompting."
+  warn "No config file at ${CONFIG_FILE} — will prompt for required values"
   is_tty || die "No config file and no TTY. Copy deploy.config.env.example to ${CONFIG_FILE} and fill it in."
 fi
 
@@ -79,11 +157,15 @@ TESTS_REPO_BRANCH="${TESTS_REPO_BRANCH:-main}"
 AGENT_REPO_BRANCH="${AGENT_REPO_BRANCH:-main}"
 ELASTICSEARCH_INDEX_PATTERN="${ELASTICSEARCH_INDEX_PATTERN:-achilles-results-*}"
 SEED_ES="${SEED_ES:-false}"
+CADDY_BIND_IP="${CADDY_BIND_IP:-}"
+CA_INCLUDE_IP="${CA_INCLUDE_IP:-false}"
+ACHILLES_INSTALLER_BIN="${ACHILLES_INSTALLER_BIN:-${REPO_ROOT}/achilles-installer}"
+ok config
 
 # ---------------------------------------------------------------------------
 # 2. Collect + validate required values
 # ---------------------------------------------------------------------------
-c_info "Validating settings"
+phase validate "Validating settings"
 prompt_var ACHILLES_DOMAIN "Public domain (e.g. achilles.example.com)"
 prompt_var CLERK_PUBLISHABLE_KEY "Clerk publishable key (pk_live_...)"
 prompt_var CLERK_SECRET_KEY "Clerk secret key (sk_live_...)" yes
@@ -101,8 +183,21 @@ case "$TLS_MODE" in
   byo)
     [ -f "${CADDY_DIR}/certs/cert.pem" ] || die "TLS_MODE=byo: ${CADDY_DIR}/certs/cert.pem not found"
     [ -f "${CADDY_DIR}/certs/key.pem" ]  || die "TLS_MODE=byo: ${CADDY_DIR}/certs/key.pem not found" ;;
+  achilles-ca)
+    prompt_var CADDY_BIND_IP "LAN IP for Caddy to listen on (e.g. 10.0.5.20)"
+    prompt_var CA_ZONE "DNS zone the CA may issue for (e.g. corp.example.com)"
+    domain_lc="${ACHILLES_DOMAIN,,}"; domain_lc="${domain_lc%.}"
+    zone_lc="${CA_ZONE,,}"; zone_lc="${zone_lc%.}"
+    case "$domain_lc" in
+      "$zone_lc"|*".${zone_lc}") : ;;
+      *) die "ACHILLES_DOMAIN '${ACHILLES_DOMAIN}' is outside CA_ZONE '${CA_ZONE}': the CA can only issue certificates in that zone." ;;
+    esac
+    case "$CA_INCLUDE_IP" in
+      true|false) : ;;
+      *) die "Invalid CA_INCLUDE_IP='${CA_INCLUDE_IP}' (expected: true | false)" ;;
+    esac ;;
   *)
-    die "Invalid TLS_MODE='${TLS_MODE}' (expected: acme-http | acme-dns | internal | byo)" ;;
+    die "Invalid TLS_MODE='${TLS_MODE}' (expected: acme-http | acme-dns | internal | byo | achilles-ca)" ;;
 esac
 
 case "$ES_MODE" in
@@ -115,49 +210,84 @@ esac
 
 PUBLIC_URL="https://${ACHILLES_DOMAIN}"
 
+# CADDY_BIND_IP: bare for `ca init --ip`, bracketed when IPv6 for compose's
+# port syntax. Empty = compose publishes on every IPv4 and IPv6 address.
+BIND_IP_BARE="${CADDY_BIND_IP#\[}"; BIND_IP_BARE="${BIND_IP_BARE%\]}"
+case "$BIND_IP_BARE" in
+  *:*) CADDY_BIND_IP_ENV="[${BIND_IP_BARE}]" ;;
+  *)   CADDY_BIND_IP_ENV="$BIND_IP_BARE" ;;
+esac
+
+CADDY_IMAGE="caddy:2.10.0-alpine"
+[ "$TLS_MODE" = "acme-dns" ] && CADDY_IMAGE="projectachilles-caddy:dns-${CADDY_DNS_PROVIDER}"
+
 # Auto-generate any blank secrets
 SESSION_SECRET="${SESSION_SECRET:-$(gen_secret)}"
 ENCRYPTION_SECRET="${ENCRYPTION_SECRET:-$(gen_secret)}"
 CLI_AUTH_SECRET="${CLI_AUTH_SECRET:-$(gen_secret)}"
 c_ok "Settings validated — domain=${ACHILLES_DOMAIN}, TLS=${TLS_MODE}, ES=${ES_MODE}"
+ok validate
 
 # ---------------------------------------------------------------------------
 # 3. Install Docker if needed
 # ---------------------------------------------------------------------------
-c_info "Checking Docker"
-if ! command -v docker >/dev/null 2>&1; then
-  c_warn "Docker not found — installing via get.docker.com"
-  curl -fsSL https://get.docker.com | $SUDO sh
-  c_ok "Docker installed"
-else
-  c_ok "Docker present ($(docker --version))"
-fi
-if ! docker compose version >/dev/null 2>&1; then
-  die "Docker Compose v2 plugin not available. Install 'docker-compose-plugin' and re-run."
-fi
-DOCKER="docker"; docker info >/dev/null 2>&1 || DOCKER="$SUDO docker"
-
-# ---------------------------------------------------------------------------
-# 4. Render Caddy TLS snippet
-# ---------------------------------------------------------------------------
-c_info "Configuring Caddy TLS (${TLS_MODE})"
-cp "${CADDY_DIR}/tls-modes/${TLS_MODE}.caddy" "${CADDY_DIR}/tls.caddy"
-c_ok "Wrote ${CADDY_DIR}/tls.caddy"
-
-CADDY_IMAGE="caddy:2.10.0-alpine"
-if [ "$TLS_MODE" = "acme-dns" ]; then
-  c_info "Building custom Caddy image with DNS plugin (${CADDY_DNS_MODULE})"
-  CADDY_IMAGE="projectachilles-caddy:dns-${CADDY_DNS_PROVIDER}"
-  $DOCKER build -t "$CADDY_IMAGE" \
-    --build-arg "CADDY_DNS_MODULE=${CADDY_DNS_MODULE}" \
-    "${CADDY_DIR}"
-  c_ok "Built ${CADDY_IMAGE}"
+if [ "$RENDER_ONLY" = 0 ]; then
+  phase docker "Checking Docker"
+  if ! command -v docker >/dev/null 2>&1; then
+    warn "Docker not found — installing via get.docker.com"
+    curl -fsSL https://get.docker.com | $SUDO sh
+    c_ok "Docker installed"
+  else
+    c_ok "Docker present ($(docker --version))"
+  fi
+  if ! docker compose version >/dev/null 2>&1; then
+    die "Docker Compose v2 plugin not available. Install 'docker-compose-plugin' and re-run."
+  fi
+  DOCKER="docker"; docker info >/dev/null 2>&1 || DOCKER="$SUDO docker"
+  ok docker
 fi
 
 # ---------------------------------------------------------------------------
-# 5. Write backend/.env (single source of truth for app config)
+# 4. ProjectAchilles CA (achilles-ca only)
 # ---------------------------------------------------------------------------
-c_info "Writing backend/.env"
+if [ "$TLS_MODE" = "achilles-ca" ]; then
+  phase ca "Preparing the ProjectAchilles CA"
+  if [ ! -f "$ACHILLES_INSTALLER_BIN" ] || [ ! -x "$ACHILLES_INSTALLER_BIN" ]; then
+    fail ca "achilles-installer binary not found or not executable at ${ACHILLES_INSTALLER_BIN}; set ACHILLES_INSTALLER_BIN to its path."
+  fi
+  # Absolute, because the renewal timer runs it later from systemd.
+  ACHILLES_INSTALLER_BIN="$(readlink -f "$ACHILLES_INSTALLER_BIN")"
+  ca_args=(ca init --dir "$CA_DIR" --zone "$CA_ZONE" --ip "$BIND_IP_BARE")
+  if [ "$CA_INCLUDE_IP" = true ]; then ca_args+=(--include-ip); fi
+  ca_args+=(--label "${ORGANIZATION_NAME:-$ACHILLES_DOMAIN}")
+  installer "${ca_args[@]}" || fail ca "achilles-installer ca init failed (see the output above)."
+  c_ok "CA ready in ${CA_DIR}"
+  ok ca
+fi
+
+# ---------------------------------------------------------------------------
+# 5. Render Caddy snippets into deploy/caddy/rendered/ (gitignored)
+# ---------------------------------------------------------------------------
+phase caddy-render "Configuring Caddy TLS (${TLS_MODE})"
+GLOBAL_SRC="${CADDY_DIR}/global.caddy"
+SITES_SRC="${CADDY_DIR}/sites-extra.caddy"
+if [ "$TLS_MODE" = "achilles-ca" ]; then
+  GLOBAL_SRC="${CADDY_DIR}/extras/achilles-ca.global.caddy"
+  SITES_SRC="${CADDY_DIR}/extras/achilles-ca.sites.caddy"
+fi
+# Created here so Docker never creates it (root-owned and empty: Caddy would
+# fail on the missing imports).
+mkdir -p "$RENDERED_DIR"
+cp "${CADDY_DIR}/tls-modes/${TLS_MODE}.caddy" "${RENDERED_DIR}/tls.caddy"
+cp "$GLOBAL_SRC" "${RENDERED_DIR}/global.caddy"
+cp "$SITES_SRC" "${RENDERED_DIR}/sites-extra.caddy"
+c_ok "Wrote ${RENDERED_DIR}/{tls,global,sites-extra}.caddy"
+ok caddy-render
+
+# ---------------------------------------------------------------------------
+# 6. Write backend/.env (single source of truth for app config)
+# ---------------------------------------------------------------------------
+phase backend-env "Writing backend/.env"
 {
   echo "# Generated by deploy-server.sh on $(date -u +%FT%TZ) — do not commit."
   echo "NODE_ENV=production"
@@ -185,11 +315,12 @@ c_info "Writing backend/.env"
 } > "${REPO_ROOT}/backend/.env"
 chmod 600 "${REPO_ROOT}/backend/.env"
 c_ok "Wrote backend/.env (mode 600)"
+ok backend-env
 
 # ---------------------------------------------------------------------------
-# 6. Write root .env (compose interpolation)
+# 7. Write root .env (compose interpolation)
 # ---------------------------------------------------------------------------
-c_info "Writing root .env"
+phase root-env "Writing root .env"
 COMPOSE_PROFILES=""
 [ "$ES_MODE" = "self" ] && COMPOSE_PROFILES="elasticsearch"
 {
@@ -203,22 +334,39 @@ COMPOSE_PROFILES=""
   echo "VITE_CLERK_PUBLISHABLE_KEY=${CLERK_PUBLISHABLE_KEY}"
   echo "SEED_ES=${SEED_ES}"
   echo "COMPOSE_PROFILES=${COMPOSE_PROFILES}"
+  # Empty unless set: compose then publishes on every IPv4 and IPv6 address.
+  echo "CADDY_BIND_IP=${CADDY_BIND_IP_ENV}"
+  # Only achilles-ca mounts a CA; other modes fall back to deploy/caddy/no-ca.
+  if [ "$TLS_MODE" = "achilles-ca" ]; then
+    echo "ACHILLES_CA_DIR=${CA_DIR}"
+  fi
 } > "${REPO_ROOT}/.env"
 chmod 600 "${REPO_ROOT}/.env"
 c_ok "Wrote .env (mode 600)"
+ok root-env
 
 # ---------------------------------------------------------------------------
-# 7. Bring the stack up
+# 8. Bring the stack up
 # ---------------------------------------------------------------------------
-c_info "Building and starting the stack (this can take several minutes)"
-( cd "$REPO_ROOT" && $DOCKER compose -f "$COMPOSE_FILE" up -d --build )
-c_ok "Containers started"
+if [ "$RENDER_ONLY" = 0 ]; then
+  phase up "Building and starting the stack (this can take several minutes)"
+  if [ "$TLS_MODE" = "acme-dns" ]; then
+    c_info "Building custom Caddy image with DNS plugin (${CADDY_DNS_MODULE})"
+    $DOCKER build -t "$CADDY_IMAGE" \
+      --build-arg "CADDY_DNS_MODULE=${CADDY_DNS_MODULE}" \
+      "${CADDY_DIR}"
+    c_ok "Built ${CADDY_IMAGE}"
+  fi
+  ( cd "$REPO_ROOT" && $DOCKER compose -f "$COMPOSE_FILE" up -d --build )
+  c_ok "Containers started"
+  ok up
+fi
 
 # ---------------------------------------------------------------------------
-# 8. Post-install: export internal root CA when relevant
+# 9. Post-install: export internal root CA when relevant
 # ---------------------------------------------------------------------------
-if [ "$TLS_MODE" = "internal" ]; then
-  c_info "Exporting Caddy internal root CA for agents/browsers"
+if [ "$RENDER_ONLY" = 0 ] && [ "$TLS_MODE" = "internal" ]; then
+  phase ca-export "Exporting Caddy internal root CA for agents/browsers"
   ROOT_CA_SRC="/data/caddy/pki/authorities/local/root.crt"
   ROOT_CA_DST="${CADDY_DIR}/certs/root-ca.crt"
   for _ in $(seq 1 15); do
@@ -229,7 +377,88 @@ if [ "$TLS_MODE" = "internal" ]; then
     fi
     sleep 2
   done
-  [ -s "$ROOT_CA_DST" ] || c_warn "Root CA not exported yet — re-run after Caddy finishes starting: docker compose -f $COMPOSE_FILE exec caddy cat $ROOT_CA_SRC"
+  [ -s "$ROOT_CA_DST" ] || warn "Root CA not exported yet — re-run after Caddy finishes starting: docker compose -f $COMPOSE_FILE exec caddy cat $ROOT_CA_SRC"
+  ok ca-export
+fi
+
+# ---------------------------------------------------------------------------
+# 10. Endpoint bootstrap scripts, root fingerprint pinned (achilles-ca only)
+# ---------------------------------------------------------------------------
+if [ "$TLS_MODE" = "achilles-ca" ]; then
+  phase bootstrap "Rendering endpoint bootstrap scripts"
+  installer ca bootstrap --dir "$CA_DIR" --host "$ACHILLES_DOMAIN" --out "$ONPREM_DIR" \
+    || fail bootstrap "achilles-installer ca bootstrap failed (see the output above)."
+  ok bootstrap
+fi
+
+# ---------------------------------------------------------------------------
+# 11. Weekly intermediate-CA renewal timer (achilles-ca only)
+# ---------------------------------------------------------------------------
+# scripts/ca-renew.sh renews when < 180 days remain and then restarts Caddy,
+# which reads the CA files only at start. Units are rewritten only when their
+# content changes, so a re-run does not reload systemd.
+if [ "$RENDER_ONLY" = 0 ] && [ "$TLS_MODE" = "achilles-ca" ]; then
+  phase renew-timer "Installing the weekly CA renewal timer"
+  if ! command -v systemctl >/dev/null 2>&1; then
+    warn "systemctl not found: no renewal timer installed. Run ${SCRIPT_DIR}/ca-renew.sh weekly yourself."
+  else
+    unit_tmp="$(mktemp -d)"
+    cat > "${unit_tmp}/${RENEW_UNIT}.service" <<EOF
+# Installed by ProjectAchilles scripts/deploy-server.sh; re-running it rewrites this file.
+[Unit]
+Description=Renew the ProjectAchilles intermediate CA when it nears expiry
+Wants=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+StateDirectory=projectachilles
+Environment="ACHILLES_INSTALLER_BIN=${ACHILLES_INSTALLER_BIN}"
+Environment="ACHILLES_CA_DIR=${CA_DIR}"
+Environment="ACHILLES_REPO_ROOT=${REPO_ROOT}"
+Environment="ACHILLES_STATE_DIR=/var/lib/projectachilles"
+ExecStart=/bin/sh "${SCRIPT_DIR}/ca-renew.sh"
+EOF
+    cat > "${unit_tmp}/${RENEW_UNIT}.timer" <<EOF
+# Installed by ProjectAchilles scripts/deploy-server.sh; re-running it rewrites this file.
+[Unit]
+Description=Weekly ProjectAchilles intermediate CA renewal check
+
+[Timer]
+OnCalendar=weekly
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+EOF
+    units_changed=0
+    for f in "${RENEW_UNIT}.service" "${RENEW_UNIT}.timer"; do
+      if ! cmp -s "${unit_tmp}/${f}" "${SYSTEMD_DIR}/${f}"; then
+        as_root install -m 0644 "${unit_tmp}/${f}" "${SYSTEMD_DIR}/${f}" \
+          || fail renew-timer "could not install ${SYSTEMD_DIR}/${f}"
+        units_changed=1
+      fi
+    done
+    rm -rf "$unit_tmp"
+    if [ "$units_changed" = 1 ]; then
+      as_root systemctl daemon-reload || fail renew-timer "systemctl daemon-reload failed"
+    fi
+    if ! systemctl is-enabled --quiet "${RENEW_UNIT}.timer" || ! systemctl is-active --quiet "${RENEW_UNIT}.timer"; then
+      as_root systemctl enable --now "${RENEW_UNIT}.timer" \
+        || fail renew-timer "could not enable ${RENEW_UNIT}.timer"
+    elif [ "$units_changed" = 1 ]; then
+      as_root systemctl restart "${RENEW_UNIT}.timer" \
+        || fail renew-timer "could not restart ${RENEW_UNIT}.timer"
+    fi
+    c_ok "${RENEW_UNIT}.timer active (weekly)"
+  fi
+  ok renew-timer
+fi
+
+if [ "$RENDER_ONLY" = 1 ]; then
+  echo
+  c_ok "Render-only run complete: config files written; Docker was not touched."
+  exit 0
 fi
 
 # ---------------------------------------------------------------------------
@@ -239,14 +468,28 @@ echo
 c_ok "ProjectAchilles is deploying at ${PUBLIC_URL}"
 echo
 echo "Next steps:"
-echo "  • DNS: ensure an A record points ${ACHILLES_DOMAIN} at this server's IP."
+if [ "$TLS_MODE" = "achilles-ca" ]; then
+  echo "  • DNS: ensure ${ACHILLES_DOMAIN} resolves to ${BIND_IP_BARE} for every endpoint."
+else
+  echo "  • DNS: ensure an A record points ${ACHILLES_DOMAIN} at this server's IP."
+fi
 case "$TLS_MODE" in
   acme-http) echo "  • TLS: Caddy will fetch a Let's Encrypt cert once DNS + ports 80/443 are reachable." ;;
   acme-dns)  echo "  • TLS: Caddy will fetch a Let's Encrypt cert via DNS-01 (no inbound 80/443 needed)." ;;
-  internal)  echo "  • TLS: self-signed. Install deploy/caddy/certs/root-ca.crt in browsers, and set the"
-             echo "         agent's ca_cert to that file (or fetch via your config) to trust the server." ;;
+  internal)  echo "  • TLS: self-signed. Install deploy/caddy/certs/root-ca.crt in browsers, and in each"
+             echo "         endpoint's OS trust store (Windows: LocalMachine\\Root) BEFORE running the"
+             echo "         agent with --enroll: enrollment trusts only the OS trust store." ;;
   byo)       echo "  • TLS: using your cert at deploy/caddy/certs/. Ensure clients trust its issuing CA." ;;
+  achilles-ca)
+             echo "  • TLS: ProjectAchilles CA for ${CA_ZONE}. Endpoints must trust its root BEFORE --enroll:"
+             echo "         run ${ONPREM_DIR}/bootstrap-windows.ps1 (or bootstrap-unix.sh) on each endpoint."
+             echo "         It fetches http://${ACHILLES_DOMAIN}/ca/root.cer and checks the pinned fingerprint."
+             echo "         Fleets: distribute ${CA_DIR}/public/root.cer by GPO (trust only, no tokens)." ;;
 esac
 echo "  • Logs:    docker compose -f docker-compose.server.yml logs -f"
 echo "  • Status:  docker compose -f docker-compose.server.yml ps"
-echo "  • Health:  curl -sk ${PUBLIC_URL}/api/health"
+if [ "$TLS_MODE" = "achilles-ca" ]; then
+  echo "  • Health:  curl -s --cacert ${CA_DIR}/public/root.crt ${PUBLIC_URL}/api/health"
+else
+  echo "  • Health:  curl -sk ${PUBLIC_URL}/api/health"
+fi

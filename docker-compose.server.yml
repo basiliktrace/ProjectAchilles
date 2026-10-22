@@ -52,7 +52,9 @@ services:
       frontend:
         condition: service_started
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:80/", "--spider"]
+      # TCP-level: an HTTP probe from inside the container gets the catch-all
+      # 308 to https://localhost, which has no cert, in every TLS mode.
+      test: ["CMD-SHELL", "nc -z -w 3 127.0.0.1 443 && nc -z -w 3 127.0.0.1 80 || exit 1"]
       interval: 30s
       timeout: 5s
       retries: 3
