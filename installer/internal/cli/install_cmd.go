@@ -160,6 +160,19 @@ func unattended(ctx context.Context, sio installIO, root, cfgFile string, yes bo
 	if err != nil {
 		return err
 	}
+	if err := driveEngine(ctx, sio.stdout, starter); err != nil {
+		return err
+	}
+	if sio.getenv("ACHILLES_RENDER_ONLY") != "1" { // render-only says so itself
+		fmt.Fprintf(sio.stdout, "ProjectAchilles is installed: https://%s\n", c.AchillesDomain)
+	}
+	return nil
+}
+
+// driveEngine runs one engine run to completion, printing its events as
+// plain lines, and maps the outcome to the exit codes install uses:
+// 130 when interrupted, the engine's own status when it fails.
+func driveEngine(ctx context.Context, w io.Writer, starter engine.Starter) error {
 	// The engine runs in its own process group, so a terminal's ctrl+c
 	// reaches only this process: cancel the run (which kills the group).
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
@@ -169,7 +182,7 @@ func unattended(ctx context.Context, sio installIO, root, cfgFile string, yes bo
 		return fmt.Errorf("could not start scripts/deploy-server.sh: %w", err)
 	}
 	for ev := range events {
-		printEvent(sio.stdout, ev)
+		printEvent(w, ev)
 	}
 	code := engine.ExitCode(wait())
 	switch {
@@ -177,9 +190,6 @@ func unattended(ctx context.Context, sio installIO, root, cfgFile string, yes bo
 		return exitWith(130, errors.New("interrupted: the engine was stopped. Running the same command again is safe"))
 	case code != 0:
 		return exitWith(code, fmt.Errorf("the engine failed (exit status %d). Fix the problem above and run the same command again: it is safe to re-run", code))
-	}
-	if sio.getenv("ACHILLES_RENDER_ONLY") != "1" { // render-only says so itself
-		fmt.Fprintf(sio.stdout, "ProjectAchilles is installed: https://%s\n", c.AchillesDomain)
 	}
 	return nil
 }

@@ -1,0 +1,142 @@
+package cli
+
+import (
+	"github.com/charmbracelet/x/term"
+
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+
+	"github.com/projectachilles/ProjectAchilles/installer/internal/config"
+	"github.com/projectachilles/ProjectAchilles/installer/internal/day2"
+	"github.com/projectachilles/ProjectAchilles/installer/internal/engine"
+)
+
+// day2IO is the day-2 handlers' view of the process; tests replace it.
+type day2IO struct {
+	stdin          io.Reader
+	stdout, stderr io.Writer
+	cmd            day2.Cmd
+	newRunner      func(root, cfgPath, caDir string) (engine.Starter, error)
+	tty            func() bool
+}
+
+func init() {
+	registerDay2(defaultRegistry, day2IO{
+		stdin: os.Stdin, stdout: os.Stdout, stderr: os.Stderr,
+		cmd: day2.ExecCmd{}, newRunner: engineRunner,
+		tty: func() bool { return term.IsTerminal(os.Stdout.Fd()) },
+	})
+}
+
+func registerDay2(r *Registry, dio day2IO) {
+	r.Register("status", statusCmd(dio))
+	r.Register("upgrade", upgradeCmd(dio))
+	r.Register("backup", backupCmd(dio))
+	r.Register("restore", restoreCmd(dio))
+}
+
+// day2Deps builds the shared dependencies for the checkout at root. A missing
+// or unreadable deploy.config.env leaves Host/TLSMode empty: status then
+// reports those sections as failing instead of aborting.
+func day2Deps(dio day2IO, root, caDir string) day2.Deps {
+	d := day2.Deps{
+		Cmd: dio.cmd, RepoDir: root, CADir: caDir, BackupDir: day2.DefaultBackupDir,
+		Out: dio.stdout, In: dio.stdin,
+	}
+	if c, err := config.Load(filepath.Join(root, "deploy.config.env")); err == nil {
+		d.Host, d.TLSMode = c.AchillesDomain, c.TLSMode
+	}
+	return d
+}
+
+func statusCmd(dio day2IO) Handler {
+	return func(ctx context.Context, args []string) error {
+		flags := newFlagSet("status", dio.stderr)
+		repo := flags.String("repo", "", "ProjectAchilles checkout (default: the current directory if it is one, else "+defaultRepoDir+")")
+		caDir := flags.String("ca-dir", defaultCADir, "CA directory")
+		if err := parseFlags(flags, args); err != nil {
+			return helpOK(err)
+		}
+		rep, err := day2.Status(ctx, day2Deps(dio, repoDir(*repo), *caDir))
+		if err != nil {
+			return err
+		}
+		rep.Render(dio.stdout, dio.tty != nil && dio.tty())
+		if !rep.OK() {
+			return exitWith(1, nil)
+		}
+		return nil
+	}
+}
+
+func upgradeCmd(dio day2IO) Handler {
+	return func(ctx context.Context, args []string) error {
+		flags := newFlagSet("upgrade", dio.stderr)
+		repo := flags.String("repo", "", "ProjectAchilles checkout (default: the current directory if it is one, else "+defaultRepoDir+")")
+		caDir := flags.String("ca-dir", defaultCADir, "CA directory")
+		ref := flags.String("ref", "", "tag or ref to upgrade to (default: the next release tag)")
+		yes := flags.Bool("yes", false, "do not ask for confirmation")
+		if err := parseFlags(flags, args); err != nil {
+			return helpOK(err)
+		}
+		root := repoDir(*repo)
+		d := day2Deps(dio, root, *caDir)
+		cfgPath := filepath.Join(root, "deploy.config.env")
+		if _, err := os.Stat(cfgPath); err != nil {
+			return fmt.Errorf("%s not found: upgrade re-runs the install with the existing config", cfgPath)
+		}
+		d.RunEngine = func(ctx context.Context) error {
+			starter, err := dio.newRunner(root, cfgPath, *caDir)
+			if err != nil {
+				return err
+			}
+			return driveEngine(ctx, dio.stdout, starter)
+		}
+		return day2.Upgrade(ctx, d, *ref, *yes)
+	}
+}
+
+func backupCmd(dio day2IO) Handler {
+	return func(ctx context.Context, args []string) error {
+		flags := newFlagSet("backup", dio.stderr)
+		repo := flags.String("repo", "", "ProjectAchilles checkout (default: the current directory if it is one, else "+defaultRepoDir+")")
+		caDir := flags.String("ca-dir", defaultCADir, "CA directory")
+		out := flags.String("out", day2.DefaultBackupDir, "directory to write the backup into")
+		if err := parseFlags(flags, args); err != nil {
+			return helpOK(err)
+		}
+		_, err := day2.Backup(ctx, day2Deps(dio, repoDir(*repo), *caDir), *out)
+		return err
+	}
+}
+
+func restoreCmd(dio day2IO) Handler {
+	return func(ctx context.Context, args []string) error {
+		flags := newFlagSet("restore", dio.stderr)
+		repo := flags.String("repo", "", "ProjectAchilles checkout (default: the current directory if it is one, else "+defaultRepoDir+")")
+		caDir := flags.String("ca-dir", defaultCADir, "CA directory")
+		yes := flags.Bool("yes", false, "do not ask for the typed confirmation")
+		// Accept FILE before or after the flags.
+		var file string
+		rest := args
+		if len(args) > 0 && len(args[0]) > 0 && args[0][0] != '-' {
+			file, rest = args[0], args[1:]
+		}
+		if err := flags.Parse(rest); err != nil {
+			return helpOK(err)
+		}
+		if file == "" && flags.NArg() == 1 {
+			file = flags.Arg(0)
+		} else if flags.NArg() > 0 {
+			return fmt.Errorf("unexpected argument %q", flags.Arg(0))
+		}
+		if file == "" {
+			return errors.New("usage: achilles-installer restore FILE [--yes]")
+		}
+		return day2.Restore(ctx, day2Deps(dio, repoDir(*repo), *caDir), file, *yes)
+	}
+}
