@@ -152,10 +152,10 @@ installer warns about it. Prefer a name under a domain you own, or `.lan` /
 
 ### Get the installer onto the server
 
-:::warning Releases up to and including v2.2.0 do not include the installer
-Until a newer release is published, run `install-onprem.sh` with `--ref main`,
-which builds the installer from source and needs Go 1.26 or later (the version in
-`installer/go.mod`) and `make` on the server.
+:::note The installer ships with v2.3.0 and later
+Releases up to and including v2.2.0 have no `installer/` directory, so `--ref`
+must name v2.3.0 or newer (or a branch such as `main`, which builds from source
+and needs Go 1.26 or later and `make` on the server).
 :::
 
 `scripts/install-onprem.sh` is the one-command bootstrap. As root, it checks the
@@ -778,9 +778,7 @@ if you no longer use the CA, also run
 ## Unattended install
 
 The wizard's answers are a plain `deploy.config.env`, so an install can run
-without prompts. Get the binary first (`sudo bash install-onprem.sh --no-run`;
-releases up to and including v2.2.0 do not include the installer, so until a newer
-release is published add `--ref main`, which needs Go 1.26 or later and `make`),
+without prompts. Get the binary first (`sudo bash install-onprem.sh --no-run`),
 then write `/opt/projectachilles/deploy.config.env` and `chmod 600` it:
 
 ```ini
