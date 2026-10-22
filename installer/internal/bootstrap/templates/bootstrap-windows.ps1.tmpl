@@ -5,10 +5,17 @@
   Run from an elevated PowerShell:
       .\bootstrap-windows.ps1 -Token <enrollment-token>
 
-  1. Downloads the server root CA over HTTP and aborts unless its SHA-256
-     matches the value pinned below (the pin, not the transport, is the trust anchor).
-  2. Trusts it in Cert:\LocalMachine\Root (skipped if already present, e.g. via GPO).
-  3. Downloads the agent over HTTPS to C:\F0\achilles-agent.exe and enrolls it.
+  1. Locks C:\F0 to SYSTEM + Administrators before anything is downloaded.
+  2. Downloads the server root CA over HTTP into memory and aborts unless its
+     SHA-256 matches the value pinned below (the pin, not the transport, is the
+     trust anchor).
+  3. Trusts those same verified bytes in Cert:\LocalMachine\Root (skipped if
+     already present, e.g. via GPO).
+  4. Downloads the agent over HTTPS into C:\F0, locks it, renames it to
+     C:\F0\achilles-agent.exe and enrolls it.
+
+  Nothing is staged in %TEMP% or any other folder the user's unelevated token
+  can write to, so that token cannot swap the root or the SYSTEM service binary.
 #>
 param([Parameter(Mandatory)][string]$Token)
 
@@ -22,44 +29,94 @@ if (-not $isAdmin) { throw 'This script must run as Administrator (elevated Powe
 
 [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
 
-$cer = Join-Path $env:TEMP 'achilles-root-ca.cer'
-$download = Join-Path $env:TEMP 'achilles-agent-download.exe'
 # The service runs the binary from where --install is run, so it must be its
-# permanent home (the documented path, also the one ASR exclusions name).
+# permanent home (the documented path, also the one ASR exclusions name). The
+# download lands next to it so the final rename stays in one directory.
+$dir = 'C:\F0'
 $exe = 'C:\F0\achilles-agent.exe'
+$download = 'C:\F0\achilles-agent.download'
 
+# Well-known SIDs, never localized account names.
+$systemSid = New-Object System.Security.Principal.SecurityIdentifier 'S-1-5-18'
+$adminsSid = New-Object System.Security.Principal.SecurityIdentifier 'S-1-5-32-544'
+
+function Test-ReparsePoint([string]$Path) {
+    $item = Get-Item -LiteralPath $Path -Force
+    return [bool]($item.Attributes -band [IO.FileAttributes]::ReparsePoint)
+}
+
+# --- 1. Lock C:\F0 before any download -----------------------------------
+# Under C:\ a new folder inherits Modify for every signed-in user, which lets
+# the unelevated token delete or replace files in it. Protected DACL with only
+# SYSTEM + Administrators (inherited by everything created inside), owner
+# Administrators so the user keeps no implicit owner rights. An existing C:\F0
+# gets the same DACL; children that inherit pick it up, contents are kept.
+$dirAcl = New-Object System.Security.AccessControl.DirectorySecurity
+$dirAcl.SetOwner($adminsSid)
+$dirAcl.SetAccessRuleProtection($true, $false)
+foreach ($sid in $systemSid, $adminsSid) {
+    $dirAcl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($sid, 'FullControl', 'ContainerInherit, ObjectInherit', 'None', 'Allow')))
+}
+if (Test-Path -LiteralPath $dir) {
+    if (-not (Test-Path -LiteralPath $dir -PathType Container)) { throw "$dir exists and is not a directory; aborting." }
+} else {
+    # Created with the locked DACL in one step, so there is no window with the inherited one.
+    [void][System.IO.Directory]::CreateDirectory($dir, $dirAcl)
+}
+if (Test-ReparsePoint $dir) { throw "$dir is a junction or symbolic link; aborting." }
+Set-Acl -LiteralPath $dir -AclObject $dirAcl
+
+# Verify after locking: once this holds, the unelevated token can no longer
+# rename, replace or re-permission the directory.
+$dirNow = Get-Acl -LiteralPath $dir
+$dirOwner = $dirNow.GetOwner([System.Security.Principal.SecurityIdentifier]).Value
+$foreign = @($dirNow.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier]) | Where-Object { $_.IdentityReference.Value -ne 'S-1-5-18' -and $_.IdentityReference.Value -ne 'S-1-5-32-544' })
+if ((Test-ReparsePoint $dir) -or $dirOwner -ne 'S-1-5-32-544' -or -not $dirNow.AreAccessRulesProtected -or $foreign.Count -ne 0) {
+    throw "Could not lock $dir to SYSTEM + Administrators; aborting."
+}
+Write-Host "Locked $dir to SYSTEM + Administrators."
+
+# --- 2. Root CA: download into memory, verify, import the same bytes -----
 Write-Host "Downloading root CA from http://{{.Host}}/ca/root.cer"
-Invoke-WebRequest -UseBasicParsing -Uri "http://{{.Host}}/ca/root.cer" -OutFile $cer
+$rootBytes = (Invoke-WebRequest -UseBasicParsing -Uri "http://{{.Host}}/ca/root.cer").RawContentStream.ToArray()
 
-$actual = (Get-FileHash -Algorithm SHA256 -Path $cer).Hash
-if ($actual.ToLowerInvariant() -ne $PinnedRootSha256.ToLowerInvariant()) {
-    Remove-Item -Force $cer -ErrorAction SilentlyContinue
+$sha256 = [System.Security.Cryptography.SHA256]::Create()
+$actual = -join ($sha256.ComputeHash($rootBytes) | ForEach-Object { $_.ToString('x2') })
+if ($actual -ne $PinnedRootSha256.ToLowerInvariant()) {
     throw "Root CA fingerprint mismatch: expected $PinnedRootSha256, got $actual. Aborting; nothing was trusted."
 }
 Write-Host "Root CA SHA-256 verified: $actual"
 
-$thumb = (New-Object System.Security.Cryptography.X509Certificates.X509Certificate2 $cer).Thumbprint
+# Parsed from the hashed byte array itself: no file is written or re-read.
+$root = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2 -ArgumentList (,$rootBytes)
+$thumb = $root.Thumbprint
 if (Test-Path "Cert:\LocalMachine\Root\$thumb") {
     Write-Host 'Root CA already trusted (e.g. via GPO); skipping import.'
 } else {
-    certutil.exe -addstore -f Root $cer | Out-Null
-    if ($LASTEXITCODE -ne 0) { throw "certutil -addstore failed with exit code $LASTEXITCODE" }
+    $store = New-Object System.Security.Cryptography.X509Certificates.X509Store([System.Security.Cryptography.X509Certificates.StoreName]::Root, [System.Security.Cryptography.X509Certificates.StoreLocation]::LocalMachine)
+    $store.Open([System.Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
+    try { $store.Add($root) } finally { $store.Close() }
+    if (-not (Test-Path "Cert:\LocalMachine\Root\$thumb")) { throw 'Root CA import into Cert:\LocalMachine\Root failed.' }
     Write-Host 'Root CA added to Cert:\LocalMachine\Root.'
 }
-Remove-Item -Force $cer -ErrorAction SilentlyContinue
+
+# --- 3. Agent: download into the locked C:\F0, lock, rename --------------
+foreach ($p in $download, $exe) {
+    if (Test-Path -LiteralPath $p -PathType Container) { throw "$p is a directory; aborting." }
+}
+if (Test-Path -LiteralPath $download) { Remove-Item -LiteralPath $download -Force }
 
 Write-Host "Downloading agent from https://{{.Host}}"
 Invoke-WebRequest -UseBasicParsing -Uri "https://{{.Host}}/api/agent/download?os=windows&arch=amd64" -OutFile $download
 
-# The download inherited an ACE for the user running this script, and
-# Move-Item would carry it to C:\F0 as an explicit ACE that the agent's own
-# hardening cannot strip. Give it the final ACL (SYSTEM + Administrators
-# only, no inheritance) while it is still in the private TEMP folder.
+# The file already inherits the directory's DACL; make owner and DACL explicit
+# and protected anyway, so they do not depend on inheritance or on the
+# default-owner policy.
 $acl = New-Object System.Security.AccessControl.FileSecurity
+$acl.SetOwner($adminsSid)
 $acl.SetAccessRuleProtection($true, $false)
-foreach ($sid in 'S-1-5-18', 'S-1-5-32-544') {
-    $who = New-Object System.Security.Principal.SecurityIdentifier $sid
-    $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($who, 'FullControl', 'Allow')))
+foreach ($sid in $systemSid, $adminsSid) {
+    $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($sid, 'FullControl', 'Allow')))
 }
 Set-Acl -LiteralPath $download -AclObject $acl
 
@@ -67,8 +124,8 @@ Set-Acl -LiteralPath $download -AclObject $acl
 if (Get-Service -Name AchillesAgent -ErrorAction SilentlyContinue) {
     Stop-Service -Name AchillesAgent -Force -ErrorAction SilentlyContinue
 }
-New-Item -ItemType Directory -Force -Path (Split-Path $exe) | Out-Null
-Move-Item -Force -Path $download -Destination $exe
+# Same-directory rename: the file keeps the ACL set above.
+Move-Item -Force -LiteralPath $download -Destination $exe
 Write-Host "Agent installed at $exe"
 
 & $exe --enroll $Token --server https://{{.Host}} --install

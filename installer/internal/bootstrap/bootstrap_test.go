@@ -191,32 +191,137 @@ func TestRenderInstallsAgentAtPermanentPath(t *testing.T) {
 	}
 }
 
-// A file downloaded to %TEMP% inherits an ACE for the user running the
-// script; Move-Item turns it into an explicit ACE that the agent's
-// `icacls /inheritance:r` cannot strip, leaving the SYSTEM service binary
-// writable by that user's unelevated token (seen on Windows 11, PS 5.1).
-// The script must replace the download's DACL before moving it into place.
-func TestRenderWindowsLocksAgentACLBeforeMove(t *testing.T) {
+// windowsOrder fails the test unless every marker occurs in the rendered
+// script, in the given order (first occurrence of each).
+func windowsOrder(t *testing.T, win string, markers ...string) {
+	t.Helper()
+	last, prev := -1, ""
+	for _, m := range markers {
+		i := strings.Index(win, m)
+		if i < 0 {
+			t.Errorf("windows: missing %q", m)
+			continue
+		}
+		if i < last {
+			t.Errorf("windows: %q must come after %q", m, prev)
+		}
+		last, prev = i, m
+	}
+}
+
+// Threat model: the installing admin's UNELEVATED (UAC-filtered) token must
+// not get a binary of its choosing run as SYSTEM, nor a root of its choosing
+// trusted. %TEMP% is writable by that token, so nothing may be staged there:
+// a file in it can be swapped between download and use (and after an ACL
+// lock, since the user owns the parent folder). Earlier versions downloaded
+// both the root and the agent there.
+func TestRenderWindowsNeverStagesInTemp(t *testing.T) {
 	win, _ := render(t)
-	for _, want := range []string{
-		"$acl.SetAccessRuleProtection($true, $false)",
-		"'S-1-5-18'",     // SYSTEM
-		"'S-1-5-32-544'", // BUILTIN\Administrators
-		"Set-Acl -LiteralPath $download -AclObject $acl",
-	} {
-		if !strings.Contains(win, want) {
-			t.Errorf("windows: missing %q", want)
+	for _, bad := range []string{"$env:TEMP", "$env:TMP", "GetTempPath", "GetTempFileName", "certutil", "Get-FileHash"} {
+		if strings.Contains(win, bad) {
+			t.Errorf("windows: contains %q", bad)
 		}
 	}
-	setACL := strings.Index(win, "Set-Acl -LiteralPath $download")
-	move := strings.Index(win, "Move-Item -Force -Path $download -Destination $exe")
-	if move < 0 {
-		t.Fatal("windows: Move-Item of the download not found")
+	// The only file the script downloads is the agent, into C:\F0.
+	outFiles := regexp.MustCompile(`-OutFile\s+(\S+)`).FindAllStringSubmatch(win, -1)
+	if len(outFiles) != 1 || outFiles[0][1] != "$download" {
+		t.Errorf("windows: -OutFile targets %v, want exactly [$download]", outFiles)
 	}
-	if setACL < 0 || setACL > move {
-		t.Error("windows: the download's ACL must be replaced before it is moved to C:\\F0")
+	if !strings.Contains(win, `$download = 'C:\F0\achilles-agent.download'`) {
+		t.Error(`windows: agent download target is not C:\F0\achilles-agent.download`)
 	}
-	if regexp.MustCompile(`(?i)S-1-5-11|Authenticated Users|Everyone|S-1-1-0|BUILTIN\\\\Users`).MatchString(win) {
-		t.Error("windows: agent ACL grants a non-admin principal")
+}
+
+// C:\F0 under C:\ inherits Authenticated Users:Modify (delete-child), so the
+// locked agent binary could be deleted and replaced. The directory must be
+// locked (protected DACL, SYSTEM + Administrators by SID, owner
+// Administrators) before anything is downloaded, and verified afterwards.
+func TestRenderWindowsLocksF0BeforeAnyDownload(t *testing.T) {
+	win, _ := render(t)
+	windowsOrder(t, win,
+		`$dir = 'C:\F0'`,
+		"$systemSid = New-Object System.Security.Principal.SecurityIdentifier 'S-1-5-18'",
+		"$adminsSid = New-Object System.Security.Principal.SecurityIdentifier 'S-1-5-32-544'",
+		"$dirAcl = New-Object System.Security.AccessControl.DirectorySecurity",
+		"$dirAcl.SetOwner($adminsSid)",
+		"$dirAcl.SetAccessRuleProtection($true, $false)",
+		"FileSystemAccessRule($sid, 'FullControl', 'ContainerInherit, ObjectInherit', 'None', 'Allow')",
+		"[System.IO.Directory]::CreateDirectory($dir, $dirAcl)",
+		"if (Test-ReparsePoint $dir) { throw",
+		"Set-Acl -LiteralPath $dir -AclObject $dirAcl",
+		"$dirOwner -ne 'S-1-5-32-544'",
+		"-not $dirNow.AreAccessRulesProtected",
+		"$foreign.Count -ne 0",
+		"Invoke-WebRequest", // the first download comes only after the lock
+	)
+}
+
+// The agent is downloaded into the locked C:\F0, given an explicit owner and
+// protected DACL, renamed into place in the same directory, and only then
+// run (enrolled + installed as the SYSTEM service).
+func TestRenderWindowsLocksAgentBeforeRenameAndEnroll(t *testing.T) {
+	win, _ := render(t)
+	windowsOrder(t, win,
+		"Set-Acl -LiteralPath $dir -AclObject $dirAcl",
+		"if (Test-Path -LiteralPath $download) { Remove-Item -LiteralPath $download -Force }",
+		"-OutFile $download",
+		"$acl = New-Object System.Security.AccessControl.FileSecurity",
+		"$acl.SetOwner($adminsSid)",
+		"$acl.SetAccessRuleProtection($true, $false)",
+		"Set-Acl -LiteralPath $download -AclObject $acl",
+		"Move-Item -Force -LiteralPath $download -Destination $exe",
+		"& $exe --enroll $Token",
+	)
+	if n := strings.Count(win, "& $exe"); n != 1 {
+		t.Errorf("windows: the agent is run %d times, want once (after the lock)", n)
+	}
+}
+
+// The root's bytes are hashed in memory and the SAME bytes are imported:
+// certutil -addstore re-read a path in %TEMP% after it was hashed.
+func TestRenderWindowsImportsVerifiedRootBytes(t *testing.T) {
+	win, _ := render(t)
+	windowsOrder(t, win,
+		`$rootBytes = (Invoke-WebRequest -UseBasicParsing -Uri "http://`+testHost+`/ca/root.cer").RawContentStream.ToArray()`,
+		"$actual = -join ($sha256.ComputeHash($rootBytes)",
+		"if ($actual -ne $PinnedRootSha256.ToLowerInvariant()) {",
+		"Aborting; nothing was trusted.",
+		"X509Certificate2 -ArgumentList (,$rootBytes)",
+		`if (Test-Path "Cert:\LocalMachine\Root\$thumb") {`,
+		"[System.Security.Cryptography.X509Certificates.StoreName]::Root, [System.Security.Cryptography.X509Certificates.StoreLocation]::LocalMachine",
+		"$store.Open([System.Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)",
+		"$store.Add($root)",
+		"$store.Close()",
+		"-OutFile $download", // the agent download comes after the root is trusted
+	)
+	if strings.Count(win, "$rootBytes = ") != 1 {
+		t.Error("windows: $rootBytes assigned more than once")
+	}
+}
+
+// Only SYSTEM and Administrators are ever granted anything, and only by SID.
+var nonAdminPrincipal = regexp.MustCompile(`(?i)S-1-5-11\b|S-1-5-32-545\b|S-1-1-0\b|Authenticated Users|Everyone|BUILTIN\\Users|CREATOR OWNER|S-1-3-0\b`)
+
+func TestRenderWindowsGrantsOnlySystemAndAdministrators(t *testing.T) {
+	// The pattern must actually match what it guards against.
+	for _, s := range []string{`BUILTIN\Users`, "Authenticated Users", "S-1-5-11", "S-1-1-0", "Everyone", "S-1-5-32-545"} {
+		if !nonAdminPrincipal.MatchString(s) {
+			t.Fatalf("nonAdminPrincipal does not match %q", s)
+		}
+	}
+	win, _ := render(t)
+	if m := nonAdminPrincipal.FindString(win); m != "" {
+		t.Errorf("windows: names a non-admin principal %q", m)
+	}
+	for _, sid := range regexp.MustCompile(`S-1-[0-9-]+`).FindAllString(win, -1) {
+		if sid != "S-1-5-18" && sid != "S-1-5-32-544" {
+			t.Errorf("windows: unexpected SID %s", sid)
+		}
+	}
+	if regexp.MustCompile(`NT AUTHORITY|BUILTIN\\Administrators|'Administrators'|'SYSTEM'`).MatchString(win) {
+		t.Error("windows: uses a localized account name instead of a SID")
+	}
+	if n := strings.Count(win, "AddAccessRule("); n != 2 {
+		t.Errorf("windows: %d AddAccessRule calls, want 2 (directory + agent, each looped over the two SIDs)", n)
 	}
 }
