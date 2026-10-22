@@ -153,10 +153,10 @@ from the server.
 
 ### 5.1 Get the installer onto the server
 
-> **Releases up to and including v2.2.0 do not include the installer.** Until a
-> newer release is published, run `install-onprem.sh` with `--ref main`, which
-> builds the installer from source and needs Go 1.26 or later (the version in
-> `installer/go.mod`) and `make` on the server.
+> **The installer ships with v2.3.0 and later.** Releases up to and including
+> v2.2.0 have no `installer/` directory, so `--ref` must name v2.3.0 or newer (or
+> a branch such as `main`, which builds from source and needs Go 1.26 or later and
+> `make` on the server).
 
 `scripts/install-onprem.sh` is the one-command bootstrap. As root, it:
 
@@ -192,8 +192,7 @@ curl -fsSL https://raw.githubusercontent.com/projectachilles/ProjectAchilles/mai
 - **No release asset for the tag?** The script falls back to building the
   installer from source, which needs `go` (the version in `installer/go.mod`)
   and `make`. Releases up to and including v2.2.0 do not include the installer
-  (no asset and no `installer/` directory). Until a newer release is published,
-  run with `--ref main` (needs Go 1.26 or later and `make`).
+  at all (no asset and no `installer/` directory); use v2.3.0 or later.
 - **Existing checkout:** the script refuses a directory that is not a
   ProjectAchilles git checkout, and refuses local changes. The one exception is
   `deploy/caddy/tls.caddy`, which older engines modified: it is restored
@@ -914,9 +913,7 @@ In both cases:
 
 The wizard's answers are a plain `deploy.config.env`, so an install can run
 without prompts, for automation or a second identical server. Get the binary
-first (`sudo bash install-onprem.sh --no-run`; releases up to and including
-v2.2.0 do not include the installer, so until a newer release is published add
-`--ref main`, which needs Go 1.26 or later and `make`), then write
+first (`sudo bash install-onprem.sh --no-run`), then write
 `/opt/projectachilles/deploy.config.env` (see `deploy.config.env.example` for
 every key) and `chmod 600` it:
 

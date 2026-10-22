@@ -10,14 +10,14 @@
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.9-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![React](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=white)](https://react.dev/)
-[![Go](https://img.shields.io/badge/Go-1.25-00ADD8?logo=go&logoColor=white)](https://go.dev/)
+[![Go](https://img.shields.io/badge/Go-1.26-00ADD8?logo=go&logoColor=white)](https://go.dev/)
 [![Bun](https://img.shields.io/badge/Bun-1.3-F9F1E1?logo=bun&logoColor=black)](https://bun.sh/)
 
 **Continuous Security Validation — From Threat Intelligence to Defense Readiness**
 
 Stop hoping your defenses work. Start proving it.
 
-[Quick Start](#quick-start) · [Features](#features) · [Architecture](#architecture) · [Documentation](#documentation) · [Roadmap](docs/ROADMAP.md) · [Contributing](#contributing)
+[Install on Linux](#recommended-linux-server-in-one-command) · [Quick Start](#quick-start) · [Features](#features) · [Architecture](#architecture) · [Documentation](#documentation) · [Roadmap](docs/ROADMAP.md) · [Contributing](#contributing)
 
 </div>
 
@@ -66,14 +66,57 @@ ProjectAchilles is a continuous security validation platform with four core comp
 
 All four are driven from one console: a flat six-destination interface — Dashboard, Tests, Analytics, Agents, Tasks, Settings — with a single unified Security Dashboard as the landing page.
 
-The platform is open-source, deploys in minutes via Docker Compose, and integrates with Microsoft Defender and CrowdStrike Falcon for cross-correlation between your internal validation results and your EDR's own security posture data.
+The platform is open-source and installs on a Linux server with one command: a terminal wizard handles DNS, certificates, and agent enrollment for LAN deployments. It also runs anywhere Docker Compose does, and integrates with Microsoft Defender and CrowdStrike Falcon for cross-correlation between your internal validation results and your EDR's own security posture data.
 
 ## Quick Start
 
-### Path A — Local Development
+### Recommended: Linux server in one command
+
+Run this **on the Linux server** that will host ProjectAchilles (Ubuntu 22.04 or 24.04, root or sudo):
 
 ```bash
-# Clone the repository
+curl -fsSL https://raw.githubusercontent.com/projectachilles/ProjectAchilles/main/scripts/install-onprem.sh | sudo bash
+```
+
+Prefer to read a script before running it as root (recommended for production)?
+
+```bash
+curl -fsSLO https://raw.githubusercontent.com/projectachilles/ProjectAchilles/main/scripts/install-onprem.sh
+less install-onprem.sh
+sudo bash install-onprem.sh
+```
+
+That one command:
+
+1. clones the latest release into `/opt/projectachilles`;
+2. downloads the `achilles-installer` binary for your architecture (amd64 or arm64) and **verifies it against the release's `SHA256SUMS`**, refusing to run on a mismatch;
+3. opens a ten-screen terminal wizard: preflight, network and DNS name, certificates, Clerk login, analytics, organisation, review, live install, and done.
+
+<p align="center">
+  <img src="wiki/static/img/screenshots/onprem-review.png" alt="achilles-installer review screen — hostname, LAN IP, ProjectAchilles CA constrained to the DNS zone, Clerk keys, and Elasticsearch mode before installing" width="700">
+</p>
+
+The wizard automates every step a LAN install needs:
+
+| Step | What `achilles-installer` does for you |
+|------|----------------------------------------|
+| **Preflight** | Checks root, OS, RAM, disk, free ports 80/443, outbound reach to Docker Hub/GitHub/Clerk, and clock sync. The install step installs Docker if it is missing |
+| **Name and DNS** | Works with internal DNS. Detects whether the hostname is under a public domain or a private-only zone, and prints the exact A record plus the AD DNS PowerShell line to create it. Can add an optional `/etc/hosts` entry |
+| **Certificates** | Defaults to a **ProjectAchilles CA name-constrained to your DNS zone** (server-auth only, so a GPO-distributed root can't impersonate other sites or sign code). Also supports an Enterprise CA request (CSR), your own certificate files, or Let's Encrypt DNS-01, which needs no inbound internet. A root-owned timer renews the intermediate |
+| **Clerk keys** | Checks offline that the keys match each other and your domain before anything is installed |
+| **Network exposure** | Binds Caddy to one LAN IP, because Docker-published ports bypass `ufw`. Optional LAN-scoped `ufw`/`firewalld` rules never touch SSH |
+| **Agent enrollment** | Renders fingerprint-pinned bootstrap scripts for Windows (PowerShell 5.1) and Linux/macOS. GPO or Intune pushes **only the root certificate**, never enrollment tokens |
+| **Day 2** | `achilles-installer status`, `upgrade`, `backup`, `restore`, `ca renew` / `ca export` / `ca bootstrap` |
+
+**Needs:** 2 GiB RAM (4 GiB with the bundled Elasticsearch), 20 GiB free disk, outbound internet, and a terminal. A public IP is not required. Installer options: `--ref vX.Y.Z` to pin a release, `--dir` to change the install directory, and `--no-run` to install the binary only. For automation, use `achilles-installer install --config deploy.config.env --yes`.
+
+The full walkthrough covers DNS and Clerk choices, the CA model, GPO rollout to Windows endpoints, backups and troubleshooting: **[On-Prem LAN Deployment guide](docs/deployment/ON_PREM_LAN.md)**.
+
+> Internet-facing VPS with Let's Encrypt HTTP-01? Use [`scripts/deploy-server.sh`](docs/deployment/SELF_HOSTED_SERVER.md) (or `scripts/deploy-do.sh` to create a DigitalOcean droplet first). It is the same engine the wizard drives.
+
+### Local development
+
+```bash
 git clone https://github.com/projectachilles/ProjectAchilles.git
 cd ProjectAchilles
 
@@ -83,7 +126,7 @@ cd ProjectAchilles
 
 Configure Clerk authentication (see [Configuration](#configuration)), then open http://localhost:5173.
 
-### Path B — Docker Compose
+### Docker Compose (laptop or evaluation)
 
 ```bash
 # Clone and run the setup wizard (choose Docker). It writes backend/.env and
@@ -103,7 +146,7 @@ docker compose up -d
 docker compose --profile elasticsearch up -d
 ```
 
-### Path C — Windows (PowerShell)
+### Windows (PowerShell)
 
 ```powershell
 git clone https://github.com/projectachilles/ProjectAchilles.git
@@ -117,16 +160,18 @@ The PowerShell script checks prerequisites, fixes line endings, configures `back
 
 ### Deployment Targets
 
-| Target | Backend | Database | Agent Builds | Guide |
-|--------|---------|----------|-------------|-------|
-| **Docker Compose** | `backend/` | SQLite (volume) | Yes | [docker-compose.yml](docker-compose.yml) |
-| **Public server (VPS/droplet)** | `backend/` | SQLite (volume) | Yes | [Public Server Guide](docs/deployment/SELF_HOSTED_SERVER.md) |
-| **On-prem server** | `backend/` | SQLite (volume) | Yes | [On-Prem Guide](docs/deployment/ON_PREM_SERVER.md) |
-| **On-prem LAN (TUI installer)** | `backend/` | SQLite (volume) | Yes | [On-Prem LAN Guide](docs/deployment/ON_PREM_LAN.md) |
-| **Railway** | `backend/` | SQLite (volume) | Partial | [Railway Guide](docs/deployment/RAILWAY.md) |
-| **Render** | `backend/` | SQLite (persistent disk) | Partial | [Render Guide](docs/deployment/RENDER.md) |
-| **Fly.io** | `backend/` | SQLite (volume) | Yes | [Fly.io Guide](docs/deployment/FLY.md) |
-| **Vercel** | `backend-serverless/` | Turso (libSQL) | No | [Vercel Guide](docs/deployment/VERCEL.md) |
+| Target | Install with | Database | Agent Builds | Guide |
+|--------|--------------|----------|-------------|-------|
+| **On-prem LAN server (recommended for self-hosting)** | `install-onprem.sh` → `achilles-installer` wizard | SQLite (volume) | Yes | [On-Prem LAN Guide](docs/deployment/ON_PREM_LAN.md) |
+| **Public server (VPS/droplet)** | `scripts/deploy-server.sh` or `scripts/deploy-do.sh` | SQLite (volume) | Yes | [Public Server Guide](docs/deployment/SELF_HOSTED_SERVER.md) |
+| **On-prem server over SSH** | `scripts/deploy-remote.sh user@host` | SQLite (volume) | Yes | [On-Prem Guide](docs/deployment/ON_PREM_SERVER.md) |
+| **Docker Compose** | `scripts/setup.sh` + `docker compose up -d` | SQLite (volume) | Yes | [docker-compose.yml](docker-compose.yml) |
+| **Railway** | Railway dashboard | SQLite (volume) | Partial | [Railway Guide](docs/deployment/RAILWAY.md) |
+| **Render** | Blueprint (`render.yaml`) | SQLite (persistent disk) | Partial | [Render Guide](docs/deployment/RENDER.md) |
+| **Fly.io** | `flyctl` | SQLite (volume) | Yes | [Fly.io Guide](docs/deployment/FLY.md) |
+| **Vercel** | Two Vercel projects (`backend-serverless/` + `frontend/`) | Turso (libSQL) | No | [Vercel Guide](docs/deployment/VERCEL.md) |
+
+The three server targets share one engine (`scripts/deploy-server.sh` + `docker-compose.server.yml` + Caddy), so a single origin serves the UI at `/`, the API at `/api`, and agents on the same host. Every target except Vercel runs `backend/`.
 
 ## Features
 
@@ -140,8 +185,9 @@ One landing page for posture across the test library, the endpoint fleet, and El
 
 - **Attention banner** — derived, never stored: offline agents, stale agents, failed tasks in the last 24 h, outdated binaries, and git sync failures, each linking to the page that resolves it
 - **KPI strip** — Defense Score, Secure Score, total tests, average score, agents online, executions in the window
-- **Cards** — trend overview, severity mix, MITRE ATT&CK coverage, category breakdown, fleet health, recent executions
-- **7d / 30d / 90d range selector**, defaulting to 90 days
+- **Scores what is true now** — the Defense Score counts the **latest result per test × endpoint pair**, so an old failure that has since been fixed stops dragging the score down; the tile and the trend share that basis
+- **Cards** — trend overview, testing cadence, ATT&CK outcome matrix (prevented / detected / missed per technique), threat-actor readiness, top remediation controls, fleet health, recent executions
+- **Shared time range** with Analytics (24 h, 7 d, 30 d, 90 d, All; default 30 days), remembered across pages
 - **Per-card degradation** — an unconfigured integration greys out its own card with a "Configure →" link; the dashboard never redirects you away
 
 ### Console & Navigation
@@ -240,8 +286,8 @@ Browse the full test library with rich metadata and execute tests directly from 
   <img src="docs/screenshots/tests.png" alt="Tests — facet rail with category, severity, platform and threat-actor filters beside grouped test cards" width="800">
 </p>
 
-- **Facet rail** — category, severity, platform, threat actor, and a "not run yet" toggle, with live counts and client-side filtering
-- Tests grouped by category, each card carrying severity, platform, stage count, and test score
+- **Facet rail** — category, platform, threat actor, and a "not run yet" toggle, with live counts and client-side filtering
+- **Grid or list view** — tests grouped by category; the list view adds per-test fleet results (techniques, platform, stages, score) with columns that appear as the screen widens
 - View source code, detection rules, hardening scripts, and attack flow diagrams
 - Build, sign, and download test binaries directly from test detail pages
 - Dispatch a test to selected agents, now or on a schedule
@@ -264,6 +310,9 @@ Deploy a lightweight Go agent to endpoints for remote test execution with full l
 - **Zero-Downtime Key Rotation** — API keys rotated automatically via heartbeat with dual-key grace period
 - **Encrypted Config** — Agent credentials encrypted at rest with AES-256-GCM using machine-bound keys
 - **Remote Uninstall** — Two-phase agent removal (stop service + cleanup) initiated from admin UI
+- **Pre-execution blocks recorded, not failed** — when Defender ASR or application control denies launch of a fresh test binary, agent 0.7.0+ reports exit code `260` (inconclusive, excluded from the Defense Score) with the remedy, instead of leaving the task stuck
+- **Per-stage descriptions** — each stage's plain-language "what this does" travels with the result into run detail
+- **Pinned LAN enrollment** — on `achilles-installer` deployments, one bootstrap script verifies the root CA fingerprint, trusts it, installs the agent into a locked-down `C:\F0`, and enrolls
 
 - **Fleet utility rail** — online/offline/stale ring, version rollout, groups, key-rotation settings, and per-platform binary downloads beside the agent table
 - **Live task stream** — chronological view with date markers, collapsible batch rows, a detail panel, an expanded stdout/stderr view, and one-click retry for failed test tasks
@@ -287,7 +336,11 @@ Quantify your security posture with 30+ query endpoints powered by Elasticsearch
   <img src="docs/screenshots/analytics-dashboard.png" alt="Analytics dashboard — results by error type, ATT&CK technique distribution, score by category, Defense Score ledger, and trend overview" width="800">
 </p>
 
-- **Defense Score** — Aggregate score with breakdowns by test, technique, category, hostname, and severity
+- **Defense Score** — Latest-result score (`basis=latest`) or per-execution score, with breakdowns by test, technique, category, hostname, and severity
+- **Run Detail** — bundle stages in execution order with plain-language verdicts, ATT&CK technique names, and an attack-chain strip
+- **Chain Depth** — how far each multi-stage attack got before something stopped it, split into detected / undetected chains, pre-execution blocks, and stage errors
+- **Execution Report** — a print-ready PDF report (executive verdict, kill chain, timeline, findings) at `/analytics/report`, named for your organisation via `ORGANIZATION_NAME`
+- **Compliance Export** — SB-PC-2026-001 JSON export (with JSON Schema) that honours the analytics scope filters
 - **Trend Analysis** — Rolling-window defense score and error rate trends over time
 - **MITRE ATT&CK Heatmaps** — Host-test matrix showing protection status across your fleet
 - **Coverage Treemaps** — Hierarchical category/subcategory coverage visualization
@@ -295,9 +348,9 @@ Quantify your security posture with 30+ query endpoints powered by Elasticsearch
 - **Risk Acceptance** — Accept risk on individual controls with audit tracking
 - **Microsoft Defender Integration** — Sync Secure Score, alerts, and control profiles with cross-correlation analytics; dedicated Defender tab with alert drill-down drawer, correlation timeline, per-execution detection rate with MITRE roll-up, and control ↔ alert linking
 - **CrowdStrike Falcon Integration** — Sync ZTA posture score and alerts with cross-correlation analytics; dedicated CrowdStrike tab with alert drill-down drawer (Falcon console links), correlation timeline, and per-execution detection rate; optional auto-resolve closes correlated alerts with an audit-trail comment
+- **Vendor-Confirmed Prevention** — a stage that CrowdStrike or Defender reports as prevented is credited as protected; both EDR tabs share one layout with source/severity filters and evidence-based technique coverage (prevented / detected only / missed)
 - **Trend Alerting** — Threshold-based Slack and email notifications with in-app notification bell
 - **Write-Index Rollover** — Results ingest into dated write indices (`achilles-results-YYYY.MM.DD`) with daily, monthly, or static rollover; per-task index targeting for isolated result sets
-- **90-day default window** — weekly and monthly bundle schedules produced empty charts on a 30-day default
 
 <details>
 <summary>More: the posture section</summary>
@@ -321,6 +374,7 @@ Compile and sign test binaries on demand with Go cross-compilation.
 - **Multi-Certificate Management** — Upload PFX/P12 or generate self-signed certs (up to 5)
 - **Embed Dependencies** — Detects `//go:embed` directives and manages required files
 - **Build Caching** — Previously built binaries cached for instant download
+- **Background Builds** — builds run asynchronously with progress polling and resume after a page refresh; Build All runs one test at a time
 
 ### Task Scheduling
 
@@ -396,18 +450,20 @@ graph TB
 
 | Layer | Technology | Version |
 |-------|------------|---------|
-| Frontend | React | 19.2 |
-| Build Tool | Vite | 8.1 |
+| Frontend | React | 19.3 |
+| Build Tool | Vite | 8.3 |
 | Styling | Tailwind CSS | 4.1 |
-| State Management | Redux Toolkit | 2.12 |
+| State Management | Redux Toolkit | 2.13 |
 | Routing | React Router | 7.18 |
 | Authentication | Clerk | 5.x |
-| Backend | Express | 4.18 |
+| Backend | Express | 4.22 |
 | Language | TypeScript | 5.9 |
 | CLI Runtime | Bun | 1.3 |
 | CLI UI | Ink | 6.8 |
 | AI SDK | Vercel AI SDK | 6.0 |
-| Agent | Go | 1.25 |
+| Agent | Go | 1.26 |
+| Server Installer | Go + Bubble Tea / Huh / Lip Gloss | 1.26 / v2 |
+| Reverse Proxy & TLS | Caddy | 2.10 |
 | Analytics Store | Elasticsearch | 8.x |
 | Agent Database | SQLite | 3.x |
 | Code Signing | osslsigncode | — |
@@ -441,16 +497,24 @@ ProjectAchilles/
 ├── agent/                     # Go agent source
 │   ├── main.go                # CLI entry point (--enroll, --run, --install)
 │   └── internal/              # Agent modules (poller, executor, updater, sysinfo)
+├── installer/                 # achilles-installer: Go + Bubble Tea TUI for Linux server installs
+│   └── internal/              # Wizard (tui), CA, DNS/Clerk checks, preflight, engine runner, day-2
 ├── blog/                      # Next.js 16 + MDX blog (blog.projectachilles.io, ES/EN i18n)
-├── deploy/                    # Reverse-proxy assets for single-server installs (Caddy)
+├── wiki/                      # Docusaurus documentation site
+├── deploy/caddy/              # Caddy config for single-server installs (TLS modes, CA endpoints)
 ├── scripts/                   # Shell scripts and PowerShell bootstrap
+│   ├── install-onprem.sh      # One-command Linux bootstrap (verified installer download + wizard)
+│   ├── deploy-server.sh       # Server install engine (used by the wizard and the scripts below)
+│   ├── deploy-remote.sh       # Install on a remote host over SSH
+│   ├── deploy-do.sh           # Create a DigitalOcean droplet, then install
 │   ├── start.sh               # Development startup script
 │   ├── setup.sh               # Interactive setup wizard (Linux/macOS)
 │   └── Install-ProjectAchilles.ps1 # Bootstrap script (Windows)
 ├── docs/                      # Documentation
-│   ├── deployment/            # Deployment guides (Fly, Railway, Render, Vercel)
+│   ├── deployment/            # Deployment guides (on-prem LAN, server, Fly, Railway, Render, Vercel)
 │   └── security/              # Security audit and remediation docs
-├── docker-compose.yml         # Multi-service deployment
+├── docker-compose.yml         # Multi-service deployment (local / evaluation)
+├── docker-compose.server.yml  # Single-origin server deployment behind Caddy
 └── CLAUDE.md                  # AI assistant development guidance
 ```
 
@@ -690,6 +754,13 @@ Restart the backend afterwards so it reopens the database cleanly.
 | `PUT` | `/api/integrations/crowdstrike/auto-resolve/mode` | Set auto-resolve mode (`disabled`/`dry_run`/`enabled`) |
 | `GET` | `/api/integrations/crowdstrike/auto-resolve/receipts` | Paginated auto-resolve receipt history |
 
+### Reports
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/api/reports/executions` | Payload for the print-ready execution report |
+| `GET` | `/api/reports/sb-pc-2026-001` | SB-PC-2026-001 compliance export (JSON) |
+
 ### Alerting
 
 | Method | Endpoint | Description |
@@ -710,21 +781,19 @@ Restart the backend afterwards so it reopens the database cleanly.
 ## Documentation
 
 ### Getting Started
+- **[On-Prem LAN Deployment](docs/deployment/ON_PREM_LAN.md)** — the one-command Linux install: `achilles-installer` wizard, name-constrained ProjectAchilles CA, GPO trust and enrollment for Windows agents, backups and day-2
 - [Quick Start Deployment](docs/deployment/QUICK_START_DEPLOYMENT.md) — 50-minute production deployment
 - [Windows Docker Installation](docs/deployment/WINDOWS_DOCKER_INSTALL.md) — Complete guide for Windows with Docker Desktop
 - [Docker Compose guide](docker-compose.yml) — Local deployment with optional Elasticsearch
+- [Documentation site](wiki/docs/) — user guide, API reference, and deployment docs (Docusaurus)
 
 ### Deployment
-- [Docker Compose guide](docker-compose.yml) — Local deployment with optional Elasticsearch
 - [Public Server Deployment](docs/deployment/SELF_HOSTED_SERVER.md) — Publicly-reachable single-server install (DigitalOcean or any VPS) with Caddy auto-TLS
 - [On-Prem Deployment](docs/deployment/ON_PREM_SERVER.md) — On-premises install over SSH with internal CA, DNS-01, or bring-your-own certificate
-- [On-Prem LAN Deployment](docs/deployment/ON_PREM_LAN.md) — LAN install with the `achilles-installer` wizard, a name-constrained ProjectAchilles CA, and GPO trust for Windows agents
-- [Quick Start Deployment](docs/deployment/QUICK_START_DEPLOYMENT.md) — 50-minute production deployment
 - [Railway Deployment](docs/deployment/RAILWAY.md) — Railway with private networking
 - [Render Deployment](docs/deployment/RENDER.md) — Render with persistent disk and Blueprint
 - [Fly.io Deployment](docs/deployment/FLY.md) — Fly.io with custom domains and volumes
 - [Vercel Deployment](docs/deployment/VERCEL.md) — Serverless with Turso and Vercel Blob
-- [Windows Docker Installation](docs/deployment/WINDOWS_DOCKER_INSTALL.md) — Complete guide for Windows with Docker Desktop
 - [Production Deployment Guide](docs/deployment/PRODUCTION_DEPLOYMENT.md) — Comprehensive Railway deployment
 - [Deployment Checklist](docs/deployment/DEPLOYMENT_CHECKLIST.md) — Interactive pre-flight checklist
 - [LAN Development Agents](docs/deployment/LAN_DEV_AGENTS.md) — Running the backend on your LAN for real-device agent testing
