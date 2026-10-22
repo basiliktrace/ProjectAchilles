@@ -12,6 +12,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"strings"
 )
 
@@ -200,12 +201,18 @@ func Restore(ctx context.Context, d Deps, file string, yes bool) error {
 		return errors.New("not a ProjectAchilles backup (no MANIFEST)")
 	}
 
+	vols, _ := filepath.Glob(filepath.Join(stage, dirVolumes, "*.tar"))
+	for _, tf := range vols {
+		if !safeArchiveFile.MatchString(filepath.Base(tf)) {
+			return fmt.Errorf("refusing this backup: unsafe volume archive name %q", filepath.Base(tf))
+		}
+	}
+
 	fmt.Fprintln(w, "Stopping the stack...")
 	if _, err := d.compose(ctx, "stop"); err != nil {
 		return fmt.Errorf("stopping the stack: %w", err)
 	}
 
-	vols, _ := filepath.Glob(filepath.Join(stage, dirVolumes, "*.tar"))
 	for _, tf := range vols {
 		short := shortVolume(strings.TrimSuffix(filepath.Base(tf), ".tar"))
 		if short == "" {
@@ -222,7 +229,7 @@ func Restore(ctx context.Context, d Deps, file string, yes bool) error {
 		}
 		if _, err := d.Cmd.Run(ctx, "docker", "run", "--rm",
 			"-v", name+":/v", "-v", filepath.Dir(tf)+":/s:ro", helperImage,
-			"sh", "-c", "find /v -mindepth 1 -delete && tar -xf /s/"+filepath.Base(tf)+" -C /v"); err != nil {
+			"sh", "-c", `find /v -mindepth 1 -delete && tar -xf "/s/$1" -C /v`, "_", filepath.Base(tf)); err != nil {
 			return fmt.Errorf("restoring volume %s: %w (the stack is stopped; fix the problem and run restore again)", short, err)
 		}
 		fmt.Fprintf(w, "  volume %s\n", short)
@@ -258,6 +265,9 @@ func Restore(ctx context.Context, d Deps, file string, yes bool) error {
 	fmt.Fprintln(w, "Restore complete. Run achilles-installer status to check the stack.")
 	return nil
 }
+
+// safeArchiveFile is the only shape of volume archive name Restore will use.
+var safeArchiveFile = regexp.MustCompile(`^[A-Za-z0-9_.-]+\.tar$`)
 
 // shortVolume maps "<project>_esdata" to "esdata" (any project prefix).
 func shortVolume(name string) string {

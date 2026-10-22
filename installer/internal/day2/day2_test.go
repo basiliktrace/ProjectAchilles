@@ -728,3 +728,42 @@ func TestBackupHelperImagePinned(t *testing.T) {
 		t.Fatal("backup ran no helper container")
 	}
 }
+
+func TestRestoreRefusesUnsafeVolumeArchiveNames(t *testing.T) {
+	for _, name := range []string{"$(touch pwned)_esdata.tar", "a b_esdata.tar", `a"b_esdata.tar`, "x;id_esdata.tar"} {
+		f := helperFake(false)
+		d := backupDeps(t, f)
+		p := evilArchive(t,
+			&tar.Header{Name: "MANIFEST", Typeflag: tar.TypeReg, Mode: 0o600},
+			&tar.Header{Name: "volumes/" + name, Typeflag: tar.TypeReg, Mode: 0o600})
+		f.calls = nil
+		if err := Restore(context.Background(), d, p, true); err == nil {
+			t.Fatalf("%q: expected refusal", name)
+		}
+		if f.has("compose") || f.has("volume") || f.has("docker run") {
+			t.Fatalf("%q: nothing may run: %v", name, f.calls)
+		}
+	}
+}
+
+func TestRestoreShellCommandsCarryNoArchiveNames(t *testing.T) {
+	f := helperFake(false)
+	d := backupDeps(t, f)
+	p, err := Backup(context.Background(), d, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.calls = nil
+	if err := Restore(context.Background(), d, p, true); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range f.calls {
+		for i, a := range c.args {
+			if a == "-c" && i > 0 && c.args[i-1] == "sh" {
+				if i+1 < len(c.args) && strings.Contains(c.args[i+1], ".tar") && strings.Contains(c.args[i+1], "_esdata") {
+					t.Fatalf("archive name in sh -c: %v", c)
+				}
+			}
+		}
+	}
+}
