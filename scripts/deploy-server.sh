@@ -392,22 +392,47 @@ ok root-env
 # is ALREADY active. Never enables a firewall and never touches port 22.
 FW_PORTS=("80 tcp" "443 tcp" "443 udp")
 
-# Returns 0 when `ufw status` already lists ALLOW for $1/$2 from $3.
+# Every firewall-tool call runs as `as_root env LC_ALL=C ...` (env after sudo,
+# so it survives) because we parse English output ("Status: active", ALLOW).
+fw_ufw()  { as_root env LC_ALL=C ufw "$@"; }
+fw_fcmd() { as_root env LC_ALL=C firewall-cmd "$@"; }
+
+# Root's PATH has /usr/sbin; the invoking user's may not (Debian).
+# shellcheck disable=SC2016  # $1 is expanded by the inner sh, on purpose
+root_has() { as_root sh -c 'command -v "$1" >/dev/null 2>&1' _ "$1"; }
+
+# ufw_ipv6_enabled: /etc/default/ufw IPV6=no means ufw rejects IPv6 rules.
+UFW_DEFAULTS="${ACHILLES_UFW_DEFAULTS_OVERRIDE:-/etc/default/ufw}"
+ufw_ipv6_enabled() {
+  local v
+  v="$(as_root cat "$UFW_DEFAULTS" 2>/dev/null | sed -n 's/^IPV6=//p' | tail -n1 | tr -d '"[:space:]')" || true
+  [ "${v,,}" != "no" ]
+}
+
+# Returns 0 when `ufw status` already lists ALLOW for $1/$2 from $3. IPv6 rules
+# print as `80/tcp (v6)   ALLOW   2001:db8::/32`, so match fields, not columns.
 ufw_has_rule() {
-  as_root ufw status 2>/dev/null | awk -v want="$1/$2" -v cidr="$3" '
-    $1 == want && $2 == "ALLOW" { for (i = 3; i <= NF; i++) if ($i == cidr) found = 1 }
+  fw_ufw status 2>/dev/null | awk -v want="$1/$2" -v cidr="$3" '
+    $1 == want { a = 0; c = 0
+      for (i = 2; i <= NF; i++) { if ($i == "ALLOW") a = 1; if ($i == cidr) c = 1 }
+      if (a && c) found = 1 }
     END { exit !found }'
 }
 
 firewall_ufw() {
-  local cidr entry port proto
+  local cidr entry port proto v6_ok=1
+  ufw_ipv6_enabled || v6_ok=0
   for cidr in "${LAN_CIDRS[@]}"; do
+    if [[ "$cidr" == *:* ]] && [ "$v6_ok" = 0 ]; then
+      warn "ufw has IPV6=no; skipping IPv6 subnet ${cidr}"
+      continue
+    fi
     for entry in "${FW_PORTS[@]}"; do
       read -r port proto <<< "$entry"
       if ufw_has_rule "$port" "$proto" "$cidr"; then
         c_ok "ufw: ${port}/${proto} from ${cidr} already allowed"
       else
-        as_root ufw allow from "$cidr" to any port "$port" proto "$proto" comment projectachilles >/dev/null \
+        fw_ufw allow from "$cidr" to any port "$port" proto "$proto" comment projectachilles >/dev/null \
           || fail firewall "ufw allow ${port}/${proto} from ${cidr} failed"
         c_ok "ufw: allowed ${port}/${proto} from ${cidr}"
       fi
@@ -422,10 +447,10 @@ firewall_firewalld() {
     for entry in "${FW_PORTS[@]}"; do
       read -r port proto <<< "$entry"
       rule="rule family=\"${family}\" source address=\"${cidr}\" port port=\"${port}\" protocol=\"${proto}\" accept"
-      if as_root firewall-cmd --permanent "--query-rich-rule=${rule}" >/dev/null 2>&1; then
+      if fw_fcmd --permanent "--query-rich-rule=${rule}" >/dev/null 2>&1; then
         c_ok "firewalld: ${port}/${proto} from ${cidr} already allowed"
       else
-        as_root firewall-cmd --permanent "--add-rich-rule=${rule}" >/dev/null \
+        fw_fcmd --permanent "--add-rich-rule=${rule}" >/dev/null \
           || fail firewall "firewall-cmd add rule ${port}/${proto} from ${cidr} failed"
         added=1
         c_ok "firewalld: allowed ${port}/${proto} from ${cidr}"
@@ -433,19 +458,17 @@ firewall_firewalld() {
     done
   done
   if [ "$added" = 1 ]; then
-    as_root firewall-cmd --reload >/dev/null || fail firewall "firewall-cmd --reload failed"
+    fw_fcmd --reload >/dev/null || fail firewall "firewall-cmd --reload failed"
   fi
 }
 
 if [ "${#LAN_CIDRS[@]}" -gt 0 ] && { [ "$RENDER_ONLY" = 0 ] || [ "${ACHILLES_FIREWALL_TEST:-}" = 1 ]; }; then
   phase firewall "Opening 80/443 to the LAN subnets"
   ufw_active=0; firewalld_active=0
-  if command -v ufw >/dev/null 2>&1 \
-     && [ "$(as_root ufw status 2>/dev/null | head -n1)" = "Status: active" ]; then
+  if root_has ufw && [ "$(fw_ufw status 2>/dev/null | head -n1)" = "Status: active" ]; then
     ufw_active=1
   fi
-  if command -v firewall-cmd >/dev/null 2>&1 \
-     && [ "$(as_root firewall-cmd --state 2>/dev/null || true)" = "running" ]; then
+  if root_has firewall-cmd && [ "$(fw_fcmd --state 2>/dev/null || true)" = "running" ]; then
     firewalld_active=1
   fi
   if [ "$ufw_active" = 1 ]; then

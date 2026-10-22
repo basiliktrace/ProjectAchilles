@@ -37,7 +37,8 @@ echo "ufw $*" >> "$STUB_LOG"
 mkdir -p "$FW_DIR"; touch "$FW_DIR/ufw.rules"
 case "$1" in
   status)
-    echo "`+status+`"
+    # Localized output unless the engine forces the C locale.
+    if [ "$LC_ALL" = C ]; then echo "`+status+`"; else echo "Estado: `+map[bool]string{true: "activo", false: "inactivo"}[active]+`"; exit 0; fi
     if [ "`+status+`" = "Status: active" ]; then
       echo; echo "To                         Action      From"
       echo "--                         ------      ----"
@@ -46,7 +47,10 @@ case "$1" in
     fi ;;
   allow)
     # allow from CIDR to any port P proto X comment C
-    printf '%-26s ALLOW       %-18s # %s\n' "$7/$9" "$3" "${11}" >> "$FW_DIR/ufw.rules" ;;
+    case "$3" in
+      *:*) printf '%-26s ALLOW       %-18s # %s\n' "$7/$9 (v6)" "$3" "${11}" >> "$FW_DIR/ufw.rules" ;;
+      *)   printf '%-26s ALLOW       %-18s # %s\n' "$7/$9" "$3" "${11}" >> "$FW_DIR/ufw.rules" ;;
+    esac ;;
 esac
 exit 0
 `, 0o755)
@@ -62,7 +66,7 @@ func addFirewalld(t *testing.T, s *sandbox, running bool) {
 echo "firewall-cmd $*" >> "$STUB_LOG"
 mkdir -p "$FW_DIR"; touch "$FW_DIR/fwd.rules"
 case "$1" in
-  --state) echo "`+state+`"; [ "`+state+`" = running ] ;;
+  --state) if [ "$LC_ALL" = C ]; then echo "`+state+`"; else echo "en ejecucion"; exit 1; fi; [ "`+state+`" = running ] ;;
   --permanent)
     case "$2" in
       --query-rich-rule=*) grep -qxF -- "${2#--query-rich-rule=}" "$FW_DIR/fwd.rules"; exit $? ;;
@@ -250,5 +254,55 @@ func TestFirewallNeverEnablesOrTouches22(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestFirewallUfwIPv6IdempotentAndV6Form(t *testing.T) {
+	s := fwSandbox(t)
+	s.setConfig(t, readFile(t, s.cfg)+"LAN_SUBNETS=\"2001:db8::/32\"\n")
+	addUfw(t, s, true)
+	s.mustRun(t, nil)
+	s.mustRun(t, nil)
+	if n := len(allCalls(t, s, "ufw allow")); n != 3 {
+		t.Fatalf("want 3 allow calls across two runs, got %d", n)
+	}
+}
+
+func TestFirewallUfwIPv6DisabledSkipsWithWarn(t *testing.T) {
+	s := fwSandbox(t)
+	s.setConfig(t, readFile(t, s.cfg)+"LAN_SUBNETS=\"10.0.5.0/24,2001:db8::/32\"\n")
+	defaults := s.path("ufw-default")
+	writeFile(t, defaults, "# x\nIPV6=no\n", 0o644)
+	s.env["ACHILLES_UFW_DEFAULTS_OVERRIDE"] = defaults
+	addUfw(t, s, true)
+	r := s.mustRun(t, nil)
+	var warned bool
+	for _, e := range events(t, r.stdout) {
+		if e.kind == "warn" && strings.Contains(e.text, "2001:db8::/32") {
+			warned = true
+		}
+	}
+	if !warned {
+		t.Fatalf("no IPv6 skip warn\n%s", r)
+	}
+	allows := allCalls(t, s, "ufw allow")
+	if len(allows) != 3 {
+		t.Fatalf("want 3 v4 allows only, got %v", allows)
+	}
+	for _, l := range allows {
+		if strings.Contains(l, "2001:db8") {
+			t.Errorf("v6 rule added: %s", l)
+		}
+	}
+}
+
+func TestFirewallForcesCLocale(t *testing.T) {
+	// The ufw/firewall-cmd shims answer in Spanish unless LC_ALL=C; every
+	// scenario above relies on it, this one pins firewalld detection too.
+	s := fwSandbox(t)
+	addFirewalld(t, s, true)
+	s.mustRun(t, map[string]string{"LC_ALL": "es_ES.UTF-8"})
+	if len(allCalls(t, s, "firewall-cmd --permanent --add-rich-rule")) == 0 {
+		t.Fatal("firewalld not detected under a foreign locale")
 	}
 }
