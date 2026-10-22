@@ -51,6 +51,18 @@ Remove-Item -Force $cer -ErrorAction SilentlyContinue
 Write-Host "Downloading agent from https://{{.Host}}"
 Invoke-WebRequest -UseBasicParsing -Uri "https://{{.Host}}/api/agent/download?os=windows&arch=amd64" -OutFile $download
 
+# The download inherited an ACE for the user running this script, and
+# Move-Item would carry it to C:\F0 as an explicit ACE that the agent's own
+# hardening cannot strip. Give it the final ACL (SYSTEM + Administrators
+# only, no inheritance) while it is still in the private TEMP folder.
+$acl = New-Object System.Security.AccessControl.FileSecurity
+$acl.SetAccessRuleProtection($true, $false)
+foreach ($sid in 'S-1-5-18', 'S-1-5-32-544') {
+    $who = New-Object System.Security.Principal.SecurityIdentifier $sid
+    $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($who, 'FullControl', 'Allow')))
+}
+Set-Acl -LiteralPath $download -AclObject $acl
+
 # A running agent holds its binary open; --install re-creates the service anyway.
 if (Get-Service -Name AchillesAgent -ErrorAction SilentlyContinue) {
     Stop-Service -Name AchillesAgent -Force -ErrorAction SilentlyContinue

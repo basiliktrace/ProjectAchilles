@@ -190,3 +190,33 @@ func TestRenderInstallsAgentAtPermanentPath(t *testing.T) {
 		t.Error("unix: still enrolls from the temp dir that is deleted on exit")
 	}
 }
+
+// A file downloaded to %TEMP% inherits an ACE for the user running the
+// script; Move-Item turns it into an explicit ACE that the agent's
+// `icacls /inheritance:r` cannot strip, leaving the SYSTEM service binary
+// writable by that user's unelevated token (seen on Windows 11, PS 5.1).
+// The script must replace the download's DACL before moving it into place.
+func TestRenderWindowsLocksAgentACLBeforeMove(t *testing.T) {
+	win, _ := render(t)
+	for _, want := range []string{
+		"$acl.SetAccessRuleProtection($true, $false)",
+		"'S-1-5-18'",     // SYSTEM
+		"'S-1-5-32-544'", // BUILTIN\Administrators
+		"Set-Acl -LiteralPath $download -AclObject $acl",
+	} {
+		if !strings.Contains(win, want) {
+			t.Errorf("windows: missing %q", want)
+		}
+	}
+	setACL := strings.Index(win, "Set-Acl -LiteralPath $download")
+	move := strings.Index(win, "Move-Item -Force -Path $download -Destination $exe")
+	if move < 0 {
+		t.Fatal("windows: Move-Item of the download not found")
+	}
+	if setACL < 0 || setACL > move {
+		t.Error("windows: the download's ACL must be replaced before it is moved to C:\\F0")
+	}
+	if regexp.MustCompile(`(?i)S-1-5-11|Authenticated Users|Everyone|S-1-1-0|BUILTIN\\\\Users`).MatchString(win) {
+		t.Error("windows: agent ACL grants a non-admin principal")
+	}
+}
