@@ -1,0 +1,4 @@
+# Extra global options — default for every TLS_MODE except achilles-ca.
+# scripts/deploy-server.sh copies this (or extras/<mode>.global.caddy) to
+# rendered/global.caddy, which the Caddyfile imports inside its global block.
+# Intentionally empty.

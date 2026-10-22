@@ -1,0 +1,24 @@
+ ProjectAchilles installer                                      Welcome  1 / 10
+────────────────────────────────────────────────────────────────────────────────
+ This wizard sets up ProjectAchilles on this server for your LAN.
+ 
+   1. Check that this server is ready (read-only)
+   2. Pick the network interface and the server's DNS name
+   3. Choose how HTTPS certificates are issued
+   4. Login (Clerk), analytics and organisation settings
+   5. Review everything, then install
+ 
+ Nothing on this server changes until you confirm on the Review step. Press esc
+ to go back at any time.
+ 
+ Press enter to start.
+
+
+
+
+
+
+
+
+────────────────────────────────────────────────────────────────────────────────
+ enter start · ctrl+c quit

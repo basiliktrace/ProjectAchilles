@@ -1,0 +1,24 @@
+ ProjectAchilles installer                                      Install  9 / 10
+────────────────────────────────────────────────────────────────────────────────
+ Installing ProjectAchilles on this server. This can take several minutes.
+ 
+  ✓ done     Loading configuration
+  ✓ done     Validating settings
+  ✓ done     Checking Docker
+  ✓ done     Preparing the ProjectAchilles CA
+  » running  Configuring Caddy TLS (achilles-ca)
+  · pending  Writing backend/.env
+  · pending  Writing root .env
+  · pending  Opening 80/443 to the LAN subnets
+  · pending  Building and starting the stack
+  · pending  Exporting Caddy's internal root CA
+  · pending  Rendering endpoint bootstrap scripts
+  · pending  Installing the weekly CA renewal timer
+ 
+   rendering deploy/caddy/rendered/tls.caddy
+ 
+ ! Stop the install? The engine stops where it is; running it again later is
+   safe.
+   y stop · n or enter keep going
+────────────────────────────────────────────────────────────────────────────────
+ y stop the install · n keep going

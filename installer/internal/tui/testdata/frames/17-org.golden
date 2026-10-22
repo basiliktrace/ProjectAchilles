@@ -1,0 +1,24 @@
+ ProjectAchilles installer                                 Organisation  7 / 10
+────────────────────────────────────────────────────────────────────────────────
+ ┃ Organisation name                                                           
+ ┃ Printed on execution reports. 9 / 56 characters                             
+ ┃ > Acme Corp                                                                 
+                                                                               
+   Test library repository                                                     
+   Git URL of the security test library (the public default needs no token).   
+   > https://github.com/ubercylon8/f0_library.git                              
+                                                                               
+   Test library branch                                                         
+   > main                                                                      
+                                                                               
+   GitHub token                                                                
+   Only for a private repository (scope: repo). Leave blank otherwise.         
+   >                                                                           
+
+
+
+
+
+
+────────────────────────────────────────────────────────────────────────────────
+ enter next field · shift+tab previous · esc back · ctrl+c quit

@@ -1,0 +1,24 @@
+ ProjectAchilles installer                                Login (Clerk)  5 / 10
+────────────────────────────────────────────────────────────────────────────────
+ Create an app at dashboard.clerk.com and copy both keys from API Keys. For  
+ achilles.corp.example.com use production keys (pk_live_) from an app on that
+ name or a parent domain. Development keys (pk_test_) are free and work too, 
+ but show a "Development mode" banner and have lower usage limits.           
+ 
+   Clerk publishable key                                                       
+   > pk_test_aGFwcHktY2F0LTEyLmNsZXJrLmFjY291bnRzLmRldiQ=                      
+                                                                               
+ ┃ Clerk secret key                                                            
+ ┃ > *********************************                                        
+ 
+ ✓ Frontend API: happy-cat-12.clerk.accounts.dev · reachable from this server
+ ! This is a Clerk development key (pk_test_). It works, but production keys
+   (pk_live_) are recommended for achilles.corp.example.com: development
+   instances show a "Development mode" banner and have stricter usage limits.
+
+
+
+
+
+────────────────────────────────────────────────────────────────────────────────
+ enter next field · shift+tab previous · esc back · ctrl+c quit

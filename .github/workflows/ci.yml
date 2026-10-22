@@ -37,3 +37,30 @@ jobs:
 
       - name: Run tests
         run: npm test
+
+  installer:
+    name: Test installer
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: installer/go.mod
+          cache-dependency-path: installer/go.mod
+
+      - name: Vet
+        working-directory: installer
+        run: go vet ./...
+
+      - name: Test
+        working-directory: installer
+        run: go test ./...
+
+      - name: ShellCheck
+        run: |
+          files="scripts/deploy-server.sh scripts/ca-renew.sh scripts/install-onprem.sh"
+          # shellcheck disable=SC2086
+          docker run --rm -v "$PWD":/mnt -w /mnt koalaman/shellcheck:stable $files

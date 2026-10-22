@@ -15,6 +15,7 @@ deploy.config.env
 deploy/caddy/certs/*.crt
 deploy/caddy/certs/*.pem
 deploy/caddy/certs/*.key
+deploy/caddy/certs/*.csr
 
 # IDE
 .vscode/
@@ -99,3 +100,13 @@ wiki/node_modules/
 /PRODUCT.md
 /DESIGN.md
 /.impeccable/
+
+# On-prem installer outputs. scripts/deploy-server.sh renders the Caddy
+# snippets; the bootstrap scripts come from `achilles-installer ca bootstrap`,
+# which the engine invokes in TLS_MODE=achilles-ca.
+deploy/caddy/rendered/
+deploy/onprem/*.ps1
+deploy/onprem/*.sh
+
+# On-prem installer binary (placed by scripts/install-onprem.sh)
+/achilles-installer

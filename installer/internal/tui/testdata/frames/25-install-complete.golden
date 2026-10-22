@@ -1,0 +1,24 @@
+ ProjectAchilles installer                                      Install  9 / 10
+────────────────────────────────────────────────────────────────────────────────
+ ✓ Install complete · 11 phases done · 1 skipped (not used in this mode)
+ 
+  ✓ done     Loading configuration
+  ✓ done     Validating settings
+  ✓ done     Checking Docker
+  ✓ done     Preparing the ProjectAchilles CA
+  ✓ done     Configuring Caddy TLS (achilles-ca)
+  ✓ done     Writing backend/.env
+  ✓ done     Writing root .env
+  ✓ done     Opening 80/443 to the LAN subnets
+  ✓ done     Building and starting the stack (this can take several minutes)
+  – skipped  Exporting Caddy's internal root CA
+  ✓ done     Rendering endpoint bootstrap scripts
+  ✓ done     Installing the weekly CA renewal timer
+ 
+ Press enter for the next steps.
+
+
+
+
+────────────────────────────────────────────────────────────────────────────────
+ enter next steps · ctrl+c quit

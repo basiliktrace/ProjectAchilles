@@ -8,7 +8,10 @@
 # network.
 #
 # Driven by scripts/deploy-server.sh, which generates the root .env and renders
-# deploy/caddy/tls.caddy. You can also run it directly:
+# deploy/caddy/rendered/{tls,global,sites-extra}.caddy (gitignored). Run
+# ./scripts/deploy-server.sh first (and again after every `git pull`, so the
+# rendered snippets match the checkout); after that you can also run compose
+# directly:
 #
 #   docker compose -f docker-compose.server.yml up -d --build
 #   docker compose -f docker-compose.server.yml --profile elasticsearch up -d --build
@@ -20,10 +23,14 @@ services:
   caddy:
     image: ${CADDY_IMAGE:-caddy:2.10.0-alpine}
     restart: unless-stopped
+    # CADDY_BIND_IP pins the published ports to one host address (the LAN IP
+    # for an on-prem install). Unset or empty = no host IP at all, so Docker
+    # publishes on every IPv4 AND IPv6 address exactly as before (an explicit
+    # 0.0.0.0 would drop the [::] listeners). Bracket an IPv6 address: [fd00::1].
     ports:
-      - "80:80"
-      - "443:443"
-      - "443:443/udp"   # HTTP/3
+      - "${CADDY_BIND_IP:+${CADDY_BIND_IP}:}80:80"
+      - "${CADDY_BIND_IP:+${CADDY_BIND_IP}:}443:443"
+      - "${CADDY_BIND_IP:+${CADDY_BIND_IP}:}443:443/udp"   # HTTP/3
     environment:
       - ACHILLES_DOMAIN=${ACHILLES_DOMAIN:?set ACHILLES_DOMAIN in .env}
       - ACME_EMAIL=${ACME_EMAIL:-}
@@ -31,15 +38,25 @@ services:
       - CADDY_DNS_TOKEN=${CADDY_DNS_TOKEN:-}
     volumes:
       - ./deploy/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
-      - ./deploy/caddy/tls.caddy:/etc/caddy/tls.caddy:ro
+      - ./deploy/caddy/rendered:/etc/caddy/rendered:ro
       - ./deploy/caddy/certs:/etc/caddy/certs:ro
+      # TLS_MODE=achilles-ca: ACHILLES_CA_DIR=/etc/projectachilles/ca. Mount
+      # DIRECTORIES, not files: renewal swaps files by rename, and a file bind
+      # mount would keep serving the old inode. caddy/ holds only root.crt and
+      # the intermediate cert+key; the root KEY is never mounted. public/ is the
+      # root (PEM + DER) served over plain HTTP at /ca/. Other modes mount the
+      # empty committed deploy/caddy/no-ca.
+      - ${ACHILLES_CA_DIR:-./deploy/caddy/no-ca}/caddy:/etc/caddy/ca:ro
+      - ${ACHILLES_CA_DIR:-./deploy/caddy/no-ca}/public:/srv/ca:ro
       - caddy-data:/data
       - caddy-config:/config
     depends_on:
       frontend:
         condition: service_started
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:80/", "--spider"]
+      # TCP-level: an HTTP probe from inside the container gets the catch-all
+      # 308 to https://localhost, which has no cert, in every TLS mode.
+      test: ["CMD-SHELL", "nc -z -w 3 127.0.0.1 443 && nc -z -w 3 127.0.0.1 80 || exit 1"]
       interval: 30s
       timeout: 5s
       retries: 3

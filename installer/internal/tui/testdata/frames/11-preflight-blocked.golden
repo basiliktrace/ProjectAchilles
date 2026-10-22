@@ -1,0 +1,24 @@
+ ProjectAchilles installer                             Preflight checks  2 / 10
+────────────────────────────────────────────────────────────────────────────────
+ Read-only checks: nothing on this server is changed.
+ 
+  ✓ PASS  Running as root
+  ✓ PASS  Supported operating system  ubuntu 24.04
+  ✓ PASS  Memory                      8.0 GiB RAM
+  ✓ PASS  Free disk space             100.0 GiB free on /
+  ✓ PASS  Port 80 available
+  ✗ FAIL  Port 443 available          port 443 is already in use
+  ✓ PASS  Docker registry reachable
+  ✓ PASS  GitHub reachable
+  ✓ PASS  Clerk API reachable
+  ✓ PASS  Docker                      Docker 27.3.1
+  ✓ PASS  Clock synchronised
+ 
+ 10 passed · 0 warnings · 1 failed
+ 
+ ✗ Next is blocked: 1 check failed (Port 443 available). Fix it, then press r
+   to re-run the checks.
+
+
+────────────────────────────────────────────────────────────────────────────────
+ enter next · r re-run checks · esc back · ctrl+c quit

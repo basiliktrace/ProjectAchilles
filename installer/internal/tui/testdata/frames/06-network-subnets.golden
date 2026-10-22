@@ -1,0 +1,24 @@
+ ProjectAchilles installer                               Network & name  3 / 10
+────────────────────────────────────────────────────────────────────────────────
+ Listening on 10.0.5.20 (ens18) as achilles.corp.example.com
+ 
+ ┃ LAN subnets allowed to reach HTTPS                                          
+ ┃ Comma-separated CIDRs. Used only if ufw or firewalld is already active: the 
+ ┃ installer never enables a firewall or touches port 22.                      
+ ┃ > 10.0.5.0/24                                                              
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+────────────────────────────────────────────────────────────────────────────────
+ enter next · esc back · ctrl+c quit

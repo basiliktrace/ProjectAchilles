@@ -1,0 +1,24 @@
+ ProjectAchilles installer                                      Install  9 / 10
+────────────────────────────────────────────────────────────────────────────────
+ ✗ Install failed at: Building and starting the stack (this can take several
+   minutes)
+   docker compose up failed (see the output above).
+   8 phases done · 1 failed · 3 not run · exit status 1
+ 
+ Last 30 log lines · ↑ more above · ↑/↓ scroll:
+ #30 building layer 30
+ #31 building layer 31
+ #32 building layer 32
+ #33 building layer 33
+ #34 building layer 34
+ #35 building layer 35
+ #36 building layer 36
+ #37 building layer 37
+ #38 building layer 38
+ #39 building layer 39
+ #40 building layer 40
+ ✗ docker compose up failed (see the output above).
+ 
+ r retry (re-runs the whole install; it is idempotent) · q quit
+────────────────────────────────────────────────────────────────────────────────
+ r retry · q quit · ↑/↓ scroll log · esc back to review

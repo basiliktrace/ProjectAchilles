@@ -1,0 +1,24 @@
+ ProjectAchilles installer                                      Install  9 / 10
+────────────────────────────────────────────────────────────────────────────────
+ Installing ProjectAchilles on this server. This can take several minutes.
+ 
+  ✓ done     Loading configuration
+  ✓ done     Validating settings
+  ✓ done     Checking Docker
+  ✓ done     Preparing the ProjectAchilles CA
+  » running  Configuring Caddy TLS (achilles-ca)
+  · pending  Writing backend/.env
+  · pending  Writing root .env
+  · pending  Opening 80/443 to the LAN subnets
+  · pending  Building and starting the stack
+  · pending  Exporting Caddy's internal root CA
+  · pending  Rendering endpoint bootstrap scripts
+  · pending  Installing the weekly CA renewal timer
+ 
+ ==> Preparing the ProjectAchilles CA
+   doing ca
+ ! ufw is inactive: no firewall rules were added.
+ ==> Configuring Caddy TLS (achilles-ca)
+   rendering deploy/caddy/rendered/tls.caddy
+────────────────────────────────────────────────────────────────────────────────
+ ↑/↓ scroll log · esc stop · ctrl+c stop and quit

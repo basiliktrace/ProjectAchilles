@@ -1,0 +1,27 @@
+# TLS_MODE=achilles-ca — extra sites, imported at the Caddyfile's top level as
+# rendered/sites-extra.caddy.
+#
+# Plain-HTTP bootstrap surface: ONLY the ProjectAchilles root certificate, so
+# an endpoint that does not trust the CA yet can fetch it (and check its
+# pinned SHA-256) before talking HTTPS. Every other HTTP path redirects to
+# HTTPS. Nothing else (keys, intermediate, bootstrap scripts) is served here.
+# /srv/ca is /etc/projectachilles/ca/public on the host, mounted read-only.
+# Each route is rewritten to one fixed file, so no other file in /srv/ca can be
+# reached. (Caddy path matching is case-insensitive: /CA/ROOT.CER is the root.)
+http://{$ACHILLES_DOMAIN} {
+	handle /ca/root.crt {
+		header Content-Type application/x-pem-file
+		rewrite * /root.crt
+		root * /srv/ca
+		file_server
+	}
+	handle /ca/root.cer {
+		header Content-Type application/x-x509-ca-cert
+		rewrite * /root.cer
+		root * /srv/ca
+		file_server
+	}
+	handle {
+		redir https://{host}{uri} 308
+	}
+}
