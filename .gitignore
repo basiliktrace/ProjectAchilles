@@ -104,3 +104,6 @@ wiki/node_modules/
 deploy/caddy/rendered/
 deploy/onprem/*.ps1
 deploy/onprem/*.sh
+
+# On-prem installer binary (placed by scripts/install-onprem.sh)
+/achilles-installer
