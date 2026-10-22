@@ -338,7 +338,16 @@ esac
 CADDY_IMAGE="caddy:2.10.0-alpine"
 [ "$TLS_MODE" = "acme-dns" ] && CADDY_IMAGE="projectachilles-caddy:dns-${CADDY_DNS_PROVIDER}"
 
-# Auto-generate any blank secrets
+# Blank secrets: reuse the value an earlier run wrote to backend/.env, else
+# generate one. Never regenerate on a re-run: settings the backend encrypted
+# with ENCRYPTION_SECRET would become unreadable.
+existing_secret() {
+  [ -f "${REPO_ROOT}/backend/.env" ] || return 0
+  sed -n "s/^$1=//p" "${REPO_ROOT}/backend/.env" | tail -n1
+}
+SESSION_SECRET="${SESSION_SECRET:-$(existing_secret SESSION_SECRET)}"
+ENCRYPTION_SECRET="${ENCRYPTION_SECRET:-$(existing_secret ENCRYPTION_SECRET)}"
+CLI_AUTH_SECRET="${CLI_AUTH_SECRET:-$(existing_secret CLI_AUTH_SECRET)}"
 SESSION_SECRET="${SESSION_SECRET:-$(gen_secret)}"
 ENCRYPTION_SECRET="${ENCRYPTION_SECRET:-$(gen_secret)}"
 CLI_AUTH_SECRET="${CLI_AUTH_SECRET:-$(gen_secret)}"
