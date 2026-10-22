@@ -66,7 +66,7 @@ const (
 // Preflight runs every check and returns them in a stable order.
 func Preflight(ctx context.Context, s System, o PreflightOptions) []Check {
 	var out []Check
-	out = append(out, checkRoot(s), checkOS(s), checkRAM(s), checkDisk(s))
+	out = append(out, checkRoot(s), checkOS(s), checkRAM(s), checkDisk(s, o))
 	out = append(out, checkPort(s, 80, o), checkPort(s, 443, o))
 	out = append(out,
 		checkEgress(ctx, s, "egress-docker", "Docker registry reachable", egressDockerURL, "registry-1.docker.io"),
@@ -137,7 +137,10 @@ func checkRAM(s System) Check {
 	return c
 }
 
-func checkDisk(s System) Check {
+// checkDisk needs 20 GiB for a fresh install (images, build cache, data).
+// A re-run over a working install already holds its images and volumes in
+// that space, so there it only warns, and fails below 5 GiB.
+func checkDisk(s System, o PreflightOptions) Check {
 	c := Check{ID: "disk", Title: "Free disk space"}
 	path := "/"
 	if s.DirExists("/var/lib/docker") {
@@ -149,7 +152,14 @@ func checkDisk(s System) Check {
 		return c
 	}
 	c.Detail = fmt.Sprintf("%.1f GiB free on %s", float64(b)/float64(gib), path)
-	if b < 20*gib {
+	switch {
+	case o.ExistingInstall && b < 5*gib:
+		c.Status = Fail
+		c.Detail += "; at least 5 GiB required to rebuild an existing install"
+	case o.ExistingInstall && b < 20*gib:
+		c.Status = Warn
+		c.Detail += "; low (a fresh install needs 20 GiB; the existing install already uses part of it)"
+	case b < 20*gib:
 		c.Status = Fail
 		c.Detail += "; at least 20 GiB required"
 	}

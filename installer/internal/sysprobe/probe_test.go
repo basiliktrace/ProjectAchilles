@@ -134,3 +134,27 @@ func TestPreflightDiskPathSelection(t *testing.T) {
 		t.Errorf("got %q", s.diskPath)
 	}
 }
+
+// A re-run over a working install must not be blocked by the fresh-install
+// disk floor: the install's own images and volumes already use that space.
+// Found in the E2E run: 18.4 GiB free after a first install blocked
+// Reconfigure. Only a nearly full disk still fails.
+func TestPreflightDiskExistingInstall(t *testing.T) {
+	s := good()
+	s.disk = 18 << 30
+	if c := find(t, Preflight(context.Background(), s, PreflightOptions{}), "disk"); c.Status != Fail {
+		t.Errorf("fresh install with 18 GiB: got %v, want Fail", c.Status)
+	}
+	c := find(t, Preflight(context.Background(), s, PreflightOptions{ExistingInstall: true}), "disk")
+	if c.Status != Warn {
+		t.Errorf("existing install with 18 GiB: got %+v, want Warn", c)
+	}
+	s.disk = 4 << 30
+	if c := find(t, Preflight(context.Background(), s, PreflightOptions{ExistingInstall: true}), "disk"); c.Status != Fail {
+		t.Errorf("existing install with 4 GiB: got %v, want Fail", c.Status)
+	}
+	s.disk = 30 << 30
+	if c := find(t, Preflight(context.Background(), s, PreflightOptions{ExistingInstall: true}), "disk"); c.Status != Pass {
+		t.Errorf("existing install with 30 GiB: got %v, want Pass", c.Status)
+	}
+}
