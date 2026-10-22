@@ -22,13 +22,16 @@
 #   ACHILLES_RENDER_ONLY=1     same as --render-only: write every rendered file
 #                              (env files, Caddy snippets, CA, bootstrap
 #                              scripts) and stop before Docker install/build/up
+#   ACHILLES_FIREWALL_TEST=1   test hook: run the firewall phase even in
+#                              render-only mode
 #   ACHILLES_INSTALLER_BIN     achilles-installer binary, needed for
 #                              TLS_MODE=achilles-ca (default: repo root)
 #
 # Phases, in order: config, validate, docker, ca, caddy-render, backend-env,
-# root-env, up, ca-export, bootstrap, renew-timer. `ca`, `bootstrap` and
-# `renew-timer` run only for achilles-ca, `ca-export` only for internal;
-# render-only skips docker, up, ca-export and renew-timer.
+# root-env, firewall, up, ca-export, bootstrap, renew-timer. `ca`, `bootstrap`
+# and `renew-timer` run only for achilles-ca, `ca-export` only for internal,
+# `firewall` only when LAN_SUBNETS is set; render-only skips docker, up,
+# ca-export, renew-timer and firewall (unless ACHILLES_FIREWALL_TEST=1).
 # =============================================================================
 set -euo pipefail
 
@@ -90,6 +93,22 @@ is_tty()  { [ -t 0 ] && [ -t 1 ]; }
 SUDO=""; [ "$(id -u)" -eq 0 ] || SUDO="sudo"
 as_root() { if [ -n "$SUDO" ]; then "$SUDO" "$@"; else "$@"; fi; }
 
+# True for an IPv4 (a.b.c.d/0-32) or IPv6 (hex and colons, /0-128) CIDR.
+valid_cidr() {
+  local addr="${1%%/*}" len="${1#*/}" o
+  [ "$addr" != "$1" ] || return 1
+  case "$len" in ''|*[!0-9]*) return 1 ;; esac
+  if [[ "$addr" == *:* ]]; then
+    [[ "$addr" =~ ^[0-9A-Fa-f:]+$ ]] && [ "$len" -le 128 ] && return 0
+    return 1
+  fi
+  [[ "$addr" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] || return 1
+  [ "$len" -le 32 ] || return 1
+  local IFS=.
+  for o in $addr; do [ "$((10#$o))" -le 255 ] || return 1; done
+  return 0
+}
+
 gen_secret() { openssl rand -base64 32; }
 
 # Prompt for a value when missing (interactive only). $1=var name, $2=prompt,
@@ -135,7 +154,7 @@ CONFIG_FILE=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --render-only) RENDER_ONLY=1 ;;
-    -h|--help) sed -n '2,32p' "${BASH_SOURCE[0]}"; exit 0 ;;
+    -h|--help) sed -n '2,35p' "${BASH_SOURCE[0]}"; exit 0 ;;
     -*) die "unknown option: $1" ;;
     *) [ -z "$CONFIG_FILE" ] || die "unexpected argument: $1"; CONFIG_FILE="$1" ;;
   esac
@@ -216,6 +235,20 @@ case "$ES_MODE" in
     prompt_var ELASTICSEARCH_API_KEY "Elastic Cloud API key" yes ;;
   *) die "Invalid ES_MODE='${ES_MODE}' (expected: self | cloud)" ;;
 esac
+
+# LAN_SUBNETS: comma-separated CIDRs the firewall phase opens 80/443 to.
+# Parsed into LAN_CIDRS (trimmed, empty entries dropped); shape-checked here so
+# a typo can't reach ufw/firewall-cmd.
+LAN_CIDRS=()
+if [ -n "${LAN_SUBNETS:-}" ]; then
+  IFS=',' read -r -a _lan_raw <<< "$LAN_SUBNETS"
+  for _c in "${_lan_raw[@]}"; do
+    _c="${_c//[[:space:]]/}"
+    [ -n "$_c" ] || continue
+    valid_cidr "$_c" || die "invalid LAN_SUBNETS entry '${_c}' (expected CIDR like 10.0.5.0/24)"
+    LAN_CIDRS+=("$_c")
+  done
+fi
 
 PUBLIC_URL="https://${ACHILLES_DOMAIN}"
 
@@ -351,6 +384,80 @@ COMPOSE_PROFILES=""
 chmod 600 "${REPO_ROOT}/.env"
 c_ok "Wrote .env (mode 600)"
 ok root-env
+
+# ---------------------------------------------------------------------------
+# 7b. Host firewall (LAN installs only)
+# ---------------------------------------------------------------------------
+# Opens 80/tcp, 443/tcp and 443/udp to each LAN subnet on a host whose firewall
+# is ALREADY active. Never enables a firewall and never touches port 22.
+FW_PORTS=("80 tcp" "443 tcp" "443 udp")
+
+# Returns 0 when `ufw status` already lists ALLOW for $1/$2 from $3.
+ufw_has_rule() {
+  as_root ufw status 2>/dev/null | awk -v want="$1/$2" -v cidr="$3" '
+    $1 == want && $2 == "ALLOW" { for (i = 3; i <= NF; i++) if ($i == cidr) found = 1 }
+    END { exit !found }'
+}
+
+firewall_ufw() {
+  local cidr entry port proto
+  for cidr in "${LAN_CIDRS[@]}"; do
+    for entry in "${FW_PORTS[@]}"; do
+      read -r port proto <<< "$entry"
+      if ufw_has_rule "$port" "$proto" "$cidr"; then
+        c_ok "ufw: ${port}/${proto} from ${cidr} already allowed"
+      else
+        as_root ufw allow from "$cidr" to any port "$port" proto "$proto" comment projectachilles >/dev/null \
+          || fail firewall "ufw allow ${port}/${proto} from ${cidr} failed"
+        c_ok "ufw: allowed ${port}/${proto} from ${cidr}"
+      fi
+    done
+  done
+}
+
+firewall_firewalld() {
+  local cidr entry port proto family rule added=0
+  for cidr in "${LAN_CIDRS[@]}"; do
+    family=ipv4; [[ "$cidr" == *:* ]] && family=ipv6
+    for entry in "${FW_PORTS[@]}"; do
+      read -r port proto <<< "$entry"
+      rule="rule family=\"${family}\" source address=\"${cidr}\" port port=\"${port}\" protocol=\"${proto}\" accept"
+      if as_root firewall-cmd --permanent "--query-rich-rule=${rule}" >/dev/null 2>&1; then
+        c_ok "firewalld: ${port}/${proto} from ${cidr} already allowed"
+      else
+        as_root firewall-cmd --permanent "--add-rich-rule=${rule}" >/dev/null \
+          || fail firewall "firewall-cmd add rule ${port}/${proto} from ${cidr} failed"
+        added=1
+        c_ok "firewalld: allowed ${port}/${proto} from ${cidr}"
+      fi
+    done
+  done
+  if [ "$added" = 1 ]; then
+    as_root firewall-cmd --reload >/dev/null || fail firewall "firewall-cmd --reload failed"
+  fi
+}
+
+if [ "${#LAN_CIDRS[@]}" -gt 0 ] && { [ "$RENDER_ONLY" = 0 ] || [ "${ACHILLES_FIREWALL_TEST:-}" = 1 ]; }; then
+  phase firewall "Opening 80/443 to the LAN subnets"
+  ufw_active=0; firewalld_active=0
+  if command -v ufw >/dev/null 2>&1 \
+     && [ "$(as_root ufw status 2>/dev/null | head -n1)" = "Status: active" ]; then
+    ufw_active=1
+  fi
+  if command -v firewall-cmd >/dev/null 2>&1 \
+     && [ "$(as_root firewall-cmd --state 2>/dev/null || true)" = "running" ]; then
+    firewalld_active=1
+  fi
+  if [ "$ufw_active" = 1 ]; then
+    [ "$firewalld_active" = 0 ] || warn "firewalld is also active; only ufw rules were added"
+    firewall_ufw
+  elif [ "$firewalld_active" = 1 ]; then
+    firewall_firewalld
+  else
+    warn "No active host firewall — ports are reachable from any network that can route to ${CADDY_BIND_IP:-this host}"
+  fi
+  ok firewall
+fi
 
 # ---------------------------------------------------------------------------
 # 8. Bring the stack up

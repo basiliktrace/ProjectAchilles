@@ -61,7 +61,7 @@ jobs:
 
       - name: ShellCheck
         run: |
-          files=scripts/deploy-server.sh
+          files="scripts/deploy-server.sh scripts/ca-renew.sh"
           [ -f scripts/install-onprem.sh ] && files="$files scripts/install-onprem.sh"
           # shellcheck disable=SC2086
           docker run --rm -v "$PWD":/mnt -w /mnt koalaman/shellcheck:stable $files

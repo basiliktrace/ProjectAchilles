@@ -708,6 +708,9 @@ for a do
 done
 exec /usr/bin/install "$@"
 `, 0o755)
+	// Inactive firewalls, so the firewall phase never reaches a real host ufw.
+	writeFile(t, filepath.Join(s.stubs, "ufw"), "#!/bin/sh\necho \"ufw $*\" >> \"$STUB_LOG\"\necho 'Status: inactive'\n", 0o755)
+	writeFile(t, filepath.Join(s.stubs, "firewall-cmd"), "#!/bin/sh\necho \"firewall-cmd $*\" >> \"$STUB_LOG\"\necho 'not running'\nexit 252\n", 0o755)
 	state := filepath.Join(s.root, "systemctl-state")
 	writeFile(t, filepath.Join(s.stubs, "systemctl"), `#!/bin/sh
 echo "systemctl $*" >> "$STUB_LOG"
@@ -752,7 +755,7 @@ func TestEngineFullRunAchillesCA(t *testing.T) {
 		"SYSTEMCTL_STATE":           state,
 	}
 	r := s.mustRun(t, ov)
-	want := []string{"config", "validate", "docker", "ca", "caddy-render", "backend-env", "root-env", "up", "bootstrap", "renew-timer"}
+	want := []string{"config", "validate", "docker", "ca", "caddy-render", "backend-env", "root-env", "firewall", "up", "bootstrap", "renew-timer"}
 	if got := phaseIDs(t, r); strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Errorf("phases = %v, want %v", got, want)
 	}
