@@ -20,9 +20,12 @@ import (
 // DefaultBackupDir is where backups are written (mode 0700, files 0600).
 const DefaultBackupDir = "/var/backups/projectachilles"
 
-// helperImage runs tar against volumes. It is the same alpine family the
-// Caddy image is built on, so it is normally already on the host.
-const helperImage = "alpine"
+// helperImage runs tar against volumes for backup and restore. It is pinned
+// to a release line rather than the floating "alpine" (latest) tag so a
+// backup and a later restore run the same busybox tar, and a new Alpine
+// major can't change what either does without a reviewed code change. 3.24
+// was the newest 3.x line when this was written; bump it deliberately.
+const helperImage = "alpine:3.24"
 
 // Cmd runs an external program and returns its combined output.
 type Cmd interface {

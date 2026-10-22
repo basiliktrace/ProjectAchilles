@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -694,5 +695,35 @@ func TestUpgradePrintsInstallerUpdateNotice(t *testing.T) {
 	}
 	if strings.Contains(out.String(), "To update the installer itself") {
 		t.Fatalf("notice printed for a matching binary:\n%s", out.String())
+	}
+}
+
+// Every helper container runs a pinned Alpine release line, never the
+// floating "alpine" (latest) tag.
+func TestBackupHelperImagePinned(t *testing.T) {
+	if !regexp.MustCompile(`^alpine:3\.\d+$`).MatchString(helperImage) {
+		t.Fatalf("helperImage = %q, want alpine:3.<minor>", helperImage)
+	}
+	f := helperFake(false)
+	if _, err := Backup(context.Background(), backupDeps(t, f), ""); err != nil {
+		t.Fatal(err)
+	}
+	runs := 0
+	for _, c := range f.calls {
+		if c.name != "docker" || len(c.args) == 0 || c.args[0] != "run" {
+			continue
+		}
+		runs++
+		for _, a := range c.args {
+			if a == "alpine" {
+				t.Errorf("unpinned alpine in %s", c)
+			}
+		}
+		if !strings.Contains(c.String(), " "+helperImage+" ") {
+			t.Errorf("docker run without %s: %s", helperImage, c)
+		}
+	}
+	if runs == 0 {
+		t.Fatal("backup ran no helper container")
 	}
 }
