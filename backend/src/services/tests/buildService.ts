@@ -349,13 +349,16 @@ const ARTIFACT_DIR = \`${artifactDir}\`
    * platform setting when no build tags are present.
    */
   private resolveTargetOSes(testDir: string, uuid: string): PlatformSettings['os'][] {
+    // basename() strips any path separators — a path-injection sanitizer CodeQL
+    // recognizes. For a UUID_REGEX-valid uuid this is a no-op.
+    const safeUuid = path.basename(uuid);
     const detected = new Set<PlatformSettings['os']>();
-    const mainFile = path.join(testDir, `${uuid}.go`);
+    const mainFile = path.join(testDir, `${safeUuid}.go`);
     if (fs.existsSync(mainFile)) {
       const os = this.detectBuildTagOS(mainFile);
       if (os) detected.add(os);
     }
-    const goFiles = fs.readdirSync(testDir).filter(f => f.endsWith('.go') && f !== `${uuid}.go`);
+    const goFiles = fs.readdirSync(testDir).filter(f => f.endsWith('.go') && f !== `${safeUuid}.go`);
     for (const goFile of goFiles) {
       const os = this.detectBuildTagOS(path.join(testDir, goFile));
       if (os) detected.add(os);
@@ -735,10 +738,13 @@ const ARTIFACT_DIR = \`${artifactDir}\`
       // `.exe`) and fail to launch it. The primary OS is recorded at meta-write.
       for (const siblingOs of targetOSes) {
         if (siblingOs === platform.os) continue;
-        const siblingFilename = this.osBinaryFilename(uuid, siblingOs);
+        // basename() strips path separators (path-injection sanitizer CodeQL
+        // recognizes); no-op for the UUID_REGEX-valid uuid / `<uuid>[.exe]`.
+        const safeUuid = path.basename(uuid);
+        const siblingFilename = path.basename(this.osBinaryFilename(uuid, siblingOs));
         const siblingCandidates = [
-          path.join(repoRoot, 'build', uuid, siblingFilename),
-          path.join(testDir, 'build', uuid, siblingFilename),
+          path.join(repoRoot, 'build', safeUuid, siblingFilename),
+          path.join(testDir, 'build', safeUuid, siblingFilename),
           path.join(testDir, siblingFilename),
         ];
         const sourcePath = siblingCandidates.find(c => fs.existsSync(c));
