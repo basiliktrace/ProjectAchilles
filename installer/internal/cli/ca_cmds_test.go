@@ -72,6 +72,44 @@ func TestCAInitPrintsFingerprints(t *testing.T) {
 	}
 }
 
+func TestCAInitRotateIfChanged(t *testing.T) {
+	r, out, errb := caRegistry()
+	dir := filepath.Join(t.TempDir(), "ca")
+	if code := r.Run([]string{"ca", "init", "--dir", dir, "--zone", "corp.example.com"}, out, errb); code != 0 {
+		t.Fatalf("init exit %d, stderr %q", code, errb)
+	}
+	fp := func() string {
+		b, err := os.ReadFile(filepath.Join(dir, "root.crt"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(b)
+	}
+	before := fp()
+	errb.Reset()
+	if code := r.Run([]string{"ca", "init", "--dir", dir, "--zone", "corp.example.com", "--rotate", "--if-changed"}, out, errb); code != 0 {
+		t.Fatalf("exit %d, stderr %q", code, errb)
+	}
+	if fp() != before {
+		t.Fatal("--rotate --if-changed rotated an unchanged CA")
+	}
+	if strings.Contains(errb.String(), "re-trust") {
+		t.Errorf("warned about a rotation that did not happen: %q", errb)
+	}
+	if code := r.Run([]string{"ca", "init", "--dir", dir, "--zone", "other.example.com", "--rotate", "--if-changed"}, out, errb); code != 0 {
+		t.Fatalf("exit %d, stderr %q", code, errb)
+	}
+	if fp() == before {
+		t.Fatal("--rotate --if-changed kept a CA whose zone changed")
+	}
+	if !strings.Contains(errb.String(), "re-trust") {
+		t.Errorf("rotation did not warn: %q", errb)
+	}
+	if code := r.Run([]string{"ca", "init", "--dir", dir, "--zone", "corp.example.com", "--if-changed"}, out, errb); code == 0 {
+		t.Error("--if-changed without --rotate should be rejected")
+	}
+}
+
 func TestCAInitFlagValidation(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "ca")
 	for _, args := range [][]string{

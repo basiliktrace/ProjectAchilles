@@ -23,6 +23,7 @@ type Config struct {
 	LANSubnets  string // comma-separated CIDRs
 	CAZone      string
 	CAIncludeIP bool
+	CARotate    bool // replace an existing CA whose constraints differ (endpoints must re-trust)
 	HostsEntry  bool
 
 	CaddyDNSProvider string
@@ -90,6 +91,7 @@ var fields = []field{
 	str("LAN_SUBNETS", func(c *Config) *string { return &c.LANSubnets }),
 	str("CA_ZONE", func(c *Config) *string { return &c.CAZone }),
 	boo("CA_INCLUDE_IP", func(c *Config) *bool { return &c.CAIncludeIP }),
+	boo("CA_ROTATE", func(c *Config) *bool { return &c.CARotate }),
 	boo("HOSTS_ENTRY", func(c *Config) *bool { return &c.HostsEntry }),
 	str("CADDY_DNS_PROVIDER", func(c *Config) *string { return &c.CaddyDNSProvider }),
 	str("CADDY_DNS_MODULE", func(c *Config) *string { return &c.CaddyDNSModule }),

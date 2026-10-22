@@ -554,6 +554,40 @@ func TestInitRotateReplaces(t *testing.T) {
 	}
 }
 
+func TestInitRotateIfChanged(t *testing.T) {
+	o := opts(t)
+	first := mustInit(t, o)
+	o.Rotate, o.RotateOnlyIfChanged = true, true
+
+	// Same constraints: kept, however often it re-runs.
+	same := mustInit(t, o)
+	if same.Root.SerialNumber.Cmp(first.Root.SerialNumber) != 0 {
+		t.Fatal("rotated although the constraints are unchanged")
+	}
+
+	// IP policy differs (zone equal): rotated once, then stable.
+	o.IncludeIP = true
+	ipChanged := mustInit(t, o)
+	if ipChanged.Root.SerialNumber.Cmp(first.Root.SerialNumber) == 0 {
+		t.Fatal("IP policy change did not rotate")
+	}
+	if len(ipChanged.Root.PermittedIPRanges) != 1 {
+		t.Fatalf("rotated root IP constraint = %v", ipChanged.Root.PermittedIPRanges)
+	}
+	again := mustInit(t, o)
+	if again.Root.SerialNumber.Cmp(ipChanged.Root.SerialNumber) != 0 {
+		t.Fatal("re-run after a rotation rotated again")
+	}
+
+	// Zone differs: rotated.
+	o.Zone = "other.example.com"
+	zoneChanged := mustInit(t, o)
+	if zoneChanged.Root.SerialNumber.Cmp(again.Root.SerialNumber) == 0 ||
+		zoneChanged.Root.PermittedDNSDomains[0] != "other.example.com" {
+		t.Fatal("zone change did not rotate")
+	}
+}
+
 func TestInitSelfHealsDerivedFiles(t *testing.T) {
 	o := opts(t)
 	first := mustInit(t, o)

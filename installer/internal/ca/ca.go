@@ -70,8 +70,12 @@ type Options struct {
 	// IncludeIP permits exactly LANIP as an IP SAN. Without it every IP is
 	// excluded, because an absent IP constraint leaves IP SANs unconstrained.
 	IncludeIP bool
-	Rotate    bool             // replace an existing root and intermediate with new keys
-	Now       func() time.Time // defaults to time.Now
+	Rotate    bool // replace an existing root and intermediate with new keys
+	// RotateOnlyIfChanged limits Rotate to an existing root whose constraints
+	// (zone and IP policy) differ from these options, so a re-run with Rotate
+	// set never replaces a root it already rotated.
+	RotateOnlyIfChanged bool
+	Now                 func() time.Time // defaults to time.Now
 }
 
 // Bundle is the CA's public material.
@@ -306,7 +310,7 @@ func Init(o Options) (*Bundle, error) {
 	// root.crt is the commit point: it is written after its key and the
 	// intermediate, and before anything is published. Without it, nothing
 	// from an earlier attempt can have reached an endpoint.
-	if _, err := os.Stat(filepath.Join(o.Dir, rootCertFile)); err == nil && !o.Rotate {
+	if _, err := os.Stat(filepath.Join(o.Dir, rootCertFile)); err == nil && (!o.Rotate || o.RotateOnlyIfChanged && !differs(o.Dir, c)) {
 		return converge(o.Dir, c, label, now())
 	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return nil, err
@@ -341,6 +345,38 @@ func Init(o Options) (*Bundle, error) {
 		return nil, err
 	}
 	return &Bundle{Root: root, Intermediate: inter, Dir: o.Dir}, nil
+}
+
+// differs reports whether the root in dir is missing, unreadable or carries
+// constraints other than want.
+func differs(dir string, want constraints) bool {
+	root, err := readCertFile(filepath.Join(dir, rootCertFile))
+	if err != nil {
+		return true
+	}
+	have, err := constraintsOf(root)
+	return err != nil || !have.equal(want)
+}
+
+// WouldRotate reports whether Init(o) would replace an existing root: there
+// is one, Rotate is set and, with RotateOnlyIfChanged, its constraints differ.
+func WouldRotate(o Options) (bool, error) {
+	if !o.Rotate {
+		return false, nil
+	}
+	if _, err := os.Stat(filepath.Join(o.Dir, rootCertFile)); errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	} else if err != nil {
+		return false, err
+	}
+	if !o.RotateOnlyIfChanged {
+		return true, nil
+	}
+	c, err := o.constraints()
+	if err != nil {
+		return false, err
+	}
+	return differs(o.Dir, c), nil
 }
 
 // converge keeps an existing root and repairs everything derived from it.

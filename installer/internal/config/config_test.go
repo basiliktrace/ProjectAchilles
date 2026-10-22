@@ -37,7 +37,7 @@ func TestWriteThenBashSourceRoundTrip(t *testing.T) {
 func TestRoundTripNewKeysAndExtras(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "c.env")
 	c := Config{CaddyBindIP: "10.0.0.5", LANSubnets: "10.0.0.0/24,192.168.1.0/24", CAZone: "lan.example",
-		CAIncludeIP: true, HostsEntry: true, TLSMode: "achilles-ca"}
+		CAIncludeIP: true, CARotate: true, HostsEntry: true, TLSMode: "achilles-ca"}
 	c.SetExtra("MY_EXTRA", "it's fine")
 	if err := c.Write(p); err != nil {
 		t.Fatal(err)
@@ -47,7 +47,7 @@ func TestRoundTripNewKeysAndExtras(t *testing.T) {
 		t.Fatal(err)
 	}
 	if b.CaddyBindIP != "10.0.0.5" || b.LANSubnets != c.LANSubnets || b.CAZone != "lan.example" ||
-		!b.CAIncludeIP || !b.HostsEntry || b.TLSMode != "achilles-ca" {
+		!b.CAIncludeIP || !b.CARotate || !b.HostsEntry || b.TLSMode != "achilles-ca" {
 		t.Fatalf("mismatch %+v", b)
 	}
 	if b.Extra("MY_EXTRA") != "it's fine" {
@@ -62,6 +62,9 @@ func TestLoadExampleFile(t *testing.T) {
 	}
 	if c.TLSMode != "acme-http" || c.ESMode != "self" || c.RemoteDir != "/opt/projectachilles" {
 		t.Fatalf("unexpected: %q %q %q", c.TLSMode, c.ESMode, c.RemoteDir)
+	}
+	if c.CARotate || c.Extra("CA_ROTATE") != "" {
+		t.Fatalf("CA_ROTATE in the example must map to CARotate=false, got %v / extra %q", c.CARotate, c.Extra("CA_ROTATE"))
 	}
 	if c.DOSize != "s-2vcpu-4gb" {
 		t.Fatalf("inline comment not stripped: %q", c.DOSize)

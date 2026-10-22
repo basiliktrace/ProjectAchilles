@@ -96,6 +96,7 @@ func caInit(stdout, stderr io.Writer) Handler {
 		includeIP := fs.Bool("include-ip", false, "also permit --ip (as /32) in IP SANs; otherwise every IP is excluded")
 		label := fs.String("label", "", "org or hostname shown in the CA names (default: the zone)")
 		rotate := fs.Bool("rotate", false, "replace an existing CA with new keys (every endpoint must re-trust)")
+		ifChanged := fs.Bool("if-changed", false, "with --rotate: only rotate when the existing CA's zone or IP constraints differ")
 		if err := parseFlags(fs, args); err != nil {
 			return helpOK(err)
 		}
@@ -105,10 +106,16 @@ func caInit(stdout, stderr io.Writer) Handler {
 		if *includeIP && *ip == "" {
 			return errors.New("--include-ip requires --ip")
 		}
-		if *rotate {
+		if *ifChanged && !*rotate {
+			return errors.New("--if-changed requires --rotate")
+		}
+		o := ca.Options{Dir: *dir, Zone: *zone, LANIP: *ip, Label: *label, IncludeIP: *includeIP, Rotate: *rotate, RotateOnlyIfChanged: *ifChanged}
+		if will, err := ca.WouldRotate(o); err != nil {
+			return err
+		} else if will {
 			fmt.Fprintln(stderr, "WARNING: --rotate replaces the root CA. Every endpoint (and any GPO) must re-trust the new root.")
 		}
-		b, err := ca.Init(ca.Options{Dir: *dir, Zone: *zone, LANIP: *ip, Label: *label, IncludeIP: *includeIP, Rotate: *rotate})
+		b, err := ca.Init(o)
 		if err != nil {
 			return err
 		}
