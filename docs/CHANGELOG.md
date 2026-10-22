@@ -11,6 +11,25 @@ This project uses two version streams:
 
 ## [Unreleased]
 
+## [2.3.1] - 2026-10-22
+
+Security patch. The 2.3.0 backend image ran Node.js 22.22.2, which is affected by the [October 21, 2026 Node.js security release](https://nodejs.org/en/blog/vulnerability/october-2026-security-releases). This release moves the Docker images to Node.js 22.23.4 and picks up the month's minor/patch dependency updates, including a critical Next.js fix for the blog. There are no application code changes.
+
+### Upgrade notes
+
+- **Rebuild your images.** The Node.js version comes from the digest-pinned Dockerfile, so a restart or `docker compose pull` alone keeps the old runtime:
+  - Docker Compose: `git pull && docker compose build --pull && docker compose up -d`
+  - Server installs: re-run `./scripts/deploy-server.sh`, or `achilles-installer upgrade` on LAN installs
+  - Render and Fly.io redeploy from `main` automatically
+- **Native (non-Docker) installs** run the host's Node.js and need it upgraded separately, e.g. `apt-get install --only-upgrade nodejs` for NodeSource installs, then a backend restart.
+- **Vercel** (`backend-serverless/`) uses Vercel's managed Node.js 22 runtime. Confirm the project's Node.js version is 22.x.
+
+### Security
+
+- **Node.js 22.23.4 base images** for the backend runtime and the frontend build stage. This fixes CVE-2026-111497 (Brotli decoder out-of-bounds write, possible RCE), the TLS hostname-verification bypasses CVE-2026-106069 and CVE-2026-106072, `dns.resolve` NUL truncation (CVE-2026-105482), the `crypto.randomUUID()` snapshot entropy reuse (CVE-2026-106074), and the bundled OpenSSL, c-ares, SQLite, undici and CA-store updates. The backend does not decompress Brotli request bodies (Express 4 accepts only gzip/deflate), so the Brotli flaw was reachable only through outbound `fetch()` responses from integrations (#537)
+- **Dependabot now updates Docker base images weekly**, so digest pins pick up runtime security patches (#537)
+- **Blog: Next.js 16.4.2**, which fixes GHSA-2464-fhr4-w9xw (critical, unauthenticated RCE in the Image Optimization API with SVG files) and GHSA-p3m5-59mp-jv5r (high, Server Actions denial of service). The same group bumps nodemailer, @vercel/blob, React 19.3.1 and the Radix UI primitives (#538)
+
 ## [2.3.0] - 2026-10-22
 
 Integrations, installer and insight release. CrowdStrike Falcon joins Microsoft Defender as a first-class EDR integration, an on-prem LAN installer with its own name-constrained CA ships, the dashboards now score the latest result per test and endpoint, and a print-ready execution report is available. Dependency and path-containment vulnerabilities were remediated.
@@ -626,7 +645,8 @@ Complete platform overhaul — custom agent system, multi-deployment support, Mi
 | Agent 0.6.0 | 2026-04-03 | First tagged agent binary release |
 | 1.0.0 | 2024-12-10 | Initial release |
 
-[Unreleased]: https://github.com/projectachilles/ProjectAchilles/compare/v2.3.0...HEAD
+[Unreleased]: https://github.com/projectachilles/ProjectAchilles/compare/v2.3.1...HEAD
+[2.3.1]: https://github.com/projectachilles/ProjectAchilles/compare/v2.3.0...v2.3.1
 [2.3.0]: https://github.com/projectachilles/ProjectAchilles/compare/v2.2.0...v2.3.0
 [Agent 0.7.0]: https://github.com/projectachilles/ProjectAchilles/compare/agent-v0.6.7...agent-v0.7.0
 [2.2.0]: https://github.com/projectachilles/ProjectAchilles/compare/v2.1.0...v2.2.0
