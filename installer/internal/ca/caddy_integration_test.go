@@ -117,6 +117,23 @@ func renderAchillesCA(t *testing.T, work string) (caddyfile, rendered string) {
 	return caddyfile, rendered
 }
 
+// composeHealthcheck is the caddy service's CMD-SHELL healthcheck from
+// docker-compose.server.yml, so the container below runs the real one.
+var composeHealthcheck = regexp.MustCompile(`(?s)\n  caddy:\n.*?\n    healthcheck:\n.*?\n      test: \["CMD-SHELL", "([^"]+)"\]`)
+
+func caddyHealthcheck(t *testing.T) string {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join(repoCaddyDir(t), "..", "..", "docker-compose.server.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := composeHealthcheck.FindSubmatch(b)
+	if m == nil {
+		t.Fatal("caddy CMD-SHELL healthcheck not found in docker-compose.server.yml; update composeHealthcheck")
+	}
+	return string(m[1])
+}
+
 func hostPort(t *testing.T, ctx context.Context, name, port string) string {
 	t.Helper()
 	out, err := dockerCmd(ctx, "port", name, port)
@@ -166,6 +183,7 @@ func TestCaddyAchillesCA(t *testing.T) {
 	name := "achilles-caddy-it-" + hex.EncodeToString(suffix)
 	// Same mounts as docker-compose.server.yml. The root key is NOT mounted.
 	if _, err := dockerCmd(ctx, "run", "-d", "--name", name,
+		"--health-cmd", caddyHealthcheck(t), "--health-interval", "1s", "--health-timeout", "5s", "--health-retries", "3",
 		"-p", "127.0.0.1::80", "-p", "127.0.0.1::443",
 		"-e", "ACHILLES_DOMAIN="+caddyDomain, "-e", "ACME_EMAIL=",
 		"-v", caddyfile+":/etc/caddy/Caddyfile:ro",
@@ -316,6 +334,23 @@ func TestCaddyAchillesCA(t *testing.T) {
 		}
 		if strings.TrimSpace(out) != "" {
 			t.Errorf("Caddy generated its own CA keys:\n%s", out)
+		}
+	})
+
+	t.Run("compose healthcheck reports healthy", func(t *testing.T) {
+		var status string
+		for deadline := time.Now().Add(30 * time.Second); time.Now().Before(deadline); time.Sleep(500 * time.Millisecond) {
+			out, err := dockerCmd(ctx, "inspect", "-f", "{{.State.Health.Status}}", name)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if status = strings.TrimSpace(out); status == "healthy" || status == "unhealthy" {
+				break
+			}
+		}
+		if status != "healthy" {
+			out, _ := dockerCmd(ctx, "inspect", "-f", "{{json .State.Health}}", name)
+			t.Fatalf("health = %q, want healthy: %s", status, out)
 		}
 	})
 
