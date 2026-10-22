@@ -61,12 +61,26 @@ export interface BuildInfo {
   job?: BuildJob;
 }
 
+/** One built artifact for a single OS, within a BuildMetadata.binaries map. */
+export interface BuildArtifact {
+  filename: string;
+  fileSize: number;
+  signed: boolean;
+}
+
 export interface BuildMetadata {
   platform: { os: string; arch: string };
   builtAt: string;
   signed: boolean;
   fileSize: number;
   filename: string;
+  /**
+   * Per-OS artifacts for cross-platform tests. Task dispatch selects the entry
+   * matching each agent's OS. Absent on older single-binary builds, in which
+   * case dispatch falls back to `filename`/`binary_name`. `platform`/`filename`
+   * continue to describe the primary artifact for backward compatibility.
+   */
+  binaries?: Partial<Record<'windows' | 'linux' | 'darwin', BuildArtifact>>;
   source?: 'built' | 'uploaded';
 }
 

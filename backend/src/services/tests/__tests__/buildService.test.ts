@@ -1076,6 +1076,41 @@ var data string
         expect.stringContaining(VALID_UUID),
       );
     });
+
+    it('records a per-OS binaries map for a cross-platform build_all.sh build', async () => {
+      const repoRoot = '/';
+      // Dual-platform test: untagged main + per-OS logger files drive detection.
+      mockReaddirSync.mockReturnValue([`${VALID_UUID}.go`, 'logger_windows.go', 'logger_linux.go']);
+      mockExistsSync.mockImplementation((p: string) => {
+        if (p === testDir) return true;
+        if (p === `${testDir}/build_all.sh`) return true;
+        // build_all.sh emits BOTH OS artifacts in one run (repo-root build dir).
+        if (p === `${repoRoot}build/${VALID_UUID}/${VALID_UUID}.exe`) return true;
+        if (p === `${repoRoot}build/${VALID_UUID}/${VALID_UUID}`) return true;
+        return false;
+      });
+      mockStatSync.mockImplementation((p: string) => {
+        if (p === testDir) return { isDirectory: () => true };
+        if (typeof p === 'string' && p.endsWith('.exe')) return { size: 4096 };
+        return { size: 2048 };
+      });
+      mockReadFileSync.mockImplementation((p: string) => {
+        if (typeof p === 'string' && p.endsWith('_windows.go')) return '//go:build windows\npackage main';
+        if (typeof p === 'string' && p.endsWith('_linux.go')) return '//go:build linux\npackage main';
+        if (typeof p === 'string' && p.endsWith('build_all.sh')) return 'SCRIPT_DIR="$(dirname "${BASH_SOURCE[0]}")"';
+        return 'package main';
+      });
+
+      await service.buildAndSign(VALID_UUID);
+
+      const metaWrite = mockWriteFileSync.mock.calls.find(
+        (c) => typeof c[0] === 'string' && c[0].endsWith('build-meta.json'),
+      );
+      expect(metaWrite).toBeDefined();
+      const meta = JSON.parse(metaWrite![1] as string);
+      expect(meta.binaries.windows.filename).toBe(`${VALID_UUID}.exe`);
+      expect(meta.binaries.linux.filename).toBe(VALID_UUID);
+    });
   });
 
   // ── Group 8: buildAndSign — Code Signing ──────────────────

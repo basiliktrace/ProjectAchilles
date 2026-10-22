@@ -192,17 +192,55 @@ export function createTasks(
   }
 
   const buildMeta = JSON.parse(fs.readFileSync(metaPath, 'utf-8'));
-  const binaryFilename: string = buildMeta.binary_name ?? buildMeta.filename ?? binary_name;
-  const binaryPath = path.join(buildDir, binaryFilename);
 
-  if (!fs.existsSync(binaryPath)) {
-    throw new AppError(`Binary file not found: ${binaryFilename}`, 404);
+  // Resolve the test binary PER AGENT OS. A cross-platform build records a
+  // per-OS `binaries` map ({ windows: {filename}, linux: {filename}, ... });
+  // older single-binary builds only have one `filename`/`binary_name`. Shipping
+  // one binary to every agent regardless of OS caused Windows agents to receive
+  // the Linux orchestrator (no `.exe`), which Windows refuses to launch
+  // ("executable file not found in %PATH%"). Each agent now gets the artifact
+  // built for its own OS; hashes/sizes are memoized so each file is read once.
+  const legacyFilename: string = buildMeta.binary_name ?? buildMeta.filename ?? binary_name;
+  const hasOsMap = buildMeta.binaries && typeof buildMeta.binaries === 'object';
+  const artifactCache = new Map<string, { name: string; sha256: string; size: number }>();
+
+  function resolveArtifactForOs(agentOs: string): { name: string; sha256: string; size: number } {
+    const filename: string | undefined = hasOsMap
+      ? buildMeta.binaries[agentOs]?.filename
+      : legacyFilename;
+    if (!filename) {
+      const built = hasOsMap ? Object.keys(buildMeta.binaries).join(', ') : 'none';
+      throw new AppError(
+        `No binary was built for OS '${agentOs}' (test ${test_uuid}; built for: ${built})`,
+        422,
+      );
+    }
+    const cached = artifactCache.get(filename);
+    if (cached) return cached;
+
+    const resolvedPath = path.join(buildDir, filename);
+    if (!fs.existsSync(resolvedPath)) {
+      throw new AppError(`Binary file not found: ${filename}`, 404);
+    }
+    const buffer = fs.readFileSync(resolvedPath);
+    const artifact = {
+      name: filename,
+      sha256: crypto.createHash('sha256').update(buffer).digest('hex'),
+      size: fs.statSync(resolvedPath).size,
+    };
+    artifactCache.set(filename, artifact);
+    return artifact;
   }
 
-  // Compute SHA256 and file size
-  const binaryBuffer = fs.readFileSync(binaryPath);
-  const binarySha256 = crypto.createHash('sha256').update(binaryBuffer).digest('hex');
-  const binarySize = fs.statSync(binaryPath).size;
+  // Look up each targeted agent's OS up front (single query).
+  const osPlaceholders = agent_ids.map(() => '?').join(', ');
+  const agentOsRows = db
+    .prepare(`SELECT id, os FROM agents WHERE id IN (${osPlaceholders})`)
+    .all(...agent_ids) as Array<{ id: string; os: string }>;
+  const osByAgentId = new Map(agentOsRows.map((r) => [r.id, r.os]));
+  // Fallback OS for an agent not found in the table (e.g. FK will reject the
+  // insert anyway): prefer the build's primary platform, else legacy behavior.
+  const fallbackOs: string = buildMeta.platform?.os ?? 'linux';
 
   // Build payload with metadata enrichment from test catalog
   let enrichedMetadata: TaskTestMetadata = metadata ?? {
@@ -239,24 +277,31 @@ export function createTasks(
     }
   }
 
-  const payload: TaskPayload = {
-    test_uuid,
-    test_name,
-    binary_name: binaryFilename,
-    binary_sha256: binarySha256,
-    binary_size: binarySize,
-    execution_timeout,
-    arguments: args,
-    metadata: enrichedMetadata,
-  };
-
-  // Inject integration credentials as env_vars for cloud-targeted tests
+  // Integration credentials (env_vars) are per-test, not per-agent — compute once.
   const envVars = resolveIntegrationEnvVars(enrichedMetadata);
-  if (envVars) {
-    payload.env_vars = envVars;
-  }
 
-  const payloadJson = JSON.stringify(payload);
+  // Build each agent's payload with the artifact for that agent's OS. Resolution
+  // happens eagerly (before the transaction) so an unbuilt OS fails the whole
+  // batch cleanly instead of leaving a partial dispatch.
+  const payloadByAgentId = new Map<string, string>();
+  for (const agentId of agent_ids) {
+    const agentOs = osByAgentId.get(agentId) ?? fallbackOs;
+    const artifact = resolveArtifactForOs(agentOs);
+    const payload: TaskPayload = {
+      test_uuid,
+      test_name,
+      binary_name: artifact.name,
+      binary_sha256: artifact.sha256,
+      binary_size: artifact.size,
+      execution_timeout,
+      arguments: args,
+      metadata: enrichedMetadata,
+    };
+    if (envVars) {
+      payload.env_vars = envVars;
+    }
+    payloadByAgentId.set(agentId, JSON.stringify(payload));
+  }
 
   // Insert tasks inside a transaction
   const batchId = crypto.randomUUID();
@@ -270,7 +315,7 @@ export function createTasks(
   const insertAll = db.transaction(() => {
     for (const agentId of agent_ids) {
       const taskId = crypto.randomUUID();
-      insertStmt.run(taskId, agentId, orgId, priority, payloadJson, createdBy, target_index ?? null, batchId, max_retries);
+      insertStmt.run(taskId, agentId, orgId, priority, payloadByAgentId.get(agentId)!, createdBy, target_index ?? null, batchId, max_retries);
       taskIds.push(taskId);
     }
   });
