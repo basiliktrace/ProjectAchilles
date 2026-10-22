@@ -122,6 +122,33 @@ updates:
     commit-message:
       prefix: "chore(deps)"
 
+  # Docker base images (digest-pinned FROM lines). Images get no Dependabot
+  # SECURITY updates (advisories don't cover image digests), so this schedule is
+  # the only path for runtime patches — hence weekly, not monthly. A stale pin
+  # shipped Node 22.22.2 in v2.3.0, missing the Oct 2026 Node security release
+  # (CVE-2026-111497 Brotli RCE). deploy/caddy/Dockerfile is omitted: its FROM
+  # is templated via ARG CADDY_VERSION, which Dependabot cannot update.
+  - package-ecosystem: "docker"
+    directories:
+      - "/backend"
+      - "/frontend"
+    schedule:
+      interval: "weekly"
+    cooldown:
+      default-days: 3
+    ignore:
+      # Node majors are a runtime migration (CI, @types/node and the lockfile
+      # npm version all track Node 22), not an image bump. Digest refreshes of
+      # node:22-* still flow.
+      - dependency-name: "node"
+        update-types: ["version-update:semver-major"]
+    groups:
+      docker-images:
+        patterns:
+          - "*"
+    commit-message:
+      prefix: "chore(deps)"
+
   # GitHub Actions
   - package-ecosystem: "github-actions"
     directory: "/"
