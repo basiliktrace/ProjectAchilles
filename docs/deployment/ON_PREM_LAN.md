@@ -318,6 +318,8 @@ Every setting with secrets masked, the settings file
 (`/opt/projectachilles/deploy.config.env`, mode 600), and the unattended
 equivalent command. **Yes, install** writes the file and starts the install.
 
+![Review screen: every setting with the Clerk secret masked, the settings file path and the unattended command](../../wiki/static/img/screenshots/onprem-review.png)
+
 #### 9/10 Install
 
 A phase checklist plus a live log. **esc** stops the engine after a
@@ -356,6 +358,8 @@ The hand-over screen (also printed to the terminal when you leave):
 - the GPO path for the root (section 7) and the next steps: sign in and create
   the first admin, register an agent version, create an enrollment token;
 - the day-2 commands.
+
+![Done screen: URL, LAN IP, root CA files, SHA-256 fingerprint, Windows thumbprint and the bootstrap commands](../../wiki/static/img/screenshots/onprem-done.png)
 
 **Save the SHA-256 and the thumbprint**: the GPO team uses them to verify the
 file they import. `sudo /opt/projectachilles/achilles-installer ca export --out <dir>`

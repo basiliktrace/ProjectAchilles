@@ -184,7 +184,7 @@ re-apply, keeping data and the CA), **Upgrade**, **Status**, or **Fresh install*
 (blank answers after you type the hostname; data volumes, the CA and generated
 secrets are kept).
 
-{/* screenshot: onprem-welcome.png */}
+![Installer Welcome screen (1/10) listing the five setup steps](/img/screenshots/onprem-welcome.png)
 
 **2/10 Preflight checks.** Read-only PASS / WARN / FAIL checks. A FAIL blocks
 **Next**; fix it and press **r**.
@@ -200,7 +200,7 @@ secrets are kept).
 | Docker | | not found (installed from get.docker.com) |
 | Clock synchronised | | not NTP-synchronised |
 
-{/* screenshot: onprem-preflight.png */}
+![Preflight checks screen (2/10): PASS for root, OS, memory, disk, ports 80/443 and egress; WARN for Docker not found and clock sync](/img/screenshots/onprem-preflight.png)
 
 **3/10 Network & name.** Pick the LAN interface (Caddy publishes 80/443 on its
 address only), type the server hostname, and the installer checks that the name
@@ -216,7 +216,7 @@ continue** (helps only the server itself; endpoints still need the DNS record),
 or **Continue without a record for now**. Finally set the **LAN subnets allowed to
 reach HTTPS** (`LAN_SUBNETS`), used only if ufw or firewalld is already active.
 
-{/* screenshot: onprem-network.png */}
+![Network & name screen (3/10): listening on 10.0.5.20 (eth0) as achilles.corp.example.com, LAN subnets 10.0.5.0/24](/img/screenshots/onprem-network.png)
 
 **4/10 Certificates.**
 
@@ -241,13 +241,13 @@ the ProjectAchilles CA the screen also asks:
 - **An existing CA that doesn't match:** **Keep** it, or **Rotate**
   (`CA_ROTATE=true`: a new root every endpoint must re-trust).
 
-{/* screenshot: onprem-certificates.png */}
+![Certificates screen (4/10): choosing the DNS zone the ProjectAchilles CA may issue for, corp.example.com or example.com](/img/screenshots/onprem-certificates.png)
 
 **5/10 Login (Clerk).** Paste the publishable and secret keys. The screen decodes
 the publishable key offline, checks it against the rules above, and probes the
 Frontend API host from the server. An error blocks Next; a warning does not.
 
-{/* screenshot: onprem-login.png */}
+![Login (Clerk) screen (5/10) with a pk_test_ publishable key, the secret key masked, and two warnings](/img/screenshots/onprem-login.png)
 
 **6/10 Analytics.** Self-hosted Elasticsearch on this server (unavailable when the
 memory check did not pass) or Elastic Cloud (Cloud ID plus an API key with read
@@ -263,7 +263,7 @@ token only for a private library.
 (`/opt/projectachilles/deploy.config.env`, mode 600) and the unattended
 equivalent command. **Yes, install** writes the file and starts the install.
 
-{/* screenshot: onprem-review.png */}
+![Review screen (8/10): every setting with the Clerk secret masked, the settings file path and the unattended command](/img/screenshots/onprem-review.png)
 
 **9/10 Install.** A phase checklist plus a live log (`config`, `validate`,
 `docker`, `ca`, `caddy-render`, `backend-env`, `root-env`, `firewall`, `up`,
@@ -271,7 +271,9 @@ equivalent command. **Yes, install** writes the file and starts the install.
 stop or failure, **r** re-runs the whole install (every phase is idempotent) and
 **q** quits. The first `up` takes several minutes.
 
-{/* screenshot: onprem-install.png */}
+![Install screen (9/10): phase checklist of a completed install](/img/screenshots/onprem-install.png)
+
+*Recorded in render-only mode, so Docker, the firewall, the stack and the renewal timer show as skipped; a real install runs them. Exporting Caddy's internal root CA belongs to another TLS mode and stays skipped.*
 
 **10/10 Done.** The hand-over screen: the URL and LAN IP, the root CA files
 (`/etc/projectachilles/ca/public/root.cer` for GPO and `root.crt`), the root's
@@ -279,7 +281,7 @@ stop or failure, **r** re-runs the whole install (every phase is idempotent) and
 scripts (`/opt/projectachilles/deploy/onprem/bootstrap-windows.ps1` and
 `bootstrap-unix.sh`) and the next steps.
 
-{/* screenshot: onprem-done.png */}
+![Done screen (10/10): URL, LAN IP, root CA files, SHA-256 fingerprint, Windows thumbprint and the bootstrap commands](/img/screenshots/onprem-done.png)
 
 :::tip Save the SHA-256 and the thumbprint
 The GPO team uses them to verify the file they import.
