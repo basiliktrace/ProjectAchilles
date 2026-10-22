@@ -121,8 +121,18 @@ foreach ($sid in $systemSid, $adminsSid) {
 Set-Acl -LiteralPath $download -AclObject $acl
 
 # A running agent holds its binary open; --install re-creates the service anyway.
-if (Get-Service -Name AchillesAgent -ErrorAction SilentlyContinue) {
+# The SCM reports Stopped a few milliseconds before the service process has
+# exited and released its image; replacing the file in that window fails
+# ("Cannot create a file when that file already exists"). So wait for the
+# service's own process (by PID: an exiting process no longer reports a Path).
+$svc = Get-CimInstance -ClassName Win32_Service -Filter "Name='AchillesAgent'" -ErrorAction SilentlyContinue
+if ($svc) {
+    $svcPid = [int]$svc.ProcessId
     Stop-Service -Name AchillesAgent -Force -ErrorAction SilentlyContinue
+    if ($svcPid -gt 0) { Wait-Process -Id $svcPid -Timeout 60 -ErrorAction SilentlyContinue }
+}
+if (@(Get-Process -Name achilles-agent -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $exe }).Count -gt 0) {
+    throw "$exe is still running after stopping AchillesAgent; aborting."
 }
 # Same-directory rename: the file keeps the ACL set above.
 Move-Item -Force -LiteralPath $download -Destination $exe

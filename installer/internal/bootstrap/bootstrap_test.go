@@ -325,3 +325,27 @@ func TestRenderWindowsGrantsOnlySystemAndAdministrators(t *testing.T) {
 		t.Errorf("windows: %d AddAccessRule calls, want 2 (directory + agent, each looped over the two SIDs)", n)
 	}
 }
+
+// Found on Windows (PS 5.1): re-running the script over a running agent
+// failed in Move-Item with "Cannot create a file when that file already
+// exists" and left the service stopped. The SCM reports AchillesAgent
+// Stopped a few milliseconds before its process has exited and released its
+// image, so the replace raced the exit. The script must wait for the
+// service's own process by PID (an exiting process no longer reports a Path,
+// so a Path filter misses exactly that window), and refuse to replace the
+// binary while it still runs.
+func TestRenderWindowsWaitsForAgentExitBeforeReplace(t *testing.T) {
+	win, _ := render(t)
+	windowsOrder(t, win,
+		`$svc = Get-CimInstance -ClassName Win32_Service -Filter "Name='AchillesAgent'"`,
+		"$svcPid = [int]$svc.ProcessId",
+		"Stop-Service -Name AchillesAgent -Force",
+		"Wait-Process -Id $svcPid -Timeout 60",
+		"Get-Process -Name achilles-agent -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $exe }",
+		"is still running after stopping AchillesAgent; aborting.",
+		"Move-Item -Force -LiteralPath $download -Destination $exe",
+	)
+	if strings.Contains(win, "$running | Wait-Process") {
+		t.Error("windows: waits on a Path-filtered process list, which misses an exiting process")
+	}
+}
