@@ -553,9 +553,10 @@ func evilArchive(t *testing.T, hs ...*tar.Header) string {
 
 func TestRestoreRefusesUnsafeGzipArchives(t *testing.T) {
 	cases := map[string]*tar.Header{
-		"symlink":  {Name: "files/.env", Typeflag: tar.TypeSymlink, Linkname: "/etc/shadow", Mode: 0o777},
-		"dotdot":   {Name: "../escape", Typeflag: tar.TypeReg, Mode: 0o600},
-		"hardlink": {Name: "files/.env", Typeflag: tar.TypeLink, Linkname: "/etc/shadow", Mode: 0o600},
+		"symlink":       {Name: "files/.env", Typeflag: tar.TypeSymlink, Linkname: "/etc/shadow", Mode: 0o777},
+		"nested-dotdot": {Name: "a/../../x", Typeflag: tar.TypeReg, Mode: 0o600},
+		"dotdot":        {Name: "../escape", Typeflag: tar.TypeReg, Mode: 0o600},
+		"hardlink":      {Name: "files/.env", Typeflag: tar.TypeLink, Linkname: "/etc/shadow", Mode: 0o600},
 	}
 	for name, h := range cases {
 		t.Run(name, func(t *testing.T) {

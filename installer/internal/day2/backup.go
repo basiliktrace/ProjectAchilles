@@ -475,6 +475,7 @@ func (d Deps) extract(ctx context.Context, file, stage string) error {
 		return err
 	}
 	tr := tar.NewReader(gz)
+	root := filepath.Clean(stage) + string(os.PathSeparator)
 	for {
 		h, err := tr.Next()
 		if err == io.EOF {
@@ -494,6 +495,9 @@ func (d Deps) extract(ctx context.Context, file, stage string) error {
 			return fmt.Errorf("%q in the archive is not a plain file or directory", h.Name)
 		}
 		dst := filepath.Join(stage, filepath.FromSlash(clean))
+		if !strings.HasPrefix(dst, root) {
+			return fmt.Errorf("unsafe path %q in archive", h.Name)
+		}
 		switch h.Typeflag {
 		case tar.TypeDir:
 			if err := os.MkdirAll(dst, 0o700); err != nil {
