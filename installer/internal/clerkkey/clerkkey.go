@@ -49,6 +49,10 @@ func DecodePublishable(pk string) (Key, error) {
 	if host == "" {
 		return Key{}, errors.New("publishable key contains an empty Frontend API host")
 	}
+	host = strings.TrimSuffix(strings.ToLower(host), ".")
+	if !validHost(host) {
+		return Key{}, errors.New("publishable key payload is not a valid host name")
+	}
 	k.FAPIHost = host
 	return k, nil
 }
@@ -136,4 +140,23 @@ func CheckFit(pk, sk string, r dnsclass.Result) []Finding {
 		}
 	}
 	return fs
+}
+
+// validHost requires non-empty labels made only of [a-z0-9-] joined by dots.
+func validHost(h string) bool {
+	if h == "" {
+		return false
+	}
+	for _, l := range strings.Split(h, ".") {
+		if l == "" {
+			return false
+		}
+		for i := 0; i < len(l); i++ {
+			c := l[i]
+			if !(c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '-') {
+				return false
+			}
+		}
+	}
+	return true
 }

@@ -123,3 +123,24 @@ func TestFitTrimsWhitespace(t *testing.T) {
 		t.Fatalf("%+v", fs)
 	}
 }
+
+func TestDecodeRejectsMalformedHost(t *testing.T) {
+	for name, payload := range map[string]string{
+		"control": "a\x1b[31m.com$", "nul": "a\x00.com$", "newline": "a\n.com$",
+		"utf8": "a\xff\xfe.com$", "dollar": "a$b$", "emptylabel": "a..com$",
+	} {
+		for _, pre := range []string{"pk_test_", "pk_live_"} {
+			_, err := DecodePublishable(pre + base64.StdEncoding.EncodeToString([]byte(payload)))
+			if err == nil || strings.Contains(err.Error(), "\x1b") || !strings.Contains(err.Error(), "not a valid host name") {
+				t.Errorf("%s/%s: err=%v", name, pre, err)
+			}
+		}
+	}
+}
+
+func TestDecodeNormalisesHost(t *testing.T) {
+	k, err := DecodePublishable(pk("pk_live_", "Clerk.Example.COM."))
+	if err != nil || k.FAPIHost != "clerk.example.com" {
+		t.Fatalf("%+v %v", k, err)
+	}
+}
