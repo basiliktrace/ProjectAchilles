@@ -5,17 +5,31 @@
   Run from an elevated PowerShell:
       .\bootstrap-windows.ps1 -Token <enrollment-token>
 
-  1. Locks C:\F0 to SYSTEM + Administrators before anything is downloaded.
-  2. Downloads the server root CA over HTTP into memory and aborts unless its
+  1. Locks C:\F0: owner Administrators; a protected DACL granting SYSTEM and
+     Administrators full control and OWNER RIGHTS (S-1-3-4) only
+     ReadPermissions, all inherited by everything inside.
+  2. Walks everything already under C:\F0 without following links and aborts
+     on the first junction, symbolic link or other reparse point. Every other
+     item gets owner Administrators and inherited-only permissions, and the
+     walk is repeated to verify that. All of this happens before anything is
+     downloaded.
+  3. Downloads the server root CA over HTTP into memory and aborts unless its
      SHA-256 matches the value pinned below (the pin, not the transport, is the
      trust anchor).
-  3. Trusts those same verified bytes in Cert:\LocalMachine\Root (skipped if
+  4. Trusts those same verified bytes in Cert:\LocalMachine\Root (skipped if
      already present, e.g. via GPO).
-  4. Downloads the agent over HTTPS into C:\F0, locks it, renames it to
-     C:\F0\achilles-agent.exe and enrolls it.
+  5. Downloads the agent over HTTPS into memory and writes it to a new file in
+     C:\F0 that is created with owner Administrators and a SYSTEM +
+     Administrators DACL, stops a running agent (aborting if it does not
+     stop), renames the file to C:\F0\achilles-agent.exe and enrolls it.
 
-  Nothing is staged in %TEMP% or any other folder the user's unelevated token
-  can write to, so that token cannot swap the root or the SYSTEM service binary.
+  What this guarantees: nothing is staged in %TEMP% or any other folder the
+  user's unelevated token can write to, and when the agent is enrolled no item
+  under C:\F0 is a link or has an owner or permission of its own that would
+  let a non-administrator change it; the root CA and the agent binary are the
+  bytes that were verified or downloaded. It does not revoke a handle that was
+  opened before the lock, nor police what administrators, SYSTEM or the agent
+  itself create in C:\F0 later.
 #>
 param([Parameter(Mandatory)][string]$Token)
 
@@ -39,10 +53,33 @@ $download = 'C:\F0\achilles-agent.download'
 # Well-known SIDs, never localized account names.
 $systemSid = New-Object System.Security.Principal.SecurityIdentifier 'S-1-5-18'
 $adminsSid = New-Object System.Security.Principal.SecurityIdentifier 'S-1-5-32-544'
+$ownerRightsSid = New-Object System.Security.Principal.SecurityIdentifier 'S-1-3-4'
+$lockSids = 'S-1-5-18', 'S-1-5-32-544', 'S-1-3-4'
 
 function Test-ReparsePoint([string]$Path) {
     $item = Get-Item -LiteralPath $Path -Force
     return [bool]($item.Attributes -band [IO.FileAttributes]::ReparsePoint)
+}
+
+# Visits every item under $Root, parents before their children, without ever
+# following a junction or symbolic link: an explicit stack walk over
+# DirectoryInfo.GetFileSystemInfos() (one level at a time, hidden and system
+# items included), because Get-ChildItem -Recurse descends into junctions on
+# PowerShell 5.1. Any reparse point aborts the script. $OnItem runs on each
+# item before that item's own children are listed.
+function Invoke-F0Walk([string]$Root, [scriptblock]$OnItem) {
+    $stack = New-Object System.Collections.Stack
+    $stack.Push((New-Object System.IO.DirectoryInfo -ArgumentList $Root))
+    while ($stack.Count -gt 0) {
+        $parent = $stack.Pop()
+        foreach ($item in $parent.GetFileSystemInfos()) {
+            if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) {
+                throw "$($item.FullName) is a junction, symbolic link or other reparse point. Nothing under $Root may link elsewhere: remove it and re-run. Aborting; nothing was downloaded."
+            }
+            & $OnItem $item
+            if ($item -is [System.IO.DirectoryInfo]) { $stack.Push($item) }
+        }
+    }
 }
 
 # --- 1. Lock C:\F0 before any download -----------------------------------
@@ -50,13 +87,22 @@ function Test-ReparsePoint([string]$Path) {
 # the unelevated token delete or replace files in it. Protected DACL with only
 # SYSTEM + Administrators (inherited by everything created inside), owner
 # Administrators so the user keeps no implicit owner rights. An existing C:\F0
-# gets the same DACL; children that inherit pick it up, contents are kept.
+# gets the same DACL; what is already inside is handled in step 2.
+#
+# OWNER RIGHTS: an object's owner implicitly holds READ_CONTROL + WRITE_DAC
+# unless an OWNER RIGHTS ACE says otherwise. Under the non-default "object
+# creator" owner policy, a file an elevated admin creates here would be owned
+# by the admin's own user SID, so the unelevated token of that same user could
+# rewrite its DACL. This inheritable ACE limits whoever owns an item to
+# ReadPermissions (the smallest non-empty grant). SYSTEM and Administrators
+# keep full control through their own ACEs, so the agent is unaffected.
 $dirAcl = New-Object System.Security.AccessControl.DirectorySecurity
 $dirAcl.SetOwner($adminsSid)
 $dirAcl.SetAccessRuleProtection($true, $false)
 foreach ($sid in $systemSid, $adminsSid) {
     $dirAcl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($sid, 'FullControl', 'ContainerInherit, ObjectInherit', 'None', 'Allow')))
 }
+$dirAcl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($ownerRightsSid, 'ReadPermissions', 'ContainerInherit, ObjectInherit', 'None', 'Allow')))
 if (Test-Path -LiteralPath $dir) {
     if (-not (Test-Path -LiteralPath $dir -PathType Container)) { throw "$dir exists and is not a directory; aborting." }
 } else {
@@ -70,13 +116,56 @@ Set-Acl -LiteralPath $dir -AclObject $dirAcl
 # rename, replace or re-permission the directory.
 $dirNow = Get-Acl -LiteralPath $dir
 $dirOwner = $dirNow.GetOwner([System.Security.Principal.SecurityIdentifier]).Value
-$foreign = @($dirNow.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier]) | Where-Object { $_.IdentityReference.Value -ne 'S-1-5-18' -and $_.IdentityReference.Value -ne 'S-1-5-32-544' })
+$foreign = @($dirNow.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier]) | Where-Object { $lockSids -notcontains $_.IdentityReference.Value })
 if ((Test-ReparsePoint $dir) -or $dirOwner -ne 'S-1-5-32-544' -or -not $dirNow.AreAccessRulesProtected -or $foreign.Count -ne 0) {
     throw "Could not lock $dir to SYSTEM + Administrators; aborting."
 }
 Write-Host "Locked $dir to SYSTEM + Administrators."
 
-# --- 2. Root CA: download into memory, verify, import the same bytes -----
+# --- 2. Normalize and verify everything already under C:\F0 --------------
+# Setting the DACL above only reaches children that inherit: an item with its
+# own owner or a protected DACL keeps them, and a junction would lead outside.
+# The agent runs downloaded test binaries as SYSTEM from C:\F0\tasks, so no
+# pre-existing item may stay writable by a non-administrator. Each item gets
+# owner Administrators and its explicit ACEs removed with inheritance on
+# (icacls /reset), item by item: no /T, and /L so icacls acts on the entry
+# itself, never on a link target. Parents are done before their children are
+# listed, so a non-administrator can no longer add or swap entries in a
+# directory by the time it is walked. takeown /A (SeTakeOwnershipPrivilege)
+# is the fallback for an item whose DACL denies Administrators.
+$icacls = Join-Path ([Environment]::SystemDirectory) 'icacls.exe'
+$takeown = Join-Path ([Environment]::SystemDirectory) 'takeown.exe'
+$f0Count = 0
+Invoke-F0Walk $dir {
+    param($item)
+    $p = $item.FullName
+    & $icacls $p /setowner '*S-1-5-32-544' /L /Q | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "icacls could not change the owner of $p; taking ownership for Administrators."
+        & $takeown /F $p /A | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw "Could not make Administrators the owner of $p (takeown exit code $LASTEXITCODE). Aborting; nothing was downloaded." }
+    }
+    & $icacls $p /reset /L /Q | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "Could not reset the permissions of $p to inherited-only (icacls exit code $LASTEXITCODE). Aborting; nothing was downloaded." }
+    $script:f0Count++
+}
+
+# Verify with a second walk (which again aborts on any reparse point): every
+# item owned by Administrators, inheritance on, no explicit ACE, and no ACE
+# for anyone but SYSTEM, Administrators and OWNER RIGHTS.
+Invoke-F0Walk $dir {
+    param($item)
+    $a = Get-Acl -LiteralPath $item.FullName
+    $owner = $a.GetOwner([System.Security.Principal.SecurityIdentifier]).Value
+    $explicit = @($a.GetAccessRules($true, $false, [System.Security.Principal.SecurityIdentifier]))
+    $others = @($a.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier]) | Where-Object { $lockSids -notcontains $_.IdentityReference.Value })
+    if ($owner -ne 'S-1-5-32-544' -or $a.AreAccessRulesProtected -or $explicit.Count -ne 0 -or $others.Count -ne 0) {
+        throw "$($item.FullName) still has its own owner or permissions after normalization (owner $owner). Aborting; nothing was downloaded."
+    }
+}
+Write-Host "Normalized and verified $f0Count existing item(s) under $dir."
+
+# --- 3. Root CA: download into memory, verify, import the same bytes -----
 Write-Host "Downloading root CA from http://{{.Host}}/ca/root.cer"
 $rootBytes = (Invoke-WebRequest -UseBasicParsing -Uri "http://{{.Host}}/ca/root.cer").RawContentStream.ToArray()
 
@@ -100,41 +189,57 @@ if (Test-Path "Cert:\LocalMachine\Root\$thumb") {
     Write-Host 'Root CA added to Cert:\LocalMachine\Root.'
 }
 
-# --- 3. Agent: download into the locked C:\F0, lock, rename --------------
+# --- 4. Agent: download into memory, write a locked new file in C:\F0 ----
 foreach ($p in $download, $exe) {
     if (Test-Path -LiteralPath $p -PathType Container) { throw "$p is a directory; aborting." }
 }
 if (Test-Path -LiteralPath $download) { Remove-Item -LiteralPath $download -Force }
 
 Write-Host "Downloading agent from https://{{.Host}}"
-Invoke-WebRequest -UseBasicParsing -Uri "https://{{.Host}}/api/agent/download?os=windows&arch=amd64" -OutFile $download
+$agentResp = Invoke-WebRequest -UseBasicParsing -Uri "https://{{.Host}}/api/agent/download?os=windows&arch=amd64"
 
-# The file already inherits the directory's DACL; make owner and DACL explicit
-# and protected anyway, so they do not depend on inheritance or on the
-# default-owner policy.
+# The file is created (CreateNew: never an existing one) with this owner and
+# protected DACL in its security descriptor, so it exists at no moment with
+# any other owner or permissions, whatever the default-owner policy.
 $acl = New-Object System.Security.AccessControl.FileSecurity
 $acl.SetOwner($adminsSid)
 $acl.SetAccessRuleProtection($true, $false)
 foreach ($sid in $systemSid, $adminsSid) {
     $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($sid, 'FullControl', 'Allow')))
 }
-Set-Acl -LiteralPath $download -AclObject $acl
+$fs = New-Object System.IO.FileStream -ArgumentList $download, ([System.IO.FileMode]::CreateNew), ([System.Security.AccessControl.FileSystemRights]::Write), ([System.IO.FileShare]::None), 65536, ([System.IO.FileOptions]::None), $acl
+try { $agentResp.RawContentStream.WriteTo($fs) } finally { $fs.Close() }
+
+$dlAcl = Get-Acl -LiteralPath $download
+$dlForeign = @($dlAcl.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier]) | Where-Object { $_.IdentityReference.Value -ne 'S-1-5-18' -and $_.IdentityReference.Value -ne 'S-1-5-32-544' })
+if ($dlAcl.GetOwner([System.Security.Principal.SecurityIdentifier]).Value -ne 'S-1-5-32-544' -or -not $dlAcl.AreAccessRulesProtected -or $dlForeign.Count -ne 0) {
+    throw "$download was not created with owner Administrators and a SYSTEM + Administrators DACL; aborting."
+}
 
 # A running agent holds its binary open; --install re-creates the service anyway.
 # The SCM reports Stopped a few milliseconds before the service process has
 # exited and released its image; replacing the file in that window fails
 # ("Cannot create a file when that file already exists"). So wait for the
 # service's own process (by PID: an exiting process no longer reports a Path).
-$svc = Get-CimInstance -ClassName Win32_Service -Filter "Name='AchillesAgent'" -ErrorAction SilentlyContinue
+# The process object is taken before the stop, so the wait is on that process
+# (no PID reuse) and an already exited one is no error. Either step failing
+# aborts before the binary or the service is touched.
+$svc = Get-CimInstance -ClassName Win32_Service -Filter "Name='AchillesAgent'"
 if ($svc) {
     $svcPid = [int]$svc.ProcessId
-    Stop-Service -Name AchillesAgent -Force -ErrorAction SilentlyContinue
-    if ($svcPid -gt 0) { Wait-Process -Id $svcPid -Timeout 60 -ErrorAction SilentlyContinue }
+    $svcProc = $null
+    if ($svcPid -gt 0) { $svcProc = Get-Process -Id $svcPid -ErrorAction SilentlyContinue }
+    try {
+        Stop-Service -Name AchillesAgent -Force -ErrorAction Stop
+        if ($svcProc) { $svcProc | Wait-Process -Timeout 60 -ErrorAction Stop }
+    } catch {
+        throw "The AchillesAgent service did not stop within 60 s ($($_.Exception.Message)). Nothing was changed: the installed agent binary was not replaced and its service was not re-created. Aborting."
+    }
 }
 if (@(Get-Process -Name achilles-agent -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $exe }).Count -gt 0) {
     throw "$exe is still running after stopping AchillesAgent; aborting."
 }
-# Same-directory rename: the file keeps the ACL set above.
+# Same-directory rename: the file keeps the security descriptor it was created with.
 Move-Item -Force -LiteralPath $download -Destination $exe
 Write-Host "Agent installed at $exe"
 
