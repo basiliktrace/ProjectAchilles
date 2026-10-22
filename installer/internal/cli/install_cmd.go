@@ -125,11 +125,7 @@ func installCmd(r *Registry, sio installIO) Handler {
 		}
 		switch out.Action {
 		case tui.ActionUpgrade, tui.ActionStatus:
-			name := out.Action.String()
-			if code := r.Run([]string{name}, sio.stdout, sio.stderr); code != 0 {
-				return fmt.Errorf("%s exited with status %d", name, code)
-			}
-			return nil
+			return handOff(r, out.Action.String(), root, *caDir, sio.stdout, sio.stderr)
 		case tui.ActionInstall:
 			if out.Summary != "" {
 				fmt.Fprintln(sio.stdout, out.Summary)
@@ -144,6 +140,16 @@ func installCmd(r *Registry, sio installIO) Handler {
 			return errors.New("cancelled; nothing on this server was changed")
 		}
 	}
+}
+
+// handOff runs the day-2 command the wizard ended with (upgrade or status)
+// on the checkout and CA directory the wizard used: without --repo and
+// --ca-dir it would fall back to the defaults, a different install.
+func handOff(r *Registry, name, root, caDir string, stdout, stderr io.Writer) error {
+	if code := r.Run([]string{name, "--repo", root, "--ca-dir", caDir}, stdout, stderr); code != 0 {
+		return fmt.Errorf("%s exited with status %d", name, code)
+	}
+	return nil
 }
 
 // unattended is `install --config FILE [--yes]`: no wizard and no TTY
