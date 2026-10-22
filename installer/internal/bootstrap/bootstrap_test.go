@@ -147,3 +147,34 @@ func TestRenderFileModes(t *testing.T) {
 		}
 	}
 }
+
+// The service is registered at the path the agent runs from (os.Executable),
+// so the scripts must install the binary at its permanent home first and run
+// it from there. Found in the E2E run: bootstrap-unix.sh enrolled from its
+// mktemp dir and then deleted it, so the systemd unit pointed at a deleted
+// file and the agent failed with 203/EXEC on its first restart; the Windows
+// script left the service pointing into %TEMP%.
+func TestRenderInstallsAgentAtPermanentPath(t *testing.T) {
+	win, unix := render(t)
+	if !strings.Contains(win, `$exe = 'C:\F0\achilles-agent.exe'`) {
+		t.Error(`windows: agent not installed at C:\F0\achilles-agent.exe`)
+	}
+	if !strings.Contains(win, "& $exe --enroll $Token") {
+		t.Error("windows: enroll not run from the installed path")
+	}
+	if regexp.MustCompile(`Remove-Item[^\n]*\$exe\b`).MatchString(win) {
+		t.Error("windows: deletes the installed agent binary")
+	}
+	if strings.Contains(win, "Join-Path $env:TEMP 'achilles-agent.exe'") {
+		t.Error("windows: still runs the agent from the TEMP folder")
+	}
+	if !strings.Contains(unix, `AGENT=/opt/f0/achilles-agent`) {
+		t.Error("unix: agent not installed at /opt/f0/achilles-agent")
+	}
+	if !strings.Contains(unix, `"$AGENT" --enroll "$TOKEN"`) {
+		t.Error("unix: enroll not run from the installed path")
+	}
+	if strings.Contains(unix, `"$WORK/achilles-agent" --enroll`) {
+		t.Error("unix: still enrolls from the temp dir that is deleted on exit")
+	}
+}

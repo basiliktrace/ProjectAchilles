@@ -8,7 +8,7 @@
   1. Downloads the server root CA over HTTP and aborts unless its SHA-256
      matches the value pinned below (the pin, not the transport, is the trust anchor).
   2. Trusts it in Cert:\LocalMachine\Root (skipped if already present, e.g. via GPO).
-  3. Downloads the agent over HTTPS and enrolls it.
+  3. Downloads the agent over HTTPS to C:\F0\achilles-agent.exe and enrolls it.
 #>
 param([Parameter(Mandatory)][string]$Token)
 
@@ -23,7 +23,10 @@ if (-not $isAdmin) { throw 'This script must run as Administrator (elevated Powe
 [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
 
 $cer = Join-Path $env:TEMP 'achilles-root-ca.cer'
-$exe = Join-Path $env:TEMP 'achilles-agent.exe'
+$download = Join-Path $env:TEMP 'achilles-agent-download.exe'
+# The service runs the binary from where --install is run, so it must be its
+# permanent home (the documented path, also the one ASR exclusions name).
+$exe = 'C:\F0\achilles-agent.exe'
 
 Write-Host "Downloading root CA from http://{{.Host}}/ca/root.cer"
 Invoke-WebRequest -UseBasicParsing -Uri "http://{{.Host}}/ca/root.cer" -OutFile $cer
@@ -46,10 +49,17 @@ if (Test-Path "Cert:\LocalMachine\Root\$thumb") {
 Remove-Item -Force $cer -ErrorAction SilentlyContinue
 
 Write-Host "Downloading agent from https://{{.Host}}"
-Invoke-WebRequest -UseBasicParsing -Uri "https://{{.Host}}/api/agent/download?os=windows&arch=amd64" -OutFile $exe
+Invoke-WebRequest -UseBasicParsing -Uri "https://{{.Host}}/api/agent/download?os=windows&arch=amd64" -OutFile $download
+
+# A running agent holds its binary open; --install re-creates the service anyway.
+if (Get-Service -Name AchillesAgent -ErrorAction SilentlyContinue) {
+    Stop-Service -Name AchillesAgent -Force -ErrorAction SilentlyContinue
+}
+New-Item -ItemType Directory -Force -Path (Split-Path $exe) | Out-Null
+Move-Item -Force -Path $download -Destination $exe
+Write-Host "Agent installed at $exe"
 
 & $exe --enroll $Token --server https://{{.Host}} --install
 $code = $LASTEXITCODE
-Remove-Item -Force $exe -ErrorAction SilentlyContinue
 if ($code -ne 0) { Write-Host "Agent enrollment failed (exit code $code)." }
 exit $code

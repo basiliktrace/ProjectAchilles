@@ -76,6 +76,11 @@ fi
 
 echo "Downloading agent from https://{{.Host}}"
 curl -fsS -o "$WORK/achilles-agent" "https://{{.Host}}/api/agent/download?os=$OS&arch=$ARCH"
-chmod 755 "$WORK/achilles-agent"
+# The service runs the binary from where --install is run, and $WORK is
+# deleted on exit, so install it at its permanent home first.
+AGENT=/opt/f0/achilles-agent
+mkdir -p /opt/f0
+install -m 0700 "$WORK/achilles-agent" "$AGENT"
+echo "Agent installed at $AGENT"
 
-"$WORK/achilles-agent" --enroll "$TOKEN" --server "https://{{.Host}}" --install
+"$AGENT" --enroll "$TOKEN" --server "https://{{.Host}}" --install
