@@ -721,7 +721,8 @@ esac
 echo "  • Logs:    docker compose -f docker-compose.server.yml logs -f"
 echo "  • Status:  docker compose -f docker-compose.server.yml ps"
 if [ "$TLS_MODE" = "achilles-ca" ]; then
-  echo "  • Health:  curl -s --cacert ${CA_DIR}/public/root.crt ${PUBLIC_URL}/api/health"
+  # The CA dir is root-only (0700), so reading the root needs sudo.
+  echo "  • Health:  sudo curl -s --cacert ${CA_DIR}/public/root.crt ${PUBLIC_URL}/api/health"
 else
   echo "  • Health:  curl -sk ${PUBLIC_URL}/api/health"
 fi

@@ -849,6 +849,11 @@ func TestEngineFullRunAchillesCA(t *testing.T) {
 	if !strings.Contains(r.stdout, "--cacert") || strings.Contains(r.stdout, "curl -sk") {
 		t.Errorf("achilles-ca health hint should verify against the root, not -k\n%s", r.stdout)
 	}
+	// The CA dir is root-only (0700): without sudo, curl can't read the root
+	// (curl: (77) error setting certificate file), as the E2E run showed.
+	if !strings.Contains(r.stdout, "Health:  sudo curl -s --cacert") {
+		t.Errorf("achilles-ca health hint must use sudo to read the root-only CA dir\n%s", r.stdout)
+	}
 
 	// Second run: identical unit content -> no daemon-reload, no re-enable.
 	if err := os.Remove(s.stubLog); err != nil {
