@@ -93,8 +93,25 @@ Collect these from IT before running the installer.
 | **Subnets and network firewalls** | Network | Endpoints and browsers must reach **TCP 80, TCP 443 and UDP 443** on the server. Port 80 carries the root download and the HTTPS redirect. | `10.0.0.0/16` |
 | **GPO owner** | AD / GPO | Imports `root.cer` into a GPO linked to the endpoint OUs (section 7). | |
 | **Clerk app** | You + whoever edits public DNS | Production keys need a public domain you own and Clerk's DNS records in its public zone; private-only names use development keys (section 4). | `pk_live_XXX` / `pk_test_XXX` |
-| **Outbound internet** from the server | Network | Docker Hub (`registry-1.docker.io`), GitHub (`github.com`), Clerk (`api.clerk.com`); the image builds also download OS packages and npm/Go modules. Browsers need to reach Clerk too. | |
+| **Outbound internet** from the server | Network | Image pulls and builds, GitHub, Clerk: see the allow-list below. Browsers need to reach Clerk too. | |
 | **Software distribution** (optional) | Endpoint team | Intune, SCCM or an RMM tool to run the bootstrap script at scale, with the enrollment token passed at run time. | |
+
+**Outbound allow-list for the server** (HTTPS unless noted):
+
+| Host | Used for |
+|------|----------|
+| `registry-1.docker.io`, `auth.docker.io`, `production.cloudflare.docker.com` | Docker Hub image pulls (the registry redirects layer downloads to its CDN) |
+| `docker.elastic.co` | The Elasticsearch image (`ES_MODE=self`) |
+| `get.docker.com`, `download.docker.com` | Installing Docker when it is missing: the engine runs the `get.docker.com` script, which installs from Docker's package repository |
+| `github.com` | `install-onprem.sh` (clone, release tags, and release downloads from `github.com/projectachilles/ProjectAchilles/releases/download/…`), and the test library's git sync |
+| `release-assets.githubusercontent.com` (older: `objects.githubusercontent.com`) | GitHub redirects those release downloads to its asset host |
+| `raw.githubusercontent.com` | Downloading `install-onprem.sh` itself (section 5.1) |
+| `proxy.golang.org`, `sum.golang.org` | Go modules when the installer is built from source (`--ref main`, or a tag without a release asset), and for agent and test builds. A Go 1.21 or later that is older than the version in `installer/go.mod` downloads the required toolchain through the same proxy (default `GOTOOLCHAIN=auto`) |
+| `go.dev`, `dl.google.com` | The backend image build downloads Go from `go.dev/dl`, which redirects to `dl.google.com` |
+| `registry.npmjs.org`, `deb.debian.org`, `dl-cdn.alpinelinux.org` | npm and OS packages during the image builds |
+| `api.clerk.com`, your Clerk Frontend API host | Session verification; the installer also probes the Frontend API host (section 4) |
+
+The server's own package mirrors (for `git`, `curl`, `make`) come on top.
 
 > **Defender ASR:** if attack surface reduction rule `01443614` runs in block
 > mode, add a per-rule exclusion for exactly `C:\F0\achilles-agent.exe` (the
@@ -434,7 +451,8 @@ IP address unless you allowed the LAN IP.
   code that builds an `X509Chain` without the serverAuth policy would accept it.
 - **Revocation.** There is no CRL or OCSP. A compromised CA is handled by
   rotating it ([Rotating after a suspected key compromise](#rotating-after-a-suspected-key-compromise))
-  and removing the old root from every endpoint.
+  and removing the old root from every endpoint
+  ([Removing the old root from endpoints](#removing-the-old-root-from-endpoints)).
 - **The server itself.** Anyone with root on the server can use the CA keys.
 
 ### Key custody
@@ -487,6 +505,15 @@ Until an endpoint has the new root, it does not trust the server, and its agent
 stays offline. To add the new root without re-enrolling, see
 [7.4](#74-manual-trust-only).
 
+**Before you rotate, record the old root's Windows thumbprint (SHA-1).** Rotation
+overwrites the old root on the server, and you need its thumbprint to remove it
+from endpoints. `status` prints only the SHA-256; `ca export` prints both and
+keeps a copy of the old root:
+
+```bash
+sudo /opt/projectachilles/achilles-installer ca export --out /root/achilles-root-old
+```
+
 #### Changing the zone or IP policy
 
 1. In the wizard choose **Reconfigure**, pick the new zone or IP policy, then
@@ -498,7 +525,9 @@ stays offline. To add the new root without re-enrolling, see
    pin, and, because its own `ca` phase changed the CA, clears Caddy's leaf cache
    and restarts it.
 3. Replace the root in the GPO (import the new `root.cer`, delete the old one),
-   and update any copies of the bootstrap script.
+   update any copies of the bootstrap script, and remove the old root from the
+   endpoints that got it outside GPO
+   ([Removing the old root from endpoints](#removing-the-old-root-from-endpoints)).
 
 #### Rotating after a suspected key compromise
 
@@ -506,16 +535,21 @@ The wizard offers **Rotate** only when the zone or IP policy changes, and
 `CA_ROTATE=true` is a no-op when they match. To replace a root with the same
 constraints, rotate by hand. As root, in `/opt/projectachilles`:
 
-1. Create the new root and intermediate with the same values the engine uses:
+1. Record the old root's SHA-1 thumbprint (it prints `SHA-1 thumbprint: …`):
+
+   ```bash
+   sudo ./achilles-installer ca export --out /root/achilles-root-old
+   ```
+2. Create the new root and intermediate with the same values the engine uses:
    `CA_ZONE`, `CADDY_BIND_IP`, `--include-ip` only if `CA_INCLUDE_IP=true`, and
    `ORGANIZATION_NAME` (or, if that is empty, `ACHILLES_DOMAIN`) as the label:
 
    ```bash
-   sudo ./achilles-installer ca init --dir /etc/projectachilles/ca      --zone corp.example.com --ip 10.0.5.20 --label 'Acme Corp' --rotate
+   sudo ./achilles-installer ca init --dir /etc/projectachilles/ca --zone corp.example.com --ip 10.0.5.20 --label 'Acme Corp' --rotate
    ```
 
    It prints a warning, the new root's SHA-256 and its SHA-1 thumbprint.
-2. Move Caddy onto the new CA, clearing its cached leaves:
+3. Move Caddy onto the new CA, clearing its cached leaves:
 
    ```bash
    sudo systemctl start achilles-ca-renew.service
@@ -524,21 +558,61 @@ constraints, rotate by hand. As root, in `/opt/projectachilles`:
    Its renewal step reports "not due" (the intermediate is new). Its restart step
    sees an intermediate newer than the running container, so it deletes
    `/data/caddy/certificates/local` and restarts Caddy.
-3. Re-render the bootstrap scripts with the new pin:
+4. Re-render the bootstrap scripts with the new pin:
 
    ```bash
    sudo ./achilles-installer install --config /opt/projectachilles/deploy.config.env --yes
    ```
 
    The engine keeps the new root (same zone), so its own `ca` phase sees no
-   change. Doing step 2 first matters: on its own, the engine restarts Caddy only
+   change. Doing step 3 first matters: on its own, the engine restarts Caddy only
    if the intermediate is newer than the container. If `up` recreates Caddy in
    that run, that check passes without a restart while the `caddy-data` volume
    still holds leaves from the old CA.
-4. Check with `status` (the Root CA row shows the new SHA-256), replace the root
+5. Check with `status` (the Root CA row shows the new SHA-256), replace the root
    in the GPO (import the new `root.cer`, delete the old one), and re-trust the
    endpoints outside GPO (7.4). Re-running the bootstrap script also works, but
    enrolls each machine again under a new agent ID.
+6. Remove the old root from every endpoint
+   ([Removing the old root from endpoints](#removing-the-old-root-from-endpoints)):
+   deleting it from the GPO is not enough.
+7. Take a fresh backup (`sudo ./achilles-installer backup`), then destroy or
+   quarantine every older backup, in `/var/backups/projectachilles/` and off the
+   server: they contain the compromised CA keys, and `restore` would bring the
+   old CA back.
+
+#### Removing the old root from endpoints
+
+Rotating the CA changes nothing on endpoints: every copy of the old root stays
+trusted until you remove it. Each way of adding the root needs its own removal.
+**Removing the root from a GPO removes only the Group Policy copy**; it does not
+remove the copies that `bootstrap-windows.ps1` (which adds the root to
+`LocalMachine\Root` directly when it is not already trusted) or a manual
+`Import-Certificate` (7.4) added.
+
+| Added by | Removed by |
+|----------|------------|
+| GPO (7.1) | Deleting the old root from the GPO; endpoints drop it at the next policy refresh. |
+| Intune (7.2) | Replacing the profile's certificate; then check with the command below. |
+| `bootstrap-windows.ps1` or `Import-Certificate` | The PowerShell command below. |
+| `bootstrap-unix.sh` on macOS | `sudo security delete-certificate -Z <old SHA-1 thumbprint> /Library/Keychains/System.keychain` |
+| `bootstrap-unix.sh` on Linux | Overwritten: the script always writes the root to the same file (`achilles-root-ca.crt`, see section 8) and rebuilds the trust store, so re-running it, or copying the new `root.crt` to that file and running `update-ca-certificates` / `update-ca-trust`, replaces the old root. |
+
+On Windows, elevated (it can run through SCCM or an RMM tool, and is harmless
+next to GPO and on machines that never had the old root):
+
+```powershell
+Get-ChildItem Cert:\LocalMachine\Root | Where-Object Thumbprint -eq '<old SHA-1 thumbprint>' | Remove-Item
+```
+
+If you no longer have the old thumbprint: an old copy of `root.cer` gives it
+(`openssl x509 -inform der -in root.cer -noout -fingerprint -sha1`, without the
+colons), or list the ProjectAchilles roots on an endpoint and keep only the new
+thumbprint:
+
+```powershell
+Get-ChildItem Cert:\LocalMachine\Root | Where-Object Subject -like '*ProjectAchilles Root CA*' | Format-List Subject, Thumbprint, NotBefore
+```
 
 ## 7. Distributing trust and enrolling Windows endpoints
 
@@ -655,7 +729,8 @@ with `Start-Service AchillesAgent`.
 ### 7.4 Manual, trust only
 
 To add a root without enrolling (a machine outside GPO, or a CA rotation), copy
-`root.cer` to the machine by your usual means and, elevated:
+`root.cer` to the machine by your usual means and, elevated (to remove an old
+root, see [Removing the old root from endpoints](#removing-the-old-root-from-endpoints)):
 
 ```powershell
 (Get-FileHash -Algorithm SHA256 .\root.cer).Hash
@@ -673,8 +748,10 @@ gpresult /r /scope computer
 # Root present? Use the Windows thumbprint (SHA-1) from the Done screen or `ca export`.
 Get-ChildItem Cert:\LocalMachine\Root | Where-Object Thumbprint -eq '<SHA-1 thumbprint>'
 
-# Name resolves and HTTPS validates (no certificate error)
+# Name resolves and HTTPS validates (no certificate error).
+# The SecurityProtocol line enables TLS 1.2, which older Windows PowerShell 5.1 hosts don't offer by default.
 Resolve-DnsName achilles.corp.example.com
+[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
 (Invoke-WebRequest -UseBasicParsing -Uri 'https://achilles.corp.example.com/api/health').StatusCode
 
 # Agent installed and running
@@ -693,9 +770,17 @@ Copy it from the server over a trusted channel and run it as root:
 
 ```bash
 sudo bash bootstrap-unix.sh <enrollment-token>
-# or keep the token out of the argument list:
-ACHILLES_TOKEN=<enrollment-token> sudo -E bash bootstrap-unix.sh
+# or read the token without echo and pass it in the environment:
+read -rs ACHILLES_TOKEN && export ACHILLES_TOKEN
+sudo -E bash bootstrap-unix.sh
 ```
+
+The environment form keeps the token out of your shell history and the
+bootstrap command line (the script still passes it to the agent's `--enroll`).
+`sudo -E` keeps `ACHILLES_TOKEN` only when sudoers allows it (the `SETENV` tag,
+implied for rules that allow `ALL` commands); otherwise use
+`sudo env ACHILLES_TOKEN="$ACHILLES_TOKEN" bash bootstrap-unix.sh`, which puts the
+token on the `sudo` command line but still not in your history.
 
 It downloads `root.cer` over HTTP, aborts unless its SHA-256 matches the pin,
 then trusts it system-wide:
@@ -797,10 +882,20 @@ reinstall. The data and the hostname stay.
   name is under a public domain, run the wizard, choose **Reconfigure**, and pick
   **Let's Encrypt DNS-01** on the Certificates screen.
 - **Public IP with inbound 80/443:** edit `deploy.config.env`: set
-  `TLS_MODE=acme-http` and `ACME_EMAIL`, set `CADDY_BIND_IP` to the public
-  address (or leave it empty to publish on every address), publish a public A
-  record, and run the unattended install (section 12). The engine adds firewall
-  rules only for `LAN_SUBNETS`; opening 80/443 to the internet is up to you.
+  `TLS_MODE=acme-http` and `ACME_EMAIL`, publish a public A record, keep the
+  internal A record pointing at the LAN IP, and run the unattended install
+  (section 12). For `CADDY_BIND_IP`:
+  - **Public address NATed or port-forwarded to the server** (the usual on-prem
+    case): keep the LAN IP, where the forwarded traffic arrives, or leave it
+    empty to publish on every host address.
+  - **Public address assigned to the server itself:** bind to it only if LAN
+    clients reach the server on that address too; if internal DNS still answers
+    with the LAN IP, leave `CADDY_BIND_IP` empty so Caddy listens on both.
+
+  `HOSTS_ENTRY=true` needs `CADDY_BIND_IP` set. Empty publishes 80/443 on every
+  interface, and Docker-published ports bypass ufw and firewalld (section 13).
+  The engine adds firewall rules only for `LAN_SUBNETS`; opening 80/443 to the
+  internet is up to you.
 
 In both cases:
 
@@ -809,8 +904,11 @@ In both cases:
   publicly trusted certificate validates through the OS store. A new hostname
   means re-enrolling them.
 - The ProjectAchilles CA stays in `/etc/projectachilles/ca`, and the root stays
-  trusted on endpoints until you remove it from the GPO. If you no longer use
-  the CA, also stop its timer: `sudo systemctl disable --now achilles-ca-renew.timer`.
+  trusted on endpoints until you remove it from the GPO and from the copies the
+  bootstrap scripts or manual imports added
+  ([Removing the old root from endpoints](#removing-the-old-root-from-endpoints)).
+  If you no longer use the CA, also stop its timer:
+  `sudo systemctl disable --now achilles-ca-renew.timer`.
 
 ## 12. Unattended install
 
@@ -889,6 +987,8 @@ subnets can reach the LAN IP, use your network firewall (or Docker's
 | Bootstrap fails at "Downloading root CA" | Name does not resolve, or TCP 80 is blocked between the endpoint and the server. `Resolve-DnsName`, then `Test-NetConnection achilles.corp.example.com -Port 80`. |
 | Bootstrap fails at "Downloading agent" with 404 | No agent version is registered for Windows amd64: **Settings → Agent → Registered Versions** (5.3). |
 | `Could not establish trust relationship for the SSL/TLS secure channel` | The root is not in `LocalMachine\Root`, or the name is outside the CA's zone. |
+| `Could not create SSL/TLS secure channel` | The PowerShell session doesn't offer TLS 1.2 (older Windows PowerShell 5.1 hosts); the server requires TLS 1.2 or later. Run the `[Net.ServicePointManager]::SecurityProtocol` line from 7.5 first. The bootstrap script sets it itself. |
+| `… cannot be loaded … is not digitally signed` (or `… running scripts is disabled on this system`) | A Group Policy execution policy (AllSigned, RemoteSigned, or scripts disabled) overrides `-ExecutionPolicy Bypass`. Sign the script with a code-signing certificate your endpoints trust (re-sign it after every re-render), or deploy it through SCCM or an RMM tool with its execution-policy bypass setting (ConfigMgr: client setting **PowerShell execution policy** = **Bypass**). |
 | Enrollment: `invalid token (HTTP 401)` | Token expired, revoked or out of uses. Create a new one. |
 | Users can no longer open `C:\F0` | By design: the bootstrap restricts it to SYSTEM and Administrators (7.3). |
 | LAN clients can't connect, the server can | Wrong interface chosen (`CADDY_BIND_IP`), a network firewall between VLANs, or the host firewall: `sudo ufw status` should list the `projectachilles` rules for your subnets. |
@@ -935,5 +1035,7 @@ subnets can reach the LAN IP, use your network firewall (or Docker's
   written. It does not police what administrators, SYSTEM or the agent create
   there later.
 - **No revocation.** If the CA keys may have leaked, rotate with the same
-  constraints ([Rotating after a suspected key compromise](#rotating-after-a-suspected-key-compromise))
-  and remove the old root from every endpoint.
+  constraints ([Rotating after a suspected key compromise](#rotating-after-a-suspected-key-compromise)),
+  remove the old root from every endpoint, not only from the GPO
+  ([Removing the old root from endpoints](#removing-the-old-root-from-endpoints)),
+  and destroy the older backups, which hold the compromised keys.

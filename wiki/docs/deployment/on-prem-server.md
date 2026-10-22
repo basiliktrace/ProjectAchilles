@@ -46,7 +46,9 @@ endpoint; they differ in what (if anything) clients must trust.
 :::tip Recommendation
 If you own a public domain, `acme-dns` is smoothest — publicly-trusted certs,
 zero client setup, no inbound exposure. Use `internal` for truly isolated
-networks, or `byo` to plug into an existing enterprise PKI.
+networks (for a LAN with Windows endpoints, prefer the
+[On-Prem LAN](./on-prem-lan) guide's name-constrained CA, `TLS_MODE=achilles-ca`),
+or `byo` to plug into an existing enterprise PKI.
 :::
 
 ## Step 1: Configure
