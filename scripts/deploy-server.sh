@@ -68,13 +68,23 @@ RENDER_ONLY=0;    flag_on "${ACHILLES_RENDER_ONLY:-}" && RENDER_ONLY=1
 # ---------------------------------------------------------------------------
 # Output helpers
 # ---------------------------------------------------------------------------
-c_info()  { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
-c_ok()    { printf '\033[1;32m  ✓\033[0m %s\n' "$*"; }
-c_warn()  { printf '\033[1;33m  !\033[0m %s\n' "$*"; }
-c_err()   { printf '\033[1;31merror:\033[0m %s\n' "$*" >&2; }
+# Colour only on a terminal (stdout for c_info/c_ok/c_warn, stderr for
+# c_err), so piped or logged output carries no escape sequences.
+if [ -t 1 ]; then
+  C_BLUE=$'\033[1;34m' C_GREEN=$'\033[1;32m' C_YELLOW=$'\033[1;33m' C_OFF=$'\033[0m'
+else
+  C_BLUE='' C_GREEN='' C_YELLOW='' C_OFF=''
+fi
+if [ -t 2 ]; then C_RED=$'\033[1;31m' C_ERR_OFF=$'\033[0m'; else C_RED='' C_ERR_OFF=''; fi
+c_info()  { printf '%s==>%s %s\n' "$C_BLUE" "$C_OFF" "$*"; }
+c_ok()    { printf '%s  ✓%s %s\n' "$C_GREEN" "$C_OFF" "$*"; }
+c_warn()  { printf '%s  !%s %s\n' "$C_YELLOW" "$C_OFF" "$*"; }
+c_err()   { printf '%serror:%s %s\n' "$C_RED" "$C_ERR_OFF" "$*" >&2; }
 
 # Progress protocol (stdout, one event per line). Silent unless
-# ACHILLES_PROGRESS=1, so human output is unchanged without it.
+# ACHILLES_PROGRESS=1, so human output is unchanged without it. With it, the
+# protocol line replaces the human line for phase/warn/fail (the front end
+# renders the event), so nothing is printed twice.
 CURRENT_PHASE="config"
 FAIL_REPORTED=0
 proto() {
@@ -82,10 +92,10 @@ proto() {
   local line="$*"
   printf '%s\n' "${line//$'\n'/ }"
 }
-phase() { CURRENT_PHASE="$1"; proto "::phase $1 $2"; c_info "$2"; }
+phase() { CURRENT_PHASE="$1"; proto "::phase $1 $2"; [ "$PROGRESS" = 1 ] || c_info "$2"; }
 ok()    { proto "::ok $1"; }
-warn()  { proto "::warn $*"; c_warn "$*"; }
-fail()  { local id="$1"; shift; FAIL_REPORTED=1; proto "::fail ${id} $*"; c_err "$*"; exit 1; }
+warn()  { proto "::warn $*"; [ "$PROGRESS" = 1 ] || c_warn "$*"; }
+fail()  { local id="$1"; shift; FAIL_REPORTED=1; proto "::fail ${id} $*"; [ "$PROGRESS" = 1 ] || c_err "$*"; exit 1; }
 die()   { fail "$CURRENT_PHASE" "$*"; }
 # Anything else that aborts the run (a failing command under set -e) still
 # reports which phase it was in.

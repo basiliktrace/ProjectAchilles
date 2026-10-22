@@ -277,3 +277,18 @@ func TestExitCode(t *testing.T) {
 		}
 	}
 }
+
+func TestSanitize(t *testing.T) {
+	for in, want := range map[string]string{
+		"\x1b[1;34m==>\x1b[0m Loading configuration": "==> Loading configuration",
+		"\x1b]0;title\x07plain":                      "plain",
+		"step 1/3\rstep 2/3\rstep 3/3":               "step 3/3",
+		"a\tb":                                       "a    b",
+		"bell\x07 and nul\x00 and del\x7f":           "bell and nul and del",
+		"✓ unicode stays":                            "✓ unicode stays",
+	} {
+		if got := Sanitize(in); got != want {
+			t.Errorf("Sanitize(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

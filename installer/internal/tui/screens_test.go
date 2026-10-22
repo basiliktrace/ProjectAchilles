@@ -777,3 +777,30 @@ func TestFramesInstall(t *testing.T) {
 	checkGolden(t, "25-install-complete", d.waitText("Install complete"))
 	d.quit()
 }
+
+// The engine can finish while "Stop the install?" is open. The question
+// must go away with it, and a late y must not touch the finished run.
+func TestInstallFinishesWhileStopConfirmOpen(t *testing.T) {
+	deps := testDeps(t)
+	hold := make(chan struct{})
+	eng := &fakeEngine{runs: []fakeRun{{events: phases(achillesPhases...), hold: hold}}}
+	deps.Runner = eng.runner
+	d := start(t, deps, nil)
+	d.toReview()
+	d.enter()
+	d.waitText("Installing", "Installing the weekly CA renewal timer")
+	d.esc()
+	d.waitText("Stop the install?")
+	close(hold) // the engine exits 0 with the question still open
+	f := d.waitText("Install complete")
+	if strings.Contains(f, "Stop the install?") || strings.Contains(f, "y stop the install") {
+		t.Fatalf("stop question still shown after the engine finished:\n%s", f)
+	}
+	d.press('y') // late answer: must be a no-op, not a nil cancel
+	d.enter()
+	d.waitText("Done", "ProjectAchilles is installed")
+	d.enter()
+	if a := d.final(); a.Outcome().Action != ActionInstall {
+		t.Fatalf("outcome = %v, want ActionInstall", a.Outcome().Action)
+	}
+}

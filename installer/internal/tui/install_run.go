@@ -158,7 +158,7 @@ func (in *installScreen) apply(ev engine.Event) {
 		}
 		in.known(ev.ID)
 		in.current, in.status[ev.ID] = ev.ID, phaseRunning
-		if t := cleanLogLine(ev.Text); t != "" {
+		if t := engine.Sanitize(ev.Text); t != "" {
 			in.titles[ev.ID] = t
 		}
 		in.log.add("==> " + in.title(ev.ID))
@@ -166,16 +166,16 @@ func (in *installScreen) apply(ev engine.Event) {
 		in.known(ev.ID)
 		in.status[ev.ID] = phaseOK
 	case engine.Warn:
-		msg := cleanLogLine(ev.Text)
+		msg := engine.Sanitize(ev.Text)
 		in.warnings = append(in.warnings, msg)
 		in.log.add("! " + msg)
 	case engine.Fail:
 		in.known(ev.ID)
-		in.failID, in.failMsg = ev.ID, cleanLogLine(ev.Text)
+		in.failID, in.failMsg = ev.ID, engine.Sanitize(ev.Text)
 		in.status[ev.ID] = phaseFailed
 		in.log.add("✗ " + in.failMsg)
 	default:
-		in.log.add(cleanLogLine(ev.Text))
+		in.log.add(engine.Sanitize(ev.Text))
 	}
 }
 
@@ -185,6 +185,7 @@ func (in *installScreen) exited(err error) {
 		in.cancel() // release the context
 	}
 	in.cancel, in.wait = nil, nil
+	in.confirm = false // nothing left to stop
 	in.exitCode = engine.ExitCode(err)
 	switch {
 	case in.stopping:

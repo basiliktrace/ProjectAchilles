@@ -119,23 +119,6 @@ func (b *logBuffer) tail(n int) []string {
 	return all[max(len(all)-n, 0):]
 }
 
-// cleanLogLine makes one line of engine output safe to draw: colours and
-// other escape sequences removed, tabs expanded, and carriage-return
-// progress redraws reduced to their final state.
-func cleanLogLine(s string) string {
-	s = ansi.Strip(s)
-	if i := strings.LastIndexByte(strings.TrimRight(s, "\r"), '\r'); i >= 0 {
-		s = s[i+1:]
-	}
-	s = strings.ReplaceAll(s, "\t", "    ")
-	return strings.Map(func(r rune) rune {
-		if r < 0x20 || r == 0x7f {
-			return -1
-		}
-		return r
-	}, s)
-}
-
 // maskMark prefixes a masked secret.
 const maskMark = "••••"
 

@@ -90,8 +90,10 @@ func (in *installScreen) Quit() (bool, tea.Cmd) {
 			in.layout()
 			return true, nil
 		}
-		in.stopping = true
-		in.cancel()
+		if in.cancel != nil {
+			in.stopping = true
+			in.cancel()
+		}
 		return true, finish(ActionInstallFailed)
 	case instSucceeded:
 		return true, finish(ActionInstall)
@@ -126,8 +128,11 @@ func (in *installScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if in.confirm {
 			switch k {
 			case "y", "Y":
-				in.confirm, in.stopping = false, true
-				in.cancel()
+				in.confirm = false
+				if in.state == instRunning && in.cancel != nil {
+					in.stopping = true
+					in.cancel()
+				}
 			case "n", "N", "enter":
 				in.confirm = false
 			}

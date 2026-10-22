@@ -572,9 +572,32 @@ func TestEngineProgressLines(t *testing.T) {
 	if got := phaseIDs(t, r); strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Errorf("phases = %v, want %v", got, want)
 	}
-	// Human output stays alongside the protocol lines.
-	if !strings.Contains(r.stdout, "Validating settings") {
-		t.Errorf("human output missing\n%s", r)
+	// The protocol line replaces the human phase line (no duplicates), other
+	// human detail stays, and piped output has no colour codes.
+	if n := strings.Count(r.stdout, "Validating settings"); n != 1 {
+		t.Errorf("phase title appears %d times, want once (the ::phase line)\n%s", n, r)
+	}
+	if strings.Contains(r.stdout, "==> ") {
+		t.Errorf("human phase line printed alongside ::phase\n%s", r)
+	}
+	if !strings.Contains(r.stdout, "  ✓ Settings validated") {
+		t.Errorf("human detail missing\n%s", r)
+	}
+	if strings.ContainsRune(r.stdout+r.stderr, 0x1b) {
+		t.Errorf("escape sequence in piped output\n%s", r)
+	}
+}
+
+// Under ACHILLES_PROGRESS a failure is reported once, as ::fail.
+func TestEngineProgressFailReportedOnce(t *testing.T) {
+	s := newSandbox(t, "achilles-ca", "CA_ZONE=\n")
+	r := s.run(t, map[string]string{"ACHILLES_PROGRESS": "1"}, s.cfg)
+	if r.code == 0 {
+		t.Fatalf("want a failure\n%s", r)
+	}
+	all := r.stdout + r.stderr
+	if !strings.Contains(all, "::fail validate") || strings.Contains(ansiRe.ReplaceAllString(all, ""), "error:") {
+		t.Fatalf("want only the ::fail line, no human error: line\n%s", r)
 	}
 }
 

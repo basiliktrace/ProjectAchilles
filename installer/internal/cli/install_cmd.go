@@ -184,19 +184,20 @@ func unattended(ctx context.Context, sio installIO, root, cfgFile string, yes bo
 	return nil
 }
 
-// printEvent writes one engine event as a plain line.
+// printEvent writes one engine event as a plain line. Text is sanitised, so
+// a log or a pipe never receives escape sequences from the script.
 func printEvent(w io.Writer, ev engine.Event) {
 	switch ev.Kind {
 	case engine.Phase:
-		fmt.Fprintf(w, "==> %s\n", ev.Text)
+		fmt.Fprintf(w, "==> %s\n", engine.Sanitize(ev.Text))
 	case engine.OK:
 		fmt.Fprintf(w, "  ✓ %s\n", ev.ID)
 	case engine.Warn:
-		fmt.Fprintf(w, "  ! %s\n", ev.Text)
+		fmt.Fprintf(w, "  ! %s\n", engine.Sanitize(ev.Text))
 	case engine.Fail:
-		fmt.Fprintf(w, "error: %s\n", ev.Text)
+		fmt.Fprintf(w, "error: %s\n", engine.Sanitize(ev.Text))
 	default:
-		fmt.Fprintln(w, ev.Text)
+		fmt.Fprintln(w, engine.Sanitize(ev.Text))
 	}
 }
 

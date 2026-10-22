@@ -5,6 +5,8 @@ package engine
 import (
 	"regexp"
 	"strings"
+
+	"github.com/charmbracelet/x/ansi"
 )
 
 // EventKind classifies one line of installer output.
@@ -57,4 +59,22 @@ func ParseLine(line string) Event {
 		}
 	}
 	return log
+}
+
+// Sanitize makes one line of engine output safe to show on a terminal or in
+// a log: escape sequences (colours, cursor movement, OSC) are removed, tabs
+// are expanded, a carriage-return redraw keeps only its final state, and
+// any other control character is dropped.
+func Sanitize(s string) string {
+	s = ansi.Strip(s)
+	if i := strings.LastIndexByte(strings.TrimRight(s, "\r"), '\r'); i >= 0 {
+		s = s[i+1:]
+	}
+	s = strings.ReplaceAll(s, "\t", "    ")
+	return strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f {
+			return -1
+		}
+		return r
+	}, s)
 }
