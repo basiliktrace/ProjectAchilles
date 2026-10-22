@@ -691,11 +691,23 @@ func TestEngineRerunIdempotent(t *testing.T) {
 // Full runs (docker, sudo and systemctl stubbed)
 // ---------------------------------------------------------------------------
 
-// addFullRunStubs adds sudo (runs its arguments) and a systemctl that logs and
-// remembers whether the timer was enabled.
+// addFullRunStubs adds sudo (runs its arguments), an install that logs and
+// drops -o/-g (chown needs real root) before running the real install, and a
+// systemctl that logs and remembers whether the timer was enabled.
 func addFullRunStubs(t *testing.T, s *sandbox) string {
 	t.Helper()
 	writeFile(t, filepath.Join(s.stubs, "sudo"), "#!/bin/sh\nexec \"$@\"\n", 0o755)
+	writeFile(t, filepath.Join(s.stubs, "install"), `#!/bin/sh
+echo "install $*" >> "$STUB_LOG"
+skip=0
+for a do
+  shift
+  if [ "$skip" = 1 ]; then skip=0; continue; fi
+  case "$a" in -o|-g) skip=1; continue ;; esac
+  set -- "$@" "$a"
+done
+exec /usr/bin/install "$@"
+`, 0o755)
 	state := filepath.Join(s.root, "systemctl-state")
 	writeFile(t, filepath.Join(s.stubs, "systemctl"), `#!/bin/sh
 echo "systemctl $*" >> "$STUB_LOG"
@@ -731,11 +743,13 @@ func TestEngineFullRunAchillesCA(t *testing.T) {
 	if err := os.MkdirAll(systemdDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
+	libDir := filepath.Join(t.TempDir(), "lib")
 	ov := map[string]string{
-		"ACHILLES_RENDER_ONLY": "",
-		"ACHILLES_PROGRESS":    "1",
-		"ACHILLES_SYSTEMD_DIR": systemdDir,
-		"SYSTEMCTL_STATE":      state,
+		"ACHILLES_RENDER_ONLY":      "",
+		"ACHILLES_PROGRESS":         "1",
+		"ACHILLES_SYSTEMD_DIR":      systemdDir,
+		"ACHILLES_LIB_DIR_OVERRIDE": libDir,
+		"SYSTEMCTL_STATE":           state,
 	}
 	r := s.mustRun(t, ov)
 	want := []string{"config", "validate", "docker", "ca", "caddy-render", "backend-env", "root-env", "up", "bootstrap", "renew-timer"}
@@ -749,9 +763,50 @@ func TestEngineFullRunAchillesCA(t *testing.T) {
 
 	svc := readFile(t, filepath.Join(systemdDir, "achilles-ca-renew.service"))
 	timer := readFile(t, filepath.Join(systemdDir, "achilles-ca-renew.timer"))
-	for _, want := range []string{"Type=oneshot", s.path("scripts", "ca-renew.sh"), installerBin, s.caDir} {
+	for _, want := range []string{
+		"Type=oneshot",
+		`ExecStart=/bin/sh "` + libDir + `/ca-renew.sh"`,
+		`Environment="ACHILLES_INSTALLER_BIN=` + libDir + `/achilles-installer"`,
+		`Environment="ACHILLES_CA_DIR=` + s.caDir + `"`,
+	} {
 		if !strings.Contains(svc, want) {
 			t.Errorf("service unit lacks %q:\n%s", want, svc)
+		}
+	}
+	// The root service must execute only the root-owned copies, never files
+	// in the repo (writable by the install user).
+	for _, l := range strings.Split(svc, "\n") {
+		if strings.HasPrefix(l, "ExecStart=") {
+			for _, f := range strings.Fields(strings.TrimPrefix(l, "ExecStart=")) {
+				if f = strings.Trim(f, `"`); f != "/bin/sh" && !strings.HasPrefix(f, libDir+"/") {
+					t.Errorf("ExecStart runs %q, outside %s", f, libDir)
+				}
+			}
+		}
+	}
+	for _, bad := range []string{installerBin, s.path("scripts")} {
+		if strings.Contains(svc, bad) {
+			t.Errorf("service unit references %q:\n%s", bad, svc)
+		}
+	}
+	for src, dst := range map[string]string{installerBin: "achilles-installer", s.path("scripts", "ca-renew.sh"): "ca-renew.sh"} {
+		if got, want := readFile(t, filepath.Join(libDir, dst)), readFile(t, src); got != want {
+			t.Errorf("%s/%s differs from %s", libDir, dst, src)
+		}
+		if fi, err := os.Stat(filepath.Join(libDir, dst)); err != nil {
+			t.Error(err)
+		} else if fi.Mode().Perm() != 0o755 {
+			t.Errorf("%s/%s: mode %o, want 755", libDir, dst, fi.Mode().Perm())
+		}
+	}
+	installs := strings.Join(stubLines(t, s, "install"), "\n")
+	for _, want := range []string{
+		"install -d -o root -g root -m 0755 " + libDir,
+		"install -o root -g root -m 0755 " + installerBin + " " + libDir + "/achilles-installer",
+		"install -o root -g root -m 0755 " + s.path("scripts", "ca-renew.sh") + " " + libDir + "/ca-renew.sh",
+	} {
+		if !strings.Contains(installs, want) {
+			t.Errorf("first run lacks %q in install calls:\n%s", want, installs)
 		}
 	}
 	for _, want := range []string{"OnCalendar=weekly", "Persistent=true", "WantedBy=timers.target"} {
@@ -780,6 +835,34 @@ func TestEngineFullRunAchillesCA(t *testing.T) {
 	calls = strings.Join(stubLines(t, s, "systemctl"), "\n")
 	if strings.Contains(calls, "daemon-reload") || strings.Contains(calls, "systemctl enable ") || strings.Contains(calls, "systemctl restart ") {
 		t.Errorf("re-run with identical units touched systemd:\n%s", calls)
+	}
+	// Only the directory is re-asserted; no file is reinstalled.
+	for _, l := range stubLines(t, s, "install") {
+		if !strings.HasPrefix(l, "install -d ") {
+			t.Errorf("re-run reinstalled a file: %s", l)
+		}
+	}
+
+	// A changed source is reinstalled (just that one), units stay put.
+	if err := os.Remove(s.stubLog); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, s.path("scripts", "ca-renew.sh"), readFile(t, s.path("scripts", "ca-renew.sh"))+"# changed\n", 0o755)
+	s.mustRun(t, ov)
+	var files []string
+	for _, l := range stubLines(t, s, "install") {
+		if !strings.HasPrefix(l, "install -d ") {
+			files = append(files, l)
+		}
+	}
+	if len(files) != 1 || !strings.HasSuffix(files[0], " "+libDir+"/ca-renew.sh") {
+		t.Errorf("want only ca-renew.sh reinstalled, got %v", files)
+	}
+	if !strings.HasSuffix(readFile(t, filepath.Join(libDir, "ca-renew.sh")), "# changed\n") {
+		t.Error("lib copy of ca-renew.sh not updated")
+	}
+	if l := stubLines(t, s, "systemctl daemon-reload"); len(l) != 0 {
+		t.Errorf("unit content unchanged, but systemd was reloaded: %v", l)
 	}
 }
 

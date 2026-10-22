@@ -44,6 +44,9 @@ COMPOSE_FILE="${REPO_ROOT}/docker-compose.server.yml"
 # Test overrides: point the CA and the systemd units at temp dirs.
 CA_DIR="${ACHILLES_CA_DIR_OVERRIDE:-/etc/projectachilles/ca}"
 SYSTEMD_DIR="${ACHILLES_SYSTEMD_DIR:-/etc/systemd/system}"
+# Root-owned copies of what the renewal timer runs as root (never the repo,
+# which the install user may be able to write).
+LIB_DIR="${ACHILLES_LIB_DIR_OVERRIDE:-/usr/local/lib/projectachilles}"
 RENEW_UNIT="achilles-ca-renew"
 
 flag_on() { case "${1:-}" in 1|true|yes) return 0 ;; esac; return 1; }
@@ -108,6 +111,12 @@ prompt_var() {
   fi
   [ -n "$cur" ] || die "'$var' is required."
   printf -v "$var" '%s' "$cur"
+}
+
+# Copies $1 to $2 as root:root 0755, only when the content differs.
+install_root_copy() {
+  cmp -s "$1" "$2" && return 0
+  as_root install -o root -g root -m 0755 "$1" "$2" || fail "$CURRENT_PHASE" "could not install $2"
 }
 
 # Runs achilles-installer; as root for the real CA dir (keys are root-only).
@@ -255,8 +264,6 @@ if [ "$TLS_MODE" = "achilles-ca" ]; then
   if [ ! -f "$ACHILLES_INSTALLER_BIN" ] || [ ! -x "$ACHILLES_INSTALLER_BIN" ]; then
     fail ca "achilles-installer binary not found or not executable at ${ACHILLES_INSTALLER_BIN}; set ACHILLES_INSTALLER_BIN to its path."
   fi
-  # Absolute, because the renewal timer runs it later from systemd.
-  ACHILLES_INSTALLER_BIN="$(readlink -f "$ACHILLES_INSTALLER_BIN")"
   ca_args=(ca init --dir "$CA_DIR" --zone "$CA_ZONE" --ip "$BIND_IP_BARE")
   if [ "$CA_INCLUDE_IP" = true ]; then ca_args+=(--include-ip); fi
   ca_args+=(--label "${ORGANIZATION_NAME:-$ACHILLES_DOMAIN}")
@@ -395,13 +402,21 @@ fi
 # 11. Weekly intermediate-CA renewal timer (achilles-ca only)
 # ---------------------------------------------------------------------------
 # scripts/ca-renew.sh renews when < 180 days remain and then restarts Caddy,
-# which reads the CA files only at start. Units are rewritten only when their
+# which reads the CA files only at start. The service runs as root, so it runs
+# root-owned copies of ca-renew.sh and achilles-installer in LIB_DIR: the repo
+# copies may be writable by the (non-root) install user, and running them
+# would hand that user root. Copies and units are rewritten only when their
 # content changes, so a re-run does not reload systemd.
 if [ "$RENDER_ONLY" = 0 ] && [ "$TLS_MODE" = "achilles-ca" ]; then
   phase renew-timer "Installing the weekly CA renewal timer"
   if ! command -v systemctl >/dev/null 2>&1; then
     warn "systemctl not found: no renewal timer installed. Run ${SCRIPT_DIR}/ca-renew.sh weekly yourself."
   else
+    # Always (re)asserted: root:root 0755 even if the directory already exists.
+    as_root install -d -o root -g root -m 0755 "$LIB_DIR" \
+      || fail renew-timer "could not create ${LIB_DIR}"
+    install_root_copy "$ACHILLES_INSTALLER_BIN" "${LIB_DIR}/achilles-installer"
+    install_root_copy "${SCRIPT_DIR}/ca-renew.sh" "${LIB_DIR}/ca-renew.sh"
     unit_tmp="$(mktemp -d)"
     cat > "${unit_tmp}/${RENEW_UNIT}.service" <<EOF
 # Installed by ProjectAchilles scripts/deploy-server.sh; re-running it rewrites this file.
@@ -413,11 +428,11 @@ After=docker.service
 [Service]
 Type=oneshot
 StateDirectory=projectachilles
-Environment="ACHILLES_INSTALLER_BIN=${ACHILLES_INSTALLER_BIN}"
+Environment="ACHILLES_INSTALLER_BIN=${LIB_DIR}/achilles-installer"
 Environment="ACHILLES_CA_DIR=${CA_DIR}"
 Environment="ACHILLES_REPO_ROOT=${REPO_ROOT}"
 Environment="ACHILLES_STATE_DIR=/var/lib/projectachilles"
-ExecStart=/bin/sh "${SCRIPT_DIR}/ca-renew.sh"
+ExecStart=/bin/sh "${LIB_DIR}/ca-renew.sh"
 EOF
     cat > "${unit_tmp}/${RENEW_UNIT}.timer" <<EOF
 # Installed by ProjectAchilles scripts/deploy-server.sh; re-running it rewrites this file.
