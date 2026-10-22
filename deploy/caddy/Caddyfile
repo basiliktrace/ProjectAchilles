@@ -10,6 +10,11 @@
 #   sites-extra.caddy  extra top-level site blocks     (from sites-extra.caddy, or
 #                                                       extras/<mode>.sites.caddy)
 #
+# The imports below use glob patterns (tls*.caddy etc.) on purpose: a glob that
+# matches nothing is a warning, while a missing literal path stops Caddy. So a
+# checkout pulled without re-running deploy-server.sh still starts (with Caddy's
+# default automatic HTTPS) instead of crash-looping on an empty rendered/.
+#
 # Topology: Caddy terminates TLS on :443 and reverse-proxies everything to
 # the frontend container. The frontend (nginx) serves the SPA and proxies
 # /api -> backend:3000 internally, so the whole app lives on one origin.
@@ -27,7 +32,7 @@
 	admin off
 
 	# Per-mode global options (e.g. the achilles-ca `pki` block).
-	import /etc/caddy/rendered/global.caddy
+	import /etc/caddy/rendered/global*.caddy
 }
 
 {$ACHILLES_DOMAIN} {
@@ -39,7 +44,7 @@
 	}
 
 	# TLS strategy is rendered per-deployment into rendered/tls.caddy.
-	import /etc/caddy/rendered/tls.caddy
+	import /etc/caddy/rendered/tls*.caddy
 
 	reverse_proxy frontend:80 {
 		header_up Host {host}
@@ -55,4 +60,4 @@
 }
 
 # Per-mode extra sites (e.g. the achilles-ca plain-HTTP /ca/* site).
-import /etc/caddy/rendered/sites-extra.caddy
+import /etc/caddy/rendered/sites-extra*.caddy

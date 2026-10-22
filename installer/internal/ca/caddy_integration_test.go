@@ -101,7 +101,7 @@ func renderAchillesCA(t *testing.T, work string) (caddyfile, rendered string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, imp := range []string{"/etc/caddy/rendered/global.caddy", "/etc/caddy/rendered/tls.caddy", "/etc/caddy/rendered/sites-extra.caddy"} {
+	for _, imp := range []string{"/etc/caddy/rendered/global*.caddy", "/etc/caddy/rendered/tls*.caddy", "/etc/caddy/rendered/sites-extra*.caddy"} {
 		if !bytes.Contains(cf, []byte("import "+imp)) {
 			t.Fatalf("Caddyfile does not import %s", imp)
 		}
@@ -387,4 +387,29 @@ func TestCaddyAchillesCA(t *testing.T) {
 			t.Fatalf("after restart Caddy does not chain to the renewed intermediate (serial %x)", nb.Intermediate.SerialNumber)
 		}
 	})
+}
+
+// TestCaddyEmptyRendered: a checkout pulled without re-running deploy-server.sh
+// has an empty (or missing) deploy/caddy/rendered/. The committed Caddyfile must
+// still load: its rendered imports are globs, which only warn on no match,
+// where a literal path is a fatal "File to import not found".
+func TestCaddyEmptyRendered(t *testing.T) {
+	requireDocker(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	empty := t.TempDir()
+	out, err := exec.CommandContext(ctx, "docker", "run", "--rm",
+		"-e", "ACHILLES_DOMAIN="+caddyDomain,
+		"-v", filepath.Join(repoCaddyDir(t), "Caddyfile")+":/etc/caddy/Caddyfile:ro",
+		"-v", empty+":/etc/caddy/rendered:ro",
+		caddyImage, "caddy", "validate", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile",
+	).CombinedOutput()
+	if err != nil {
+		t.Fatalf("caddy validate with an empty rendered/ failed: %v\n%s", err, out)
+	}
+	for _, p := range []string{"global*.caddy", "tls*.caddy", "sites-extra*.caddy"} {
+		if !bytes.Contains(out, []byte("/etc/caddy/rendered/"+p)) {
+			t.Errorf("expected a no-match warning for %s:\n%s", p, out)
+		}
+	}
 }

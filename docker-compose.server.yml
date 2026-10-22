@@ -8,8 +8,10 @@
 # network.
 #
 # Driven by scripts/deploy-server.sh, which generates the root .env and renders
-# deploy/caddy/rendered/{tls,global,sites-extra}.caddy (gitignored; render them
-# before the first `up`). You can also run it directly:
+# deploy/caddy/rendered/{tls,global,sites-extra}.caddy (gitignored). Run
+# ./scripts/deploy-server.sh first (and again after every `git pull`, so the
+# rendered snippets match the checkout); after that you can also run compose
+# directly:
 #
 #   docker compose -f docker-compose.server.yml up -d --build
 #   docker compose -f docker-compose.server.yml --profile elasticsearch up -d --build

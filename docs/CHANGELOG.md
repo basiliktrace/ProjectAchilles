@@ -11,6 +11,12 @@ This project uses two version streams:
 
 ## [Unreleased]
 
+### Upgrade notes
+
+- **Server installs (deploy-server.sh):** after pulling this release, re-run
+  `./scripts/deploy-server.sh` (or `achilles-installer upgrade`) — Caddy config
+  is now rendered into `deploy/caddy/rendered/`.
+
 ### Fixed
 
 #### Agents
