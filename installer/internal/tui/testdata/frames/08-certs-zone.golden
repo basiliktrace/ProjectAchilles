@@ -1,0 +1,24 @@
+ ProjectAchilles installer                                  Certificates  4 / 4
+────────────────────────────────────────────────────────────────────────────────
+ The ProjectAchilles root CA is name-constrained: it can only ever issue
+ certificates for names in this zone and its subdomains. The zone can't be
+ widened later without re-issuing the root and re-distributing it to every
+ endpoint, so pick the narrowest zone that covers achilles.corp.example.com.
+ 
+ Found the existing CA on this server: zone example.com, no IP addresses.
+ 
+ ┃ Which DNS zone may the CA issue certificates for?                           
+ ┃ > corp.example.com (and its subdomains)                                     
+ ┃   example.com (and its subdomains)                                         
+
+
+
+
+
+
+
+
+
+
+────────────────────────────────────────────────────────────────────────────────
+ ↑/↓ choose · enter next · esc back · ctrl+c quit

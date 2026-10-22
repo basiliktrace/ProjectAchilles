@@ -1,0 +1,24 @@
+ ProjectAchilles installer                                  Certificates  4 / 4
+────────────────────────────────────────────────────────────────────────────────
+ ! The existing ProjectAchilles CA on this server doesn't match these answers.
+   Existing: zone example.com, no IP addresses
+   Chosen:   zone corp.example.com, no IP addresses
+ 
+ A root's constraints can't change without re-issuing the root and re-
+ distributing it to every endpoint (GPO, bootstrap script). Until an endpoint
+ has the new root it won't trust this server.
+ 
+ ┃ What should happen to the existing CA?                                      
+ ┃ > Keep the existing CA (uses zone example.com, no IP addresses)             
+ ┃   Rotate: new root CA; every endpoint must re-trust it                     
+
+
+
+
+
+
+
+
+
+────────────────────────────────────────────────────────────────────────────────
+ ↑/↓ choose · enter next · esc back · ctrl+c quit

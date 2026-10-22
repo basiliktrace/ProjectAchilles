@@ -1,0 +1,24 @@
+ ProjectAchilles installer                                       Welcome  1 / 4
+────────────────────────────────────────────────────────────────────────────────
+ Existing install found: achilles.corp.example.com
+ Certificates: achilles-ca · Settings: /opt/projectachilles/deploy.config.env
+ 
+ ┃ What do you want to do?                                                     
+ ┃ > Reconfigure: change settings and re-apply (keeps data and the CA)         
+ ┃   Upgrade: move to a newer ProjectAchilles release                          
+ ┃   Status: show health, certificates and backups                             
+ ┃   Fresh install: start again from blank answers                            
+
+
+
+
+
+
+
+
+
+
+
+
+────────────────────────────────────────────────────────────────────────────────
+ ↑/↓ choose · enter next · ctrl+c quit

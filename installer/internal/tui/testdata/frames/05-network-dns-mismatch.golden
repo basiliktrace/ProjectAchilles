@@ -1,0 +1,24 @@
+ ProjectAchilles installer                                Network & name  3 / 4
+────────────────────────────────────────────────────────────────────────────────
+ ! achilles.corp.example.com does not resolve on this server yet.
+ 
+ Create this record in your internal DNS:
+   achilles.corp.example.com.  A  10.0.5.20
+ On Active Directory DNS (PowerShell on a DNS server):
+   Add-DnsServerResourceRecordA -ZoneName "corp.example.com" `
+     -Name "achilles" -IPv4Address "10.0.5.20"
+ 
+ ┃ How do you want to continue?                                                
+ ┃ > Re-check DNS (after the record is created)                                
+ ┃   Add an /etc/hosts entry on this server and continue                       
+ ┃   Continue without a record for now                                        
+
+
+
+
+
+
+
+
+────────────────────────────────────────────────────────────────────────────────
+ ↑/↓ choose · enter confirm · esc back · ctrl+c quit

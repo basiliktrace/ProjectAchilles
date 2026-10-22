@@ -1,0 +1,24 @@
+ ProjectAchilles installer                                Network & name  3 / 4
+────────────────────────────────────────────────────────────────────────────────
+ ┃ Server hostname                                                             
+ ┃ The name browsers and agents use, e.g. achilles.corp.example.com.           
+ ┃ > achilles.corp.example.com                                                
+ 
+ ✓ Under a public domain: example.com has public name servers.
+   Clerk: use production keys (pk_live_) and add the records Clerk lists to
+   your public zone. Let's Encrypt DNS-01 is available.                  
+
+
+
+
+
+
+
+
+
+
+
+
+
+────────────────────────────────────────────────────────────────────────────────
+ enter next · esc back · ctrl+c quit

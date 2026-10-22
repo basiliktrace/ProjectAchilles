@@ -1,0 +1,24 @@
+ ProjectAchilles installer                                  Certificates  4 / 4
+────────────────────────────────────────────────────────────────────────────────
+ Caddy proves control of achilles.corp.example.com through a DNS TXT record,
+ so the server needs no inbound access from the internet.                   
+ 
+ ┃ Email for Let's Encrypt                                                     
+ ┃ Expiry and account notices go here.                                         
+ ┃ >                                                                           
+                                                                               
+   DNS provider                                                                
+   The Caddy DNS plugin name, e.g. cloudflare, route53, digitalocean.          
+   >                                                                           
+                                                                               
+   DNS provider API token                                                      
+   Needs permission to edit TXT records in the public zone.                    
+   >                                                                           
+
+
+
+
+
+
+────────────────────────────────────────────────────────────────────────────────
+ enter next field · shift+tab previous · esc back · ctrl+c quit
