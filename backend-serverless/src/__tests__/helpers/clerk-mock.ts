@@ -1,23 +1,29 @@
 import { vi } from 'vitest';
 
 /**
- * Mock Clerk middleware for testing.
- * Replaces requireClerkAuth with a passthrough that sets req.auth.
+ * Mock Clerk middleware for testing. Import for side effects:
+ *
+ *   import '../../../__tests__/helpers/clerk-mock.js';
+ *
+ * Importing this module registers the mocks below, replacing requireClerkAuth
+ * with a passthrough that sets req.auth. vi.mock must stay at module top level:
+ * Vitest hoists it regardless, and Vitest 5 rejects nested calls.
+ *
+ * Module paths resolve relative to THIS file, so they mock the same modules
+ * for every test that imports it.
  */
-export function mockClerkMiddleware() {
-  vi.mock('@clerk/express', () => ({
-    clerkMiddleware: () => (_req: any, _res: any, next: any) => next(),
-    requireAuth: () => (_req: any, _res: any, next: any) => next(),
-  }));
+vi.mock('@clerk/express', () => ({
+  clerkMiddleware: () => (_req: any, _res: any, next: any) => next(),
+  requireAuth: () => (_req: any, _res: any, next: any) => next(),
+}));
 
-  vi.mock('../../middleware/clerk.middleware.js', () => ({
-    clerkAuth: (_req: any, _res: any, next: any) => next(),
-    requireClerkAuth: () => (req: any, _res: any, next: any) => {
-      req.auth = { userId: 'test-user-001', sub: 'test-user-001' };
-      next();
-    },
-    getUserId: (auth: any) => auth?.userId || auth?.sub || 'test-user-001',
-    requirePermission: () => (_req: any, _res: any, next: any) => next(),
-    validateRequestOrgId: () => {},
-  }));
-}
+vi.mock('../../middleware/clerk.middleware.js', () => ({
+  clerkAuth: (_req: any, _res: any, next: any) => next(),
+  requireClerkAuth: () => (req: any, _res: any, next: any) => {
+    req.auth = { userId: 'test-user-001', sub: 'test-user-001' };
+    next();
+  },
+  getUserId: (auth: any) => auth?.userId || auth?.sub || 'test-user-001',
+  requirePermission: () => (_req: any, _res: any, next: any) => next(),
+  validateRequestOrgId: () => {},
+}));
