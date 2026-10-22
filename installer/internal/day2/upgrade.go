@@ -112,7 +112,7 @@ func Upgrade(ctx context.Context, d Deps, ref string, yes bool) error {
 	if from == "" {
 		from = "(unknown)"
 	}
-	fmt.Fprintf(out, "Upgrade: %s -> %s\nChangelog: https://github.com/F0RT1KA/ProjectAchilles/releases/tag/%s\n", from, target, target)
+	fmt.Fprintf(out, "Upgrade: %s -> %s\nChangelog: https://github.com/projectachilles/ProjectAchilles/releases/tag/%s\n", from, target, target)
 	if !yes {
 		fmt.Fprint(out, "Check out this version and re-run the installer? [y/N] ")
 		if a := strings.ToLower(readLine(bufio.NewReader(d.In))); a != "y" && a != "yes" {

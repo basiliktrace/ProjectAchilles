@@ -8,7 +8,9 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"path/filepath"
+	"syscall"
 
 	"github.com/projectachilles/ProjectAchilles/installer/internal/config"
 	"github.com/projectachilles/ProjectAchilles/installer/internal/day2"
@@ -32,11 +34,22 @@ func init() {
 	})
 }
 
+// withSignals cancels ctx on SIGINT/SIGTERM so the day-2 commands' deferred
+// cleanup (restart the stack, remove staged secrets) runs instead of the
+// process dying with the stack stopped.
+func withSignals(h Handler) Handler {
+	return func(ctx context.Context, args []string) error {
+		ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
+		defer stop()
+		return h(ctx, args)
+	}
+}
+
 func registerDay2(r *Registry, dio day2IO) {
 	r.Register("status", statusCmd(dio))
-	r.Register("upgrade", upgradeCmd(dio))
-	r.Register("backup", backupCmd(dio))
-	r.Register("restore", restoreCmd(dio))
+	r.Register("upgrade", withSignals(upgradeCmd(dio)))
+	r.Register("backup", withSignals(backupCmd(dio)))
+	r.Register("restore", withSignals(restoreCmd(dio)))
 }
 
 // day2Deps builds the shared dependencies for the checkout at root. A missing

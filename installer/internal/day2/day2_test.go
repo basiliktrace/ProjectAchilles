@@ -475,3 +475,194 @@ func TestRestoreRoundTripAndPerms(t *testing.T) {
 		t.Fatalf("restored CA must load: %v", err)
 	}
 }
+
+// ctxCmd gives the handler the context, for tests that block until cancelled.
+type ctxCmd struct {
+	fakeCmd
+	h func(ctx context.Context, c call) ([]byte, error)
+}
+
+func (f *ctxCmd) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
+	c := call{name, args}
+	f.mu.Lock()
+	f.calls = append(f.calls, c)
+	f.mu.Unlock()
+	return f.h(ctx, c)
+}
+
+func TestBackupCancelledMidwayRestartsStackAndRemovesStage(t *testing.T) {
+	f := &ctxCmd{}
+	f.h = func(ctx context.Context, c call) ([]byte, error) {
+		if c.name == "docker" && len(c.args) > 0 && c.args[0] == "run" {
+			<-ctx.Done() // the volume copy is "running" until the signal
+			return nil, ctx.Err()
+		}
+		return nil, nil
+	}
+	d := backupDeps(t, &fakeCmd{})
+	d.Cmd = f
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		for {
+			f.mu.Lock()
+			n := len(f.calls)
+			f.mu.Unlock()
+			if n >= 3 { // stop, volume inspect, run
+				cancel()
+				return
+			}
+			time.Sleep(time.Millisecond)
+		}
+	}()
+	if _, err := Backup(ctx, d, ""); err == nil {
+		t.Fatal("expected error")
+	}
+	if last := f.calls[len(f.calls)-1].String(); !strings.HasSuffix(last, "start") {
+		t.Fatalf("start must run after cancel, last = %s", last)
+	}
+	ents, _ := os.ReadDir(d.BackupDir)
+	if len(ents) != 0 {
+		t.Fatalf("stage dir left behind: %v", ents)
+	}
+}
+
+// evilArchive writes a .tar.gz with the given headers.
+func evilArchive(t *testing.T, hs ...*tar.Header) string {
+	t.Helper()
+	p := filepath.Join(t.TempDir(), "evil.tar.gz")
+	fh, _ := os.Create(p)
+	gz := gzip.NewWriter(fh)
+	tw := tar.NewWriter(gz)
+	for _, h := range hs {
+		if h.Typeflag == tar.TypeReg {
+			h.Size = 1
+		}
+		if err := tw.WriteHeader(h); err != nil {
+			t.Fatal(err)
+		}
+		if h.Typeflag == tar.TypeReg {
+			_, _ = tw.Write([]byte("x"))
+		}
+	}
+	tw.Close()
+	gz.Close()
+	fh.Close()
+	return p
+}
+
+func TestRestoreRefusesUnsafeGzipArchives(t *testing.T) {
+	cases := map[string]*tar.Header{
+		"symlink":  {Name: "files/.env", Typeflag: tar.TypeSymlink, Linkname: "/etc/shadow", Mode: 0o777},
+		"dotdot":   {Name: "../escape", Typeflag: tar.TypeReg, Mode: 0o600},
+		"hardlink": {Name: "files/.env", Typeflag: tar.TypeLink, Linkname: "/etc/shadow", Mode: 0o600},
+	}
+	for name, h := range cases {
+		t.Run(name, func(t *testing.T) {
+			f := helperFake(false)
+			d := backupDeps(t, f)
+			before, _ := os.ReadFile(filepath.Join(d.RepoDir, ".env"))
+			err := Restore(context.Background(), d, evilArchive(t, &tar.Header{Name: "MANIFEST", Typeflag: tar.TypeReg, Mode: 0o600}, h), true)
+			if err == nil {
+				t.Fatal("expected refusal")
+			}
+			if f.has("stop") || f.has("up -d") {
+				t.Fatalf("nothing may be stopped: %v", f.calls)
+			}
+			after, _ := os.ReadFile(filepath.Join(d.RepoDir, ".env"))
+			if string(before) != string(after) {
+				t.Fatal("files were written")
+			}
+		})
+	}
+}
+
+func TestRestoreRefusesUnsafeZstdArchives(t *testing.T) {
+	for name, listing := range map[string]string{"dotdot": "MANIFEST\n../escape\n", "symlink": "MANIFEST\nfiles/.env\n"} {
+		t.Run(name, func(t *testing.T) {
+			f := &fakeCmd{}
+			f.handler = func(c call) ([]byte, error) {
+				s := c.String()
+				switch {
+				case strings.Contains(s, "-tf"):
+					return []byte(listing), nil
+				case strings.Contains(s, "-xf"): // the container "extracts" a symlink
+					for _, a := range c.args {
+						if strings.HasSuffix(a, ":/s") {
+							st := strings.TrimSuffix(a, ":/s")
+							_ = os.WriteFile(filepath.Join(st, "MANIFEST"), []byte("m"), 0o600)
+							_ = os.MkdirAll(filepath.Join(st, "files"), 0o700)
+							_ = os.Symlink("/etc/shadow", filepath.Join(st, "files", ".env"))
+						}
+					}
+				}
+				return nil, nil
+			}
+			d := backupDeps(t, f)
+			z := filepath.Join(t.TempDir(), "b.tar.zst")
+			_ = os.WriteFile(z, []byte("z"), 0o600)
+			before, _ := os.ReadFile(filepath.Join(d.RepoDir, ".env"))
+			if err := Restore(context.Background(), d, z, true); err == nil {
+				t.Fatal("expected refusal")
+			}
+			if f.has("compose") {
+				t.Fatalf("nothing may be stopped: %v", f.calls)
+			}
+			after, _ := os.ReadFile(filepath.Join(d.RepoDir, ".env"))
+			if string(before) != string(after) {
+				t.Fatal("files were written")
+			}
+		})
+	}
+}
+
+// zstdFake lets the zstd probe pass and the helper "compress" into /o as 0644.
+func zstdFake() *fakeCmd {
+	inner := helperFake(false)
+	return &fakeCmd{handler: func(c call) ([]byte, error) {
+		s := c.String()
+		if strings.Contains(s, "command -v zstd") {
+			return nil, nil
+		}
+		if strings.Contains(s, "--zstd -cf") {
+			for _, a := range c.args {
+				if strings.HasSuffix(a, ":/o") {
+					out := strings.TrimSuffix(a, ":/o")
+					for _, b := range c.args {
+						if strings.HasPrefix(b, "/o/") {
+							_ = os.WriteFile(filepath.Join(out, filepath.Base(b)), []byte("z"), 0o644)
+						}
+					}
+				}
+			}
+			return nil, nil
+		}
+		return inner.handler(c)
+	}}
+}
+
+func TestBackupZstdModeAndNoPartialOnRenameFailure(t *testing.T) {
+	d := backupDeps(t, zstdFake())
+	d.Now = func() time.Time { return time.Date(2026, 10, 21, 1, 2, 3, 0, time.UTC) }
+	p, err := Backup(context.Background(), d, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi, _ := os.Stat(p); !strings.HasSuffix(p, ".tar.zst") || fi.Mode().Perm() != 0o600 {
+		t.Fatalf("%s mode %v", p, fi.Mode())
+	}
+
+	// Rename fails: the final name is a non-empty directory.
+	d = backupDeps(t, zstdFake())
+	d.Now = func() time.Time { return time.Date(2026, 10, 21, 1, 2, 3, 0, time.UTC) }
+	blocker := filepath.Join(d.BackupDir, "20261021T010203Z.tar.zst")
+	_ = os.MkdirAll(filepath.Join(blocker, "x"), 0o700)
+	if _, err := Backup(context.Background(), d, ""); err == nil {
+		t.Fatal("expected rename failure")
+	}
+	filepath.WalkDir(d.BackupDir, func(p string, _ os.DirEntry, _ error) error {
+		if strings.Contains(p, "partial") || strings.Contains(filepath.Base(p), ".out-") || strings.Contains(filepath.Base(p), ".stage-") {
+			t.Errorf("left behind: %s", p)
+		}
+		return nil
+	})
+}

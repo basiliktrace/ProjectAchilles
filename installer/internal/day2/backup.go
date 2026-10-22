@@ -131,10 +131,17 @@ func Backup(ctx context.Context, d Deps, out string) (path string, err error) {
 	var final string
 	if d.zstdAvailable(ctx) {
 		final = filepath.Join(dir, stamp+".tar.zst")
-		part := final + ".partial"
-		if _, err := d.Cmd.Run(ctx, "docker", "run", "--rm", "-v", stage+":/s:ro", "-v", dir+":/o", helperImage,
-			"tar", "--zstd", "-cf", "/o/"+filepath.Base(part), "-C", "/s", "."); err != nil {
-			_ = os.Remove(part)
+		// Compress inside a private 0700 directory, so the root-created file
+		// (possibly 0644) is never readable from the shared backup dir.
+		outDir, err := os.MkdirTemp(dir, ".out-")
+		if err != nil {
+			return "", err
+		}
+		defer os.RemoveAll(outDir)
+		name := stamp + ".tar.zst.partial"
+		part := filepath.Join(outDir, name)
+		if _, err := d.Cmd.Run(ctx, "docker", "run", "--rm", "-v", stage+":/s:ro", "-v", outDir+":/o", helperImage,
+			"tar", "--zstd", "-cf", "/o/"+name, "-C", "/s", "."); err != nil {
 			return "", fmt.Errorf("compressing the backup: %w", err)
 		}
 		if err := os.Chmod(part, 0o600); err != nil {
@@ -186,6 +193,9 @@ func Restore(ctx context.Context, d Deps, file string, yes bool) error {
 	if err := d.extract(ctx, file, stage); err != nil {
 		return fmt.Errorf("reading the backup: %w", err)
 	}
+	if err := checkStage(stage); err != nil {
+		return fmt.Errorf("refusing this backup: %w", err)
+	}
 	if _, err := os.Stat(filepath.Join(stage, manifest)); err != nil {
 		return errors.New("not a ProjectAchilles backup (no MANIFEST)")
 	}
@@ -232,6 +242,9 @@ func Restore(ctx context.Context, d Deps, file string, yes bool) error {
 		if _, err := os.Stat(src); err != nil {
 			continue
 		}
+		if err := requireRegular(src); err != nil {
+			return err
+		}
 		if err := copyFile(src, filepath.Join(d.RepoDir, f.rel), 0o600); err != nil {
 			return err
 		}
@@ -274,6 +287,43 @@ func FixCAPerms(dir string) error {
 		}
 		return os.Chmod(p, mode)
 	})
+}
+
+// checkStage rejects anything but regular files and directories (symlinks,
+// hardlinks to special files, devices, sockets) in an extracted backup.
+func checkStage(stage string) error {
+	return filepath.WalkDir(stage, func(p string, e fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		fi, err := os.Lstat(p)
+		if err != nil {
+			return err
+		}
+		if !fi.IsDir() && !fi.Mode().IsRegular() {
+			rel, _ := filepath.Rel(stage, p)
+			return fmt.Errorf("the archive contains %s, which is not a plain file or directory", rel)
+		}
+		return nil
+	})
+}
+
+// validArchiveName reports whether an archive member name stays inside the
+// extraction directory.
+func validArchiveName(n string) bool {
+	c := path.Clean(n)
+	return !(path.IsAbs(c) || c == ".." || strings.HasPrefix(c, "../") || strings.HasPrefix(n, "/"))
+}
+
+func requireRegular(p string) error {
+	fi, err := os.Lstat(p)
+	if err != nil {
+		return err
+	}
+	if !fi.Mode().IsRegular() {
+		return fmt.Errorf("%s is not a regular file", p)
+	}
+	return nil
 }
 
 func mkdirPrivate(dir string) error {
@@ -400,7 +450,18 @@ func (d Deps) extract(ctx context.Context, file, stage string) error {
 		if err != nil {
 			return err
 		}
-		_, err = d.Cmd.Run(ctx, "docker", "run", "--rm", "-v", stage+":/s", "-v", filepath.Dir(abs)+":/in:ro", helperImage,
+		in := filepath.Dir(abs) + ":/in:ro"
+		names, err := d.Cmd.Run(ctx, "docker", "run", "--rm", "-v", in, helperImage,
+			"tar", "--zstd", "-tf", "/in/"+filepath.Base(abs))
+		if err != nil {
+			return err
+		}
+		for _, n := range strings.Split(string(names), "\n") {
+			if n = strings.TrimSpace(n); n != "" && !validArchiveName(n) {
+				return fmt.Errorf("unsafe path %q in archive", n)
+			}
+		}
+		_, err = d.Cmd.Run(ctx, "docker", "run", "--rm", "-v", stage+":/s", "-v", in, helperImage,
 			"tar", "--zstd", "-xf", "/in/"+filepath.Base(abs), "-C", "/s")
 		return err
 	}
@@ -426,8 +487,11 @@ func (d Deps) extract(ctx context.Context, file, stage string) error {
 		if clean == "." {
 			continue
 		}
-		if path.IsAbs(clean) || clean == ".." || strings.HasPrefix(clean, "../") {
+		if !validArchiveName(h.Name) {
 			return fmt.Errorf("unsafe path %q in archive", h.Name)
+		}
+		if h.Typeflag != tar.TypeDir && h.Typeflag != tar.TypeReg {
+			return fmt.Errorf("%q in the archive is not a plain file or directory", h.Name)
 		}
 		dst := filepath.Join(stage, filepath.FromSlash(clean))
 		switch h.Typeflag {
