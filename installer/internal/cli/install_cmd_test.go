@@ -48,20 +48,6 @@ func TestInstallNoArgsIsInstall(t *testing.T) {
 	}
 }
 
-func TestInstallUnattendedNotImplementedYet(t *testing.T) {
-	for _, args := range [][]string{
-		{"install", "--config", "deploy.config.env", "--yes"},
-		{"install", "--yes"},
-		{"install", "--config", "x.env"},
-	} {
-		r, _, errb := installRegistry(t, "xterm")
-		code := r.Run(args, &bytes.Buffer{}, errb)
-		if code == 0 || !strings.Contains(errb.String(), "not implemented yet") {
-			t.Errorf("%v: code=%d stderr=%q", args, code, errb)
-		}
-	}
-}
-
 func TestInstallRejectsStrayArgs(t *testing.T) {
 	r, _, errb := installRegistry(t, "xterm")
 	if code := r.Run([]string{"install", "extra"}, &bytes.Buffer{}, errb); code == 0 {

@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -252,5 +253,27 @@ for i in $(seq 1 500); do echo "line $i"; done
 	case <-finished:
 	case <-time.After(10 * time.Second):
 		t.Fatal("wait hung")
+	}
+}
+
+type codeErr int
+
+func (e codeErr) Error() string { return "exit" }
+func (e codeErr) ExitCode() int { return int(e) }
+
+func TestExitCode(t *testing.T) {
+	for _, c := range []struct {
+		err  error
+		want int
+	}{
+		{nil, 0},
+		{codeErr(3), 3},
+		{fmt.Errorf("wrapped: %w", codeErr(7)), 7},
+		{codeErr(-1), 1}, // killed by a signal
+		{errors.New("other"), 1},
+	} {
+		if got := ExitCode(c.err); got != c.want {
+			t.Errorf("ExitCode(%v) = %d, want %d", c.err, got, c.want)
+		}
 	}
 }

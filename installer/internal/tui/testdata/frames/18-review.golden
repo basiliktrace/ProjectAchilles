@@ -1,0 +1,24 @@
+ ProjectAchilles installer                                       Review  8 / 10
+────────────────────────────────────────────────────────────────────────────────
+ Server        achilles.corp.example.com → 10.0.5.20 · LAN 10.0.5.0/24
+ Certificates  ProjectAchilles CA · zone corp.example.com · no IP addresses
+ Clerk         pk_test_ key for happy-cat-12.clerk.accounts.dev (development)
+               secret key ••••abcd
+ Analytics     Self-hosted Elasticsearch · demo data: no
+ Organisation  Acme Corp
+ Test library  https://github.com/ubercylon8/f0_library.git (main)
+               GitHub token ••••9876
+ Secrets       session, encryption, CLI: generated during the install
+ Settings file /opt/projectachilles/deploy.config.env (mode 600)
+ 
+ Unattended equivalent, once this is saved:
+   sudo /opt/projectachilles/achilles-installer install --config \
+     /opt/projectachilles/deploy.config.env --yes
+ 
+ ┃ Write the settings and install?                                             
+ ┃ Nothing has been written yet. Yes saves deploy.config.env and starts the    
+ ┃ install.                                                                    
+ ┃                                                                             
+ ┃                        Yes, install     Go back                            
+────────────────────────────────────────────────────────────────────────────────
+ ←/→ choose · enter confirm · esc back · ctrl+c quit

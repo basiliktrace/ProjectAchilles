@@ -17,6 +17,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"errors"
 	"flag"
 	"math/big"
 	"net"
@@ -54,17 +55,31 @@ var testNow = time.Date(2026, 10, 21, 12, 0, 0, 0, time.UTC)
 // Fakes
 // ---------------------------------------------------------------------------
 
-type fakeSys struct{ busyPorts map[int]bool }
+type fakeSys struct {
+	busyPorts   map[int]bool
+	mem         uint64          // 0 = 8 GiB
+	unreachable map[string]bool // URLs whose HTTPReachable fails
+}
 
-func (fakeSys) MemTotalBytes() (uint64, error)              { return 8 << 30, nil }
-func (fakeSys) DiskFreeBytes(string) (uint64, error)        { return 100 << 30, nil }
-func (f fakeSys) PortFree(p int) bool                       { return !f.busyPorts[p] }
-func (fakeSys) HTTPReachable(context.Context, string) error { return nil }
-func (fakeSys) DockerVersion() (string, error)              { return "27.3.1", nil }
-func (fakeSys) TimeSynced() (bool, error)                   { return true, nil }
-func (fakeSys) IsRoot() bool                                { return true }
-func (fakeSys) DirExists(string) bool                       { return false }
-func (fakeSys) OSRelease() (string, string, error)          { return "ubuntu", "24.04", nil }
+func (f fakeSys) MemTotalBytes() (uint64, error) {
+	if f.mem != 0 {
+		return f.mem, nil
+	}
+	return 8 << 30, nil
+}
+func (fakeSys) DiskFreeBytes(string) (uint64, error) { return 100 << 30, nil }
+func (f fakeSys) PortFree(p int) bool                { return !f.busyPorts[p] }
+func (f fakeSys) HTTPReachable(_ context.Context, url string) error {
+	if f.unreachable[url] {
+		return errors.New("dial tcp: i/o timeout")
+	}
+	return nil
+}
+func (fakeSys) DockerVersion() (string, error)     { return "27.3.1", nil }
+func (fakeSys) TimeSynced() (bool, error)          { return true, nil }
+func (fakeSys) IsRoot() bool                       { return true }
+func (fakeSys) DirExists(string) bool              { return false }
+func (fakeSys) OSRelease() (string, string, error) { return "ubuntu", "24.04", nil }
 
 type fakeResolver struct {
 	ns    map[string]bool
@@ -116,6 +131,9 @@ type probeMsg struct{ fn func(*App) }
 type driver struct {
 	t  *testing.T
 	tm *teatest.TestModel
+	// forbid lists strings (e.g. a full secret) that no observed frame may
+	// contain.
+	forbid []string
 }
 
 func start(t *testing.T, d Deps, existing *config.Config) *driver {
@@ -155,6 +173,11 @@ func (d *driver) waitFor(desc string, cond func(string) bool) string {
 		if ok {
 			last = f
 			assertFits(d.t, f, 80, 24)
+			for _, x := range d.forbid {
+				if strings.Contains(f, x) {
+					d.t.Fatalf("frame shows %q:\n%s", x, f)
+				}
+			}
 			if cond(f) {
 				return f
 			}
@@ -250,6 +273,14 @@ func (d *driver) passNetwork(host string, dnsChoice int) {
 	d.enter()
 }
 
+// afterCerts waits until the certificates screen has completed (the login
+// screen is showing), then aborts and returns the answers applied so far.
+func (d *driver) afterCerts() config.Config {
+	d.t.Helper()
+	d.waitText("Login (Clerk)", "Clerk publishable key")
+	return d.quit().cfg
+}
+
 func (d *driver) toCerts(host string) {
 	d.t.Helper()
 	d.passWelcome()
@@ -266,7 +297,7 @@ func TestWizardHappyPathThroughCerts(t *testing.T) {
 	d := start(t, testDeps(t), nil)
 	d.toCerts(testHost)
 	f := d.waitText("Let's Encrypt") // public domain: DNS-01 offered
-	if !strings.Contains(f, "4 / 4") {
+	if !strings.Contains(f, "4 / 10") {
 		t.Errorf("step indicator missing:\n%s", f)
 	}
 	d.enter() // ProjectAchilles CA (default)
@@ -275,11 +306,7 @@ func TestWizardHappyPathThroughCerts(t *testing.T) {
 	d.waitText("LAN IP")
 	d.enter() // include IP: No (default)
 
-	a := d.final()
-	if a.Outcome().Action != ActionInstall {
-		t.Fatalf("outcome = %v, want ActionInstall", a.Outcome().Action)
-	}
-	c := a.Outcome().Config
+	c := d.afterCerts()
 	want := map[string]string{
 		"CADDY_BIND_IP": c.CaddyBindIP, "LAN_SUBNETS": c.LANSubnets, "TLS_MODE": c.TLSMode,
 		"CA_ZONE": c.CAZone, "ACHILLES_DOMAIN": c.AchillesDomain,
@@ -306,7 +333,7 @@ func TestPreflightFailBlocksNext(t *testing.T) {
 	d.waitText("FAIL", "Port 80 available", "port 80 is already in use")
 	d.enter()
 	f := d.waitText("Next is blocked")
-	if !strings.Contains(f, "2 / 4") || !strings.Contains(f, "Port 80 available") {
+	if !strings.Contains(f, "2 / 10") || !strings.Contains(f, "Port 80 available") {
 		t.Fatalf("expected to stay on preflight naming the failed check:\n%s", f)
 	}
 	d.enter()
@@ -451,8 +478,7 @@ func TestByoAcceptsMatchingPairAndCopies(t *testing.T) {
 	d.waitText("Private key file")
 	d.typ(keyPath)
 	d.enter()
-	a := d.final()
-	if c := a.Outcome().Config; c.TLSMode != "byo" {
+	if c := d.afterCerts(); c.TLSMode != "byo" {
 		t.Fatalf("TLS_MODE = %q, want byo", c.TLSMode)
 	}
 	certs := filepath.Join(deps.RepoRoot, "deploy", "caddy", "certs")
@@ -509,8 +535,7 @@ func TestEnterpriseCSRFlow(t *testing.T) {
 	d.tm.Send(tea.KeyPressMsg{Code: 'u', Mod: tea.ModCtrl})
 	d.typ(signed)
 	d.enter()
-	a := d.final()
-	if c := a.Outcome().Config; c.TLSMode != "byo" {
+	if c := d.afterCerts(); c.TLSMode != "byo" {
 		t.Fatalf("TLS_MODE = %q, want byo", c.TLSMode)
 	}
 	if b, _ := os.ReadFile(filepath.Join(certs, "cert.pem")); string(b) != string(chain) {
@@ -551,7 +576,7 @@ func TestEnterpriseKeepsLivePairUntilImport(t *testing.T) {
 	os.WriteFile(signed, chain, 0o644)
 	d.typ(signed)
 	d.enter()
-	d.final()
+	d.afterCerts()
 	if b, _ := os.ReadFile(filepath.Join(certs, "key.pem")); string(b) != string(pending) {
 		t.Error("key.pem is not the request's key after import")
 	}
@@ -594,9 +619,9 @@ func TestEscGoesBack(t *testing.T) {
 	d.esc()
 	d.waitText("Network", "ens18", "Which interface")
 	d.esc()
-	d.waitText("Preflight", "2 / 4")
+	d.waitText("Preflight", "2 / 10")
 	d.esc()
-	d.waitText("Press enter to start", "1 / 4")
+	d.waitText("Press enter to start", "1 / 10")
 	d.quit()
 }
 
@@ -694,7 +719,7 @@ func TestCADriftKeepExisting(t *testing.T) {
 		t.Errorf("drift warning should explain re-distribution:\n%s", f)
 	}
 	d.enter() // keep (default)
-	c := d.final().Outcome().Config
+	c := d.afterCerts()
 	if c.CAZone != "example.com" || c.CAIncludeIP || c.CARotate {
 		t.Fatalf("keep: zone=%q includeIP=%v rotate=%v, want example.com/false/false", c.CAZone, c.CAIncludeIP, c.CARotate)
 	}
@@ -713,7 +738,7 @@ func TestCADriftRotate(t *testing.T) {
 	d.waitText("Keep the existing CA")
 	d.down()
 	d.enter()
-	c := d.final().Outcome().Config
+	c := d.afterCerts()
 	if c.CAZone != "corp.example.com" || !c.CARotate {
 		t.Fatalf("rotate: zone=%q rotate=%v", c.CAZone, c.CARotate)
 	}
@@ -766,7 +791,7 @@ func TestCADriftOutsideZoneExplicitYesRotates(t *testing.T) {
 	d.waitText("Rotate the root CA?")
 	d.press(tea.KeyLeft) // move to "Yes"
 	d.enter()
-	c := d.final().Outcome().Config
+	c := d.afterCerts()
 	if !c.CARotate || c.CAZone != "corp.example.com" {
 		t.Fatalf("rotate=%v zone=%q, want true / corp.example.com", c.CARotate, c.CAZone)
 	}
@@ -782,7 +807,7 @@ func TestCANoDriftWhenMatching(t *testing.T) {
 	d.enter()
 	d.waitText("LAN IP")
 	d.enter()
-	c := d.final().Outcome().Config
+	c := d.afterCerts()
 	if c.CAZone != "corp.example.com" || c.CARotate {
 		t.Fatalf("zone=%q rotate=%v", c.CAZone, c.CARotate)
 	}

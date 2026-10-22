@@ -32,12 +32,16 @@ func CheckInteractive(in, out any, termName string) error {
 	return nil
 }
 
-// Run shows the wizard on in/out until it finishes.
+// Run shows the wizard on in/out until it finishes. An engine run still
+// going when the program ends (e.g. it was killed) is stopped before Run
+// returns.
 func Run(ctx context.Context, d Deps, existing *config.Config, in io.Reader, out io.Writer) (Outcome, error) {
-	p := tea.NewProgram(New(d, existing), tea.WithContext(ctx), tea.WithInput(in), tea.WithOutput(out))
+	app := newApp(d, existing)
+	defer app.Close()
+	p := tea.NewProgram(app, tea.WithContext(ctx), tea.WithInput(in), tea.WithOutput(out))
 	m, err := p.Run()
 	if a, ok := m.(*App); ok {
 		return a.Outcome(), err
 	}
-	return Outcome{}, err
+	return app.Outcome(), err
 }

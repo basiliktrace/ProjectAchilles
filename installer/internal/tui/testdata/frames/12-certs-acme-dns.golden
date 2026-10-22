@@ -1,4 +1,4 @@
- ProjectAchilles installer                                  Certificates  4 / 4
+ ProjectAchilles installer                                 Certificates  4 / 10
 ────────────────────────────────────────────────────────────────────────────────
  Caddy proves control of achilles.corp.example.com through a DNS TXT record,
  so the server needs no inbound access from the internet.                   

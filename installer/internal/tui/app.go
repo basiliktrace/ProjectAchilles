@@ -1,9 +1,11 @@
 // Package tui is the achilles-installer wizard: a Bubble Tea app that walks
 // the admin through an ordered list of screens, each owning one part of
 // deploy.config.env. The TUI only reads the host (preflight, DNS, the
-// existing CA); every change to the server is the engine's job. The one
-// write it makes is the Enterprise-CA / bring-your-own certificate material
-// under deploy/caddy/certs/.
+// existing CA, the Clerk reachability probe); every change to the server is
+// the engine's job, which the install screen runs. The TUI's own writes are
+// the Enterprise-CA / bring-your-own certificate material under
+// deploy/caddy/certs/ and, once the admin confirms on Review,
+// deploy.config.env.
 package tui
 
 import (
@@ -32,9 +34,9 @@ type Deps struct {
 	System     sysprobe.System
 	Resolver   dnsclass.Resolver
 	Interfaces func() []sysprobe.Iface
-	RepoRoot   string // the ProjectAchilles checkout, e.g. /opt/projectachilles
-	ConfigPath string // its deploy.config.env
-	Runner     func(config.Config) engine.Runner
+	RepoRoot   string                             // the ProjectAchilles checkout, e.g. /opt/projectachilles
+	ConfigPath string                             // its deploy.config.env
+	Runner     func(config.Config) engine.Starter // a fresh engine run for the confirmed answers
 	Now        func() time.Time
 	CADir      string // an existing ProjectAchilles CA is read from here (default DefaultCADir)
 }
@@ -49,6 +51,7 @@ type Deps struct {
 //
 //	Back() (handled bool, cmd tea.Cmd) // esc inside a multi-step screen
 //	Help() string                      // replaces the default key hints
+//	Quit() (handled bool, cmd tea.Cmd) // ctrl+c (e.g. confirm before stopping the engine)
 type Screen interface {
 	tea.Model
 	Title() string
@@ -57,25 +60,30 @@ type Screen interface {
 
 type backHandler interface{ Back() (bool, tea.Cmd) }
 type helpProvider interface{ Help() string }
+type quitGuard interface{ Quit() (bool, tea.Cmd) }
 
 // Action is what the wizard ended with.
 type Action int
 
 const (
-	ActionAbort   Action = iota // ctrl+c
-	ActionInstall               // every screen completed
-	ActionUpgrade               // existing install: run `upgrade`
-	ActionStatus                // existing install: run `status`
+	ActionAbort         Action = iota // ctrl+c
+	ActionInstall                     // every screen completed
+	ActionUpgrade                     // existing install: run `upgrade`
+	ActionStatus                      // existing install: run `status`
+	ActionInstallFailed               // the install ran (deploy.config.env written) but did not finish
 )
 
 func (a Action) String() string {
-	return [...]string{"abort", "install", "upgrade", "status"}[a]
+	return [...]string{"abort", "install", "upgrade", "status", "install-failed"}[a]
 }
 
 // Outcome is the wizard's result.
 type Outcome struct {
 	Action Action
 	Config config.Config
+	// Summary is the done screen's text, unstyled, for printing to the
+	// terminal once the alternate screen is gone (ActionInstall only).
+	Summary string
 }
 
 // nextMsg completes screen from; it is ignored if from is no longer current
@@ -88,6 +96,11 @@ type finishMsg struct{ action Action }
 func done(from Screen) tea.Cmd { return func() tea.Msg { return nextMsg{from: from} } }
 
 func finish(a Action) tea.Cmd { return func() tea.Msg { return finishMsg{action: a} } }
+
+// backMsg goes back one screen, as esc does.
+type backMsg struct{ from Screen }
+
+func goBack(from Screen) tea.Cmd { return func() tea.Msg { return backMsg{from: from} } }
 
 // installMode is how this run relates to an existing install.
 type installMode int
@@ -114,6 +127,9 @@ type shared struct {
 	checks []sysprobe.Check
 	iface  sysprobe.Iface
 	class  dnsclass.Result
+
+	summary   string // the done screen's plain text (Outcome.Summary)
+	engineRan bool   // the install screen has started the engine at least once
 }
 
 func (s *shared) now() time.Time {
@@ -136,14 +152,17 @@ func (s *shared) newForm(groups ...*huh.Group) (*huh.Form, tea.Cmd) {
 	cmd := f.Init()
 	// Size the groups now: until a form sees a WindowSizeMsg its viewport
 	// clips the last lines, and a form built mid-run may never get one.
-	f.Update(tea.WindowSizeMsg{Width: s.width, Height: s.height})
+	_, sized := f.Update(tea.WindowSizeMsg{Width: s.width, Height: s.height})
 	// Forms default to a light background; tell new ones what we know.
 	bg := color.Color(color.White)
 	if s.theme.dark {
 		bg = color.Black
 	}
-	f.Update(tea.BackgroundColorMsg{Color: bg})
-	return f, cmd
+	_, colored := f.Update(tea.BackgroundColorMsg{Color: bg})
+	// Keep those updates' commands: they carry the first evaluation of any
+	// TitleFunc/DescriptionFunc (dropping them leaves it blank until its
+	// binding changes).
+	return f, tea.Batch(cmd, sized, colored)
 }
 
 // updateForm forwards msg to f and reports whether it just completed.
@@ -196,16 +215,30 @@ func newApp(d Deps, existing *config.Config) *App {
 	return a
 }
 
-// buildScreens is the ordered wizard. Later screens (login, analytics,
-// organisation, review, install, done) are appended here.
+// buildScreens is the ordered wizard.
 func buildScreens(s *shared) []Screen {
-	screens := []Screen{
+	return []Screen{
 		newWelcome(s),
 		newPreflight(s),
 		newNetwork(s),
 		newCerts(s),
+		newLogin(s),
+		newAnalytics(s),
+		newOrg(s),
+		newReview(s),
+		newInstall(s),
+		newDone(s),
 	}
-	return screens
+}
+
+// Close stops an engine run that is still going (the program ended while
+// installing) and waits for it to exit. Safe to call more than once.
+func (a *App) Close() {
+	for _, sc := range a.screens {
+		if in, ok := sc.(*installScreen); ok {
+			in.stop()
+		}
+	}
 }
 
 // Outcome returns how the wizard ended and the answers collected.
@@ -238,7 +271,18 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyPressMsg:
 		switch msg.String() {
 		case "ctrl+c":
-			a.outcome = Outcome{Action: ActionAbort, Config: a.cfg}
+			if q, ok := a.cur().(quitGuard); ok {
+				if handled, cmd := q.Quit(); handled {
+					return a, cmd
+				}
+			}
+			// Once the engine has run, the server has changed: quitting is a
+			// failed install, not a no-op cancel.
+			action := ActionAbort
+			if a.s.engineRan {
+				action = ActionInstallFailed
+			}
+			a.outcome = Outcome{Action: action, Config: a.cfg}
 			return a, tea.Quit
 		case "esc":
 			return a, a.back()
@@ -248,8 +292,13 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return a, nil
 		}
 		return a, a.advance()
+	case backMsg:
+		if msg.from != a.cur() {
+			return a, nil
+		}
+		return a, a.back()
 	case finishMsg:
-		a.outcome = Outcome{Action: msg.action, Config: a.cfg}
+		a.outcome = Outcome{Action: msg.action, Config: a.cfg, Summary: a.s.summary}
 		return a, tea.Quit
 	}
 	m, cmd := a.cur().Update(msg)
@@ -273,7 +322,7 @@ func (a *App) back() tea.Cmd {
 func (a *App) advance() tea.Cmd {
 	a.cur().Apply(&a.cfg)
 	if a.idx == len(a.screens)-1 {
-		a.outcome = Outcome{Action: ActionInstall, Config: a.cfg}
+		a.outcome = Outcome{Action: ActionInstall, Config: a.cfg, Summary: a.s.summary}
 		return tea.Quit
 	}
 	a.idx++

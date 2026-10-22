@@ -1,0 +1,24 @@
+ ProjectAchilles installer                                      Install  9 / 10
+────────────────────────────────────────────────────────────────────────────────
+ ■ Install stopped during: Configuring Caddy TLS (achilles-ca)
+   Nothing after it ran. Running the install again is safe: every phase is
+   idempotent.
+   4 phases done · 1 stopped · 7 not run
+ 
+ Last 30 log lines:
+ ==> Loading configuration
+   doing config
+ ==> Validating settings
+   doing validate
+ ==> Checking Docker
+   doing docker
+ ==> Preparing the ProjectAchilles CA
+   doing ca
+ ! ufw is inactive: no firewall rules were added.
+ ==> Configuring Caddy TLS (achilles-ca)
+   rendering deploy/caddy/rendered/tls.caddy
+ ■ stopped by the admin
+ 
+ r retry (re-runs the whole install; it is idempotent) · q quit
+────────────────────────────────────────────────────────────────────────────────
+ r retry · q quit · ↑/↓ scroll log · esc back to review

@@ -3,6 +3,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -59,11 +60,37 @@ func (r *Registry) Run(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	if err := h(context.Background(), rest); err != nil {
+		var ee *exitError
+		if errors.As(err, &ee) {
+			if ee.err != nil {
+				fmt.Fprintf(stderr, "achilles-installer %s: %v\n", name, ee.err)
+			}
+			return ee.code
+		}
 		fmt.Fprintf(stderr, "achilles-installer %s: %v\n", name, err)
 		return 1
 	}
 	return 0
 }
+
+// exitError makes Run exit with code; err (if any) is printed first.
+type exitError struct {
+	code int
+	err  error
+}
+
+func (e *exitError) Error() string {
+	if e.err != nil {
+		return e.err.Error()
+	}
+	return fmt.Sprintf("exit status %d", e.code)
+}
+
+func (e *exitError) Unwrap() error { return e.err }
+
+// exitWith returns an error that makes Run exit with code, printing err
+// (nil prints nothing).
+func exitWith(code int, err error) error { return &exitError{code: code, err: err} }
 
 // match finds the longest known command name that prefixes args.
 func (r *Registry) match(args []string) (string, []string, bool) {

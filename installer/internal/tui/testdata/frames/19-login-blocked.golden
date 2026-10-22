@@ -1,0 +1,24 @@
+ ProjectAchilles installer                                Login (Clerk)  5 / 10
+────────────────────────────────────────────────────────────────────────────────
+ Create an app at dashboard.clerk.com and copy both keys from API Keys. For  
+ achilles.corp.example.com use production keys (pk_live_) from an app on that
+ name or a parent domain. Development keys (pk_test_) are free and work too, 
+ but show a "Development mode" banner and have lower usage limits.           
+ 
+   Clerk publishable key                                                       
+   > pk_live_Y2xlcmsub3RoZXIuZXhhbXBsZS5vcmck                                  
+                                                                               
+ ┃ Clerk secret key                                                            
+ ┃ > ************************                                                  
+ 
+ ✗ fix the problem shown below first
+ 
+ ✓ Frontend API: clerk.other.example.org · reachable from this server
+ ✗ This production key belongs to clerk.other.example.org, but the server name
+   achilles.corp.example.com needs a Clerk app on one of:
+   clerk.achilles.corp.example.com, clerk.corp.example.com, clerk.example.com.
+
+
+
+────────────────────────────────────────────────────────────────────────────────
+ enter next field · shift+tab previous · esc back · ctrl+c quit

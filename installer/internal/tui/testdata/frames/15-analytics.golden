@@ -1,0 +1,24 @@
+ ProjectAchilles installer                                    Analytics  6 / 10
+────────────────────────────────────────────────────────────────────────────────
+ ┃ Where should Elasticsearch run?                                             
+ ┃ Test results and the analytics dashboards are stored there.                 
+ ┃ > Self-hosted on this server (an Elasticsearch container)                   
+ ┃   Elastic Cloud (managed: you need a Cloud ID and an API key)              
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+────────────────────────────────────────────────────────────────────────────────
+ ↑/↓ choose · enter next · esc back · ctrl+c quit

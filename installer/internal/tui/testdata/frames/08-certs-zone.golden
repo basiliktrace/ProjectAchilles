@@ -1,4 +1,4 @@
- ProjectAchilles installer                                  Certificates  4 / 4
+ ProjectAchilles installer                                 Certificates  4 / 10
 ────────────────────────────────────────────────────────────────────────────────
  The ProjectAchilles root CA is name-constrained: it can only ever issue
  certificates for names in this zone and its subdomains. The zone can't be

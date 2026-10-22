@@ -1,0 +1,24 @@
+ ProjectAchilles installer                                Login (Clerk)  5 / 10
+────────────────────────────────────────────────────────────────────────────────
+ This production app's Frontend API is clerk.corp.example.com. Clerk's
+ dashboard (Domains) lists DNS records (CNAMEs) for it to add to your public
+ zone; sign-in fails until Clerk has verified them.
+ 
+ ✓ Frontend API: clerk.corp.example.com · reachable from this server
+ 
+ ┃ Have you published the DNS records Clerk lists?                             
+ ┃ > Yes, they're published (Clerk shows them verified)                        
+ ┃   Not yet: continue (sign-in fails until they are)                         
+
+
+
+
+
+
+
+
+
+
+
+────────────────────────────────────────────────────────────────────────────────
+ ↑/↓ choose · enter next · esc back · ctrl+c quit
