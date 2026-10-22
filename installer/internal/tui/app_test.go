@@ -888,9 +888,26 @@ func TestFramesFit80x24(t *testing.T) {
 	d.enter()
 	checkGolden(t, "08-certs-zone", d.waitText("name-constrained"))
 	d.enter()
-	d.waitText("LAN IP")
+	checkGolden(t, "26-certs-ip", d.waitText("LAN IP", "reachable by IP"))
 	d.enter()
 	checkGolden(t, "09-certs-ca-drift", d.waitText("Keep the existing CA"))
+	d.quit()
+}
+
+// The include-IP questions must not suggest that https://<ip> will work: the
+// site address is the DNS name only.
+func TestFramesCertsIPWording(t *testing.T) {
+	deps := testDeps(t)
+	d := start(t, deps, nil)
+	d.toCerts(testHost)
+	d.down() // Enterprise CA
+	d.enter()
+	f := d.waitText("LAN IP", "reachable by IP")
+	checkGolden(t, "27-certs-enterprise-ip", f)
+	flat := strings.Join(strings.Fields(strings.ReplaceAll(f, "┃", "")), " ")
+	if !strings.Contains(flat, "it does not make the server reachable by IP") || strings.Contains(flat, "connect by IP") {
+		t.Errorf("enterprise IP question wording:\n%s", f)
+	}
 	d.quit()
 }
 

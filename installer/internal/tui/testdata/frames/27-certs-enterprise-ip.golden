@@ -1,0 +1,24 @@
+ ProjectAchilles installer                                 Certificates  4 / 10
+────────────────────────────────────────────────────────────────────────────────
+ The installer creates a private key and a certificate request (CSR) for
+ achilles.corp.example.com in deploy/caddy/certs/. Your CA signs the request;
+ you then point the installer at the signed chain.
+ 
+ ┃ Include the LAN IP 10.0.5.20 in the request?                                
+ ┃ This only adds the IP to the certificate request; it does not make the      
+ ┃ server reachable by IP (the site answers on its DNS name only).             
+ ┃                                                                             
+ ┃                              Yes     No                                    
+
+
+
+
+
+
+
+
+
+
+
+────────────────────────────────────────────────────────────────────────────────
+ ←/→ choose · enter next · esc back · ctrl+c quit

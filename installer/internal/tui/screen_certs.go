@@ -53,6 +53,13 @@ const (
 
 var providerRe = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]*$`)
 
+// The site answers on the DNS name only, so an IP in the certificate does not
+// make https://<ip> work; these say so rather than suggesting it would.
+const (
+	ipCADesc  = "This only lets the CA sign certificates for this IP; it does not make the server reachable by IP (the site answers on its DNS name only). Say No and the CA can't issue for any IP address."
+	ipEntDesc = "This only adds the IP to the certificate request; it does not make the server reachable by IP (the site answers on its DNS name only)."
+)
+
 // certsScreen chooses the TLS mode and gathers what that mode needs.
 type certsScreen struct {
 	s    *shared
@@ -231,7 +238,7 @@ func (c *certsScreen) toIP() tea.Cmd {
 	c.form, cmd = c.s.newForm(huh.NewGroup(
 		huh.NewConfirm().
 			Title(fmt.Sprintf("Also allow the LAN IP %s in certificates?", c.bindIP())).
-			Description("Only needed if people or agents connect by IP. Otherwise the CA can't issue for any IP address.").
+			Description(ipCADesc).
 			Affirmative("Yes").
 			Negative("No").
 			Value(&c.includeIP),
@@ -310,7 +317,7 @@ func (c *certsScreen) toEntIP() tea.Cmd {
 	c.form, cmd = c.s.newForm(huh.NewGroup(
 		huh.NewConfirm().
 			Title(fmt.Sprintf("Include the LAN IP %s in the request?", c.bindIP())).
-			Description("Only needed if people or agents connect by IP.").
+			Description(ipEntDesc).
 			Affirmative("Yes").
 			Negative("No").
 			Value(&c.entIP),
