@@ -19,6 +19,8 @@ import (
 // defaultRepoDir is where install-onprem.sh clones ProjectAchilles.
 const defaultRepoDir = "/opt/projectachilles"
 
+const repoFlagHelp = "ProjectAchilles checkout (default: the current directory if it is one, else this binary's directory if it is one, else " + defaultRepoDir + ")"
+
 // installIO is the install handler's view of the process.
 type installIO struct {
 	stdin          io.Reader
@@ -54,14 +56,31 @@ func engineRunner(root, cfgPath, caDir string) (engine.Starter, error) {
 func registerInstall(r *Registry, sio installIO) { r.Register("install", installCmd(r, sio)) }
 
 // repoDir picks the checkout to install from: --repo, else the working
-// directory when it is a checkout, else /opt/projectachilles.
+// directory when it is a checkout, else the directory holding this binary
+// when that is a checkout (install-onprem.sh puts it at <dir>/achilles-installer,
+// so `--dir` installs keep working when run from elsewhere), else
+// /opt/projectachilles.
 func repoDir(flagVal string) string {
+	return pickRepoDir(flagVal, os.Getwd, os.Executable)
+}
+
+func pickRepoDir(flagVal string, getwd, executable func() (string, error)) string {
 	if flagVal != "" {
 		return flagVal
 	}
-	if wd, err := os.Getwd(); err == nil {
-		if _, err := os.Stat(filepath.Join(wd, "scripts", "deploy-server.sh")); err == nil {
-			return wd
+	isCheckout := func(dir string) bool {
+		_, err := os.Stat(filepath.Join(dir, "scripts", "deploy-server.sh"))
+		return err == nil
+	}
+	if wd, err := getwd(); err == nil && isCheckout(wd) {
+		return wd
+	}
+	if exe, err := executable(); err == nil {
+		if real, err := filepath.EvalSymlinks(exe); err == nil {
+			exe = real
+		}
+		if dir := filepath.Dir(exe); isCheckout(dir) {
+			return dir
 		}
 	}
 	return defaultRepoDir
@@ -72,7 +91,7 @@ func installCmd(r *Registry, sio installIO) Handler {
 		flags := newFlagSet("install", sio.stderr)
 		cfgFile := flags.String("config", "", "deploy.config.env to install from without prompts (with --yes)")
 		yes := flags.Bool("yes", false, "run unattended: no wizard, no confirmation")
-		repo := flags.String("repo", "", "ProjectAchilles checkout (default: the current directory if it is one, else "+defaultRepoDir+")")
+		repo := flags.String("repo", "", repoFlagHelp)
 		caDir := flags.String("ca-dir", defaultCADir, "where an existing ProjectAchilles CA lives")
 		if err := parseFlags(flags, args); err != nil {
 			return helpOK(err)

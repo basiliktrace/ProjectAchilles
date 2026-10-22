@@ -211,11 +211,14 @@ launch() {
   fi
   if tty_usable; then
     log "Launching installer"
-    exec "$bin" install </dev/tty >/dev/tty 2>&1
+    # The installer finds its checkout from the working directory, so a
+    # non-default --dir needs both the cd and the explicit --repo.
+    cd "$DIR" || die "cannot cd to $DIR"
+    exec "$bin" install --repo "$DIR" </dev/tty >/dev/tty 2>&1
   fi
   log "No controlling terminal; not launching the interactive installer."
-  echo "Run it interactively:      sudo $bin install"
-  echo "Or non-interactively:      sudo $bin install --config $DIR/deploy.config.env --yes"
+  echo "Run it interactively:      sudo $bin install --repo $DIR"
+  echo "Or non-interactively:      sudo $bin install --repo $DIR --config $DIR/deploy.config.env --yes"
 }
 
 main() {

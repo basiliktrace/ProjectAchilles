@@ -69,7 +69,7 @@ func day2Deps(dio day2IO, root, caDir string) day2.Deps {
 func statusCmd(dio day2IO) Handler {
 	return func(ctx context.Context, args []string) error {
 		flags := newFlagSet("status", dio.stderr)
-		repo := flags.String("repo", "", "ProjectAchilles checkout (default: the current directory if it is one, else "+defaultRepoDir+")")
+		repo := flags.String("repo", "", repoFlagHelp)
 		caDir := flags.String("ca-dir", defaultCADir, "CA directory")
 		if err := parseFlags(flags, args); err != nil {
 			return helpOK(err)
@@ -89,7 +89,7 @@ func statusCmd(dio day2IO) Handler {
 func upgradeCmd(dio day2IO) Handler {
 	return func(ctx context.Context, args []string) error {
 		flags := newFlagSet("upgrade", dio.stderr)
-		repo := flags.String("repo", "", "ProjectAchilles checkout (default: the current directory if it is one, else "+defaultRepoDir+")")
+		repo := flags.String("repo", "", repoFlagHelp)
 		caDir := flags.String("ca-dir", defaultCADir, "CA directory")
 		ref := flags.String("ref", "", "tag or ref to upgrade to (default: the next release tag)")
 		yes := flags.Bool("yes", false, "do not ask for confirmation")
@@ -116,7 +116,7 @@ func upgradeCmd(dio day2IO) Handler {
 func backupCmd(dio day2IO) Handler {
 	return func(ctx context.Context, args []string) error {
 		flags := newFlagSet("backup", dio.stderr)
-		repo := flags.String("repo", "", "ProjectAchilles checkout (default: the current directory if it is one, else "+defaultRepoDir+")")
+		repo := flags.String("repo", "", repoFlagHelp)
 		caDir := flags.String("ca-dir", defaultCADir, "CA directory")
 		out := flags.String("out", day2.DefaultBackupDir, "directory to write the backup into")
 		if err := parseFlags(flags, args); err != nil {
@@ -130,7 +130,7 @@ func backupCmd(dio day2IO) Handler {
 func restoreCmd(dio day2IO) Handler {
 	return func(ctx context.Context, args []string) error {
 		flags := newFlagSet("restore", dio.stderr)
-		repo := flags.String("repo", "", "ProjectAchilles checkout (default: the current directory if it is one, else "+defaultRepoDir+")")
+		repo := flags.String("repo", "", repoFlagHelp)
 		caDir := flags.String("ca-dir", defaultCADir, "CA directory")
 		yes := flags.Bool("yes", false, "do not ask for the typed confirmation")
 		// Accept FILE before or after the flags.
