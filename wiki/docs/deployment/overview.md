@@ -1,12 +1,12 @@
 ---
 sidebar_position: 1
 title: Overview & Comparison
-description: Compare all ProjectAchilles deployment targets — Docker Compose, public/on-prem server, Railway, Render, Fly.io, and Vercel.
+description: Compare all ProjectAchilles deployment targets — Docker Compose, public/on-prem server, on-prem LAN installer, Railway, Render, Fly.io, and Vercel.
 ---
 
 # Deployment Overview
 
-ProjectAchilles supports seven deployment targets. Choose based on your requirements for database, storage, agent build capability, and budget.
+ProjectAchilles supports eight deployment targets. Choose based on your requirements for database, storage, agent build capability, and budget.
 
 ## Comparison Matrix
 
@@ -15,6 +15,7 @@ ProjectAchilles supports seven deployment targets. Choose based on your requirem
 | **Docker Compose** | `backend/` | SQLite (volume) | Filesystem (volume) | Yes | Free | Local dev, self-hosted, air-gapped |
 | **Public server** | `backend/` | SQLite (volume) | Filesystem (volume) | Yes | VPS cost | Public single-server install with auto-TLS |
 | **On-prem server** | `backend/` | SQLite (volume) | Filesystem (volume) | Yes | Your hardware | Private/internal networks, own PKI |
+| **On-prem LAN (installer)** | `backend/` | SQLite (volume) | Filesystem (volume) | Yes | Your hardware | LAN-only server, managed CA, Windows fleet via GPO |
 | **Railway** | `backend/` | SQLite (volume) | Filesystem (volume) | Partial | ~$10-13/mo | Simplicity, auto-deploy from GitHub |
 | **Render** | `backend/` | SQLite (persistent disk) | Filesystem (disk) | Partial | ~$14/mo | Flat-rate pricing, Blueprint deploy |
 | **Fly.io** | `backend/` | SQLite (volume) | Filesystem (volume) | Yes | ~$8/mo | Cheapest always-on, custom domains |
@@ -70,6 +71,7 @@ ProjectAchilles supports seven deployment targets. Choose based on your requirem
 - **Just evaluating?** Use [Docker Compose](./docker-compose) or [Local Dev](../getting-started/quick-start-local)
 - **Want your own public server with a domain?** Use [Public Server](./public-server) (Caddy auto-TLS, DigitalOcean or any VPS)
 - **Running on a private/internal network?** Use [On-Prem Server](./on-prem-server) (internal CA, DNS-01, or your own cert)
+- **Windows fleet on a LAN, no public IP?** Use [On-Prem LAN](./on-prem-lan) (TUI installer, managed CA, GPO trust)
 - **Need the cheapest managed always-on?** Use [Fly.io](./fly-io) (~$8/mo)
 - **Want the simplest managed deploy?** Use [Railway](./railway) (GitHub auto-deploy)
 - **Need serverless scale?** Use [Vercel](./vercel) (requires Turso + Blob)

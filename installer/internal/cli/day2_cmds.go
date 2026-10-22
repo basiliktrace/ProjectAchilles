@@ -91,7 +91,7 @@ func upgradeCmd(r *Registry, dio day2IO) Handler {
 		flags := newFlagSet("upgrade", dio.stderr)
 		repo := flags.String("repo", "", repoFlagHelp)
 		caDir := flags.String("ca-dir", defaultCADir, "CA directory")
-		ref := flags.String("ref", "", "tag or ref to upgrade to (default: the next release tag)")
+		ref := flags.String("ref", "", "tag or ref to upgrade to (default: the highest release tag)")
 		yes := flags.Bool("yes", false, "do not ask for confirmation")
 		if err := parseFlags(flags, args); err != nil {
 			return helpOK(err)
