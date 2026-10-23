@@ -301,6 +301,11 @@ export interface BundleResults {
   controls: BundleControlResult[];
 }
 
+export interface CreateTaskOptions {
+  /** Pre-execution notice gating these tasks; NULL/absent = ungated. */
+  noticeId?: string | null;
+}
+
 export interface CreateTaskRequest {
   agent_ids: string[];
   test_uuid: string;

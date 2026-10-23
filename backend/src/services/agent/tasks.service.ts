@@ -13,6 +13,7 @@ import type {
   TaskTestMetadata,
   TaskNoteEntry,
   CreateTaskRequest,
+  CreateTaskOptions,
   CreateCommandTaskRequest,
   ListTasksRequest,
 } from '../../types/agent.js';
@@ -49,6 +50,7 @@ interface TaskRow {
   es_ingested: number;
   ingest_attempts: number;
   last_ingest_attempt_at: string | null;
+  notice_id?: string | null;
 }
 
 function parseTaskRow(row: TaskRow): Task {
@@ -158,9 +160,11 @@ export function resetExpireThrottle(): void {
 export function createTasks(
   request: CreateTaskRequest,
   orgId: string,
-  createdBy: string
+  createdBy: string,
+  options: CreateTaskOptions = {},
 ): string[] {
   const db = getDatabase();
+  const noticeId = options.noticeId ?? null;
 
   const {
     agent_ids,
@@ -306,8 +310,8 @@ export function createTasks(
   // Insert tasks inside a transaction
   const batchId = crypto.randomUUID();
   const insertStmt = db.prepare(`
-    INSERT INTO tasks (id, agent_id, org_id, type, priority, status, payload, created_at, ttl, created_by, target_index, batch_id, max_retries)
-    VALUES (?, ?, ?, 'execute_test', ?, 'pending', ?, datetime('now'), 604800, ?, ?, ?, ?)
+    INSERT INTO tasks (id, agent_id, org_id, type, priority, status, payload, created_at, ttl, created_by, target_index, batch_id, max_retries, notice_id)
+    VALUES (?, ?, ?, 'execute_test', ?, 'pending', ?, datetime('now'), 604800, ?, ?, ?, ?, ?)
   `);
 
   const taskIds: string[] = [];
@@ -315,7 +319,7 @@ export function createTasks(
   const insertAll = db.transaction(() => {
     for (const agentId of agent_ids) {
       const taskId = crypto.randomUUID();
-      insertStmt.run(taskId, agentId, orgId, priority, payloadByAgentId.get(agentId)!, createdBy, target_index ?? null, batchId, max_retries);
+      insertStmt.run(taskId, agentId, orgId, priority, payloadByAgentId.get(agentId)!, createdBy, target_index ?? null, batchId, max_retries, noticeId);
       taskIds.push(taskId);
     }
   });
@@ -559,27 +563,34 @@ export function createUninstallTasks(
  * Fetch the next pending task for a given agent. Expires old tasks first,
  * then atomically assigns the highest-priority oldest pending task.
  */
-export function getNextTask(agentId: string): Task | null {
+export function getNextTask(agentId: string, now: Date = new Date()): Task | null {
   const db = getDatabase();
 
   // Throttle expire checks to once per 60s — TTL has 7-day granularity,
   // so a 60s delay is invisible. Eliminates ~80 write UPDATEs/minute.
-  const now = Date.now();
-  if (now - lastExpireRun > EXPIRE_THROTTLE_MS) {
+  const nowMs = Date.now();
+  if (nowMs - lastExpireRun > EXPIRE_THROTTLE_MS) {
     expireOldTasks();
     expireStaleTasks();
     expireOverdueTasks();
-    lastExpireRun = now;
+    lastExpireRun = nowMs;
   }
+
+  // Notice hold: ISO strings compared to JS-computed ISO params (never datetime('now')).
+  const nowIso = now.toISOString();
 
   // Find and assign the next task atomically via transaction
   const result = db.transaction(() => {
     const row = db.prepare(`
       SELECT * FROM tasks
       WHERE agent_id = ? AND status = 'pending'
+        AND (notice_id IS NULL OR EXISTS (
+          SELECT 1 FROM run_notices n WHERE n.id = tasks.notice_id
+            AND n.state IN ('sent','overridden')
+            AND n.release_at <= ? AND n.pickup_deadline > ?))
       ORDER BY priority DESC, created_at ASC
       LIMIT 1
-    `).get(agentId) as TaskRow | undefined;
+    `).get(agentId, nowIso, nowIso) as TaskRow | undefined;
 
     if (!row) return null;
 
@@ -1027,7 +1038,7 @@ export function cancelTask(taskId: string): Task {
  * clicking Retry overrides the automatic budget (and since retry_count
  * then exceeds max_retries, the clone won't auto-retry further).
  */
-export function retryTask(taskId: string, retriedBy: string): Task {
+export function retryTask(taskId: string, retriedBy: string, noticeId: string | null = null): Task {
   const db = getDatabase();
 
   const row = db.prepare('SELECT * FROM tasks WHERE id = ?').get(taskId) as TaskRow | undefined;
@@ -1050,14 +1061,14 @@ export function retryTask(taskId: string, retriedBy: string): Task {
   db.prepare(`
     INSERT INTO tasks (id, agent_id, org_id, type, priority, status, payload,
       created_at, ttl, created_by, target_index, batch_id,
-      retry_count, max_retries, original_task_id, notes, notes_history)
+      retry_count, max_retries, original_task_id, notes, notes_history, notice_id)
     VALUES (?, ?, ?, ?, ?, 'pending', ?, datetime('now'), ?, ?, ?, ?,
-      ?, ?, ?, NULL, '[]')
+      ?, ?, ?, NULL, '[]', ?)
   `).run(
     retryId, row.agent_id, row.org_id, row.type,
     row.priority, row.payload, row.ttl, retriedBy,
     row.target_index, row.batch_id,
-    (row.retry_count ?? 0) + 1, row.max_retries ?? 2, originalId,
+    (row.retry_count ?? 0) + 1, row.max_retries ?? 2, originalId, noticeId,
   );
 
   console.log(`[tasks] Manual retry of task ${taskId} by ${retriedBy} → ${retryId}`);
@@ -1138,9 +1149,9 @@ export function expireStaleTasks(): number {
   const insertRetry = db.prepare(`
     INSERT INTO tasks (id, agent_id, org_id, type, priority, status, payload,
       created_at, ttl, created_by, target_index, batch_id,
-      retry_count, max_retries, original_task_id, notes, notes_history)
+      retry_count, max_retries, original_task_id, notes, notes_history, notice_id)
     VALUES (?, ?, ?, ?, ?, 'pending', ?, datetime('now'), ?, ?, ?, ?,
-      ?, ?, ?, NULL, '[]')
+      ?, ?, ?, NULL, '[]', ?)
   `);
 
   // Re-fetch the agent's current heartbeat per task to decide whether to
@@ -1189,7 +1200,7 @@ export function expireStaleTasks(): number {
           retryId, task.agent_id, task.org_id, task.type,
           task.priority, task.payload, task.ttl, task.created_by,
           task.target_index, task.batch_id,
-          retryCount + 1, maxRetries, originalId,
+          retryCount + 1, maxRetries, originalId, task.notice_id ?? null,
         );
         console.log(`[tasks] Created retry ${retryCount + 1}/${maxRetries} for task ${task.id} → ${retryId}`);
       } else if (canRetry) {
@@ -1254,9 +1265,9 @@ export function expireOverdueTasks(): number {
   const insertRetry = db.prepare(`
     INSERT INTO tasks (id, agent_id, org_id, type, priority, status, payload,
       created_at, ttl, created_by, target_index, batch_id,
-      retry_count, max_retries, original_task_id, notes, notes_history)
+      retry_count, max_retries, original_task_id, notes, notes_history, notice_id)
     VALUES (?, ?, ?, ?, ?, 'pending', ?, datetime('now'), ?, ?, ?, ?,
-      ?, ?, ?, NULL, '[]')
+      ?, ?, ?, NULL, '[]', ?)
   `);
 
   db.transaction(() => {
@@ -1282,7 +1293,7 @@ export function expireOverdueTasks(): number {
           retryId, task.agent_id, task.org_id, task.type,
           task.priority, task.payload, task.ttl, task.created_by,
           task.target_index, task.batch_id,
-          retryCount + 1, maxRetries, originalId,
+          retryCount + 1, maxRetries, originalId, task.notice_id ?? null,
         );
         console.log(`[tasks] Created retry ${retryCount + 1}/${maxRetries} for overdue task ${task.id} → ${retryId}`);
       }
