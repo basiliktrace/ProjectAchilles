@@ -3,6 +3,7 @@ import { asyncHandler, AppError } from '../../middleware/error.middleware.js';
 import { getUserId, requirePermission, validateRequestOrgId } from '../../middleware/clerk.middleware.js';
 import {
   createTasks,
+  createTasksBatch,
   createCommandTasks,
   createUpdateTasks,
   createUninstallTasks,
@@ -29,6 +30,7 @@ import { validate } from '../../middleware/validation.js';
 import { UpdateTaskStatusSchema, TaskResultSchema } from '../../schemas/agent.schemas.js';
 import {
   CreateTaskSchema,
+  CreateTaskBatchSchema,
   CreateCommandTaskSchema,
   CreateUpdateTaskSchema,
   CreateUninstallTaskSchema,
@@ -203,6 +205,35 @@ adminTasksRouter.post(
     const taskIds = runWithNotice(
       { type: 'run_now', createdBy: userId },
       (noticeId) => createTasks(taskRequest, org_id, userId, { noticeId }),
+    );
+
+    res.status(201).json({ success: true, data: { task_ids: taskIds } });
+  })
+);
+
+/**
+ * POST /admin/tasks/batch
+ * Run several tests at once: every request's tasks are created under ONE
+ * pre-execution notice (one email), all-or-nothing like a single Run Now.
+ * Body: { org_id, requests: CreateTaskRequest[] } (1..50 requests)
+ * Returns: { task_ids: string[][] } in request order.
+ */
+adminTasksRouter.post(
+  '/tasks/batch',
+  requirePermission('endpoints:tasks:create'),
+  validate(CreateTaskBatchSchema),
+  asyncHandler(async (req, res) => {
+    const userId = getUserId(req.auth);
+    if (!userId) {
+      throw new AppError('Unable to determine user identity', 401);
+    }
+
+    const { org_id, requests } = req.body as { org_id: string; requests: CreateTaskRequest[] };
+    validateRequestOrgId(org_id, req.auth);
+
+    const taskIds = runWithNotice(
+      { type: 'run_now', createdBy: userId },
+      (noticeId) => createTasksBatch(requests, org_id, userId, { noticeId }),
     );
 
     res.status(201).json({ success: true, data: { task_ids: taskIds } });

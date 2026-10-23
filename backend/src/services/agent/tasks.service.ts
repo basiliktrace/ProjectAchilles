@@ -331,6 +331,21 @@ export function createTasks(
 }
 
 /**
+ * Create the tasks for several test requests as one unit (one "Run" of
+ * several tests). All-or-nothing: if any request throws, nothing is written.
+ * Returns each request's task ids, in request order.
+ */
+export function createTasksBatch(
+  requests: CreateTaskRequest[],
+  orgId: string,
+  createdBy: string,
+  options: CreateTaskOptions = {},
+): string[][] {
+  const db = getDatabase();
+  return db.transaction(() => requests.map((r) => createTasks(r, orgId, createdBy, options)))();
+}
+
+/**
  * Create command tasks for one or more agents. Unlike createTasks, this
  * does not look up a binary — it stores a shell command in the payload.
  */

@@ -373,3 +373,99 @@ describe('dispatch routes with the gate', () => {
     });
   });
 });
+
+describe('POST /api/agent/admin/tasks/batch', () => {
+  const ENABLED = { enabled: true, recipients: ['a@x.com'] };
+  const req = (testUuid: string, agentIds = ['agent-001']) => ({
+    agent_ids: agentIds,
+    test_uuid: testUuid,
+    test_name: `Test ${testUuid}`,
+    binary_name: 'test.exe',
+  });
+  const counts = () => ({
+    notices: (testDb.prepare('SELECT COUNT(*) AS c FROM run_notices').get() as { c: number }).c,
+    tasks: (testDb.prepare('SELECT COUNT(*) AS c FROM tasks').get() as { c: number }).c,
+  });
+
+  beforeEach(() => {
+    insertTestAgent(testDb, { id: 'agent-001' });
+    insertTestAgent(testDb, { id: 'agent-002' });
+    writeBuild('uuid-a');
+    writeBuild('uuid-b');
+  });
+
+  it('runs every request under one notice and returns task ids in request order', async () => {
+    writeSettings({ notices: ENABLED });
+    const res = await request(app())
+      .post('/api/agent/admin/tasks/batch')
+      .send({ org_id: 'org-001', requests: [req('uuid-a', ['agent-001', 'agent-002']), req('uuid-b')] });
+    expect(res.status).toBe(201);
+    const ids: string[][] = res.body.data.task_ids;
+    expect(ids.map((x) => x.length)).toEqual([2, 1]);
+
+    const ns = testDb.prepare('SELECT id, source_type FROM run_notices').all() as Array<{ id: string; source_type: string }>;
+    expect(ns).toEqual([{ id: expect.any(String), source_type: 'run_now' }]);
+    const rows = testDb.prepare('SELECT id, notice_id, payload FROM tasks').all() as Array<{ id: string; notice_id: string; payload: string }>;
+    expect(rows).toHaveLength(3);
+    expect(rows.every((r) => r.notice_id === ns[0].id)).toBe(true);
+    const uuidOf = (id: string) => JSON.parse(rows.find((r) => r.id === id)!.payload).test_uuid;
+    expect(ids[0].map(uuidOf)).toEqual(['uuid-a', 'uuid-a']);
+    expect(ids[1].map(uuidOf)).toEqual(['uuid-b']);
+
+    await vi.waitFor(() => expect(mockSendMail).toHaveBeenCalledTimes(1));
+    const html = mockSendMail.mock.calls[0][1].html as string;
+    expect(html).toContain('Test uuid-a');
+    expect(html).toContain('Test uuid-b');
+  });
+
+  it('one failing request rolls back the whole batch: no notice, no tasks', async () => {
+    writeSettings({ notices: ENABLED });
+    const res = await request(app())
+      .post('/api/agent/admin/tasks/batch')
+      .send({ org_id: 'org-001', requests: [req('uuid-a'), req('uuid-missing')] });
+    expect(res.status).toBe(404);
+    expect(counts()).toEqual({ notices: 0, tasks: 0 });
+    await new Promise((r) => setTimeout(r, 0));
+    expect(mockSendMail).not.toHaveBeenCalled();
+  });
+
+  it('with the gate disabled, a failing request still rolls back the batch', async () => {
+    writeSettings({ notices: { ...ENABLED, enabled: false } });
+    const res = await request(app())
+      .post('/api/agent/admin/tasks/batch')
+      .send({ org_id: 'org-001', requests: [req('uuid-a'), req('uuid-missing')] });
+    expect(res.status).toBe(404);
+    expect(counts()).toEqual({ notices: 0, tasks: 0 });
+  });
+
+  it('with the gate disabled, creates tasks without a notice', async () => {
+    writeSettings({ notices: { ...ENABLED, enabled: false } });
+    const res = await request(app())
+      .post('/api/agent/admin/tasks/batch')
+      .send({ org_id: 'org-001', requests: [req('uuid-a'), req('uuid-b')] });
+    expect(res.status).toBe(201);
+    expect(counts()).toEqual({ notices: 0, tasks: 2 });
+  });
+
+  it('validates 1..50 requests', async () => {
+    const empty = await request(app()).post('/api/agent/admin/tasks/batch').send({ org_id: 'org-001', requests: [] });
+    expect(empty.status).toBe(400);
+    const tooMany = await request(app())
+      .post('/api/agent/admin/tasks/batch')
+      .send({ org_id: 'org-001', requests: Array.from({ length: 51 }, () => req('uuid-a')) });
+    expect(tooMany.status).toBe(400);
+    const bad = await request(app())
+      .post('/api/agent/admin/tasks/batch')
+      .send({ org_id: 'org-001', requests: [{ agent_ids: [], test_uuid: 'uuid-a' }] });
+    expect(bad.status).toBe(400);
+    expect(counts()).toEqual({ notices: 0, tasks: 0 });
+  });
+
+  it('requires endpoints:tasks:create', async () => {
+    deniedPermissions.add('endpoints:tasks:create');
+    const res = await request(app())
+      .post('/api/agent/admin/tasks/batch')
+      .send({ org_id: 'org-001', requests: [req('uuid-a')] });
+    expect(res.status).toBe(403);
+  });
+});
