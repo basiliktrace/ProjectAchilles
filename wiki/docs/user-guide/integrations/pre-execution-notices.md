@@ -1,0 +1,98 @@
+---
+sidebar_position: 5
+title: "Pre-execution Notices"
+description: "Email your security engineers before every test run, and hold the tests until the mail server has accepted the notice."
+---
+
+# Pre-execution Notices
+
+Pre-execution notices tell your security engineers, by email, that ProjectAchilles is about to run security tests. They can then tell the SOC "that's us" instead of triaging simulated attacks as real ones.
+
+When the feature is on, tests **wait** until the mail server has accepted the notice for every recipient. Then they wait a short lead time (0 to 5 minutes) before they start.
+
+The feature is **off by default**. With it off, nothing about task creation, pickup or expiry changes.
+
+:::note
+Pre-execution notices work on Docker Compose, Render, Fly.io, Railway and server installs. They are **not available on Vercel** (the serverless backend), and the settings card is hidden there.
+:::
+
+## Turn it on
+
+1. Set up SMTP first. Go to **Settings → Integrations → Alerting → Email** and save a working SMTP host, credentials and from-address. Notices reuse this configuration.
+2. Open **Settings → Integrations → Pre-execution notices**.
+3. Enter the recipients (comma or newline separated, up to 50). This list is separate from the alert recipients, because the audience is different. Use plain addresses such as `secops@example.com`, not `Name <address>`.
+4. Tick **Enable pre-execution notices** and save. You can only enable it when SMTP is configured and there is at least one recipient.
+5. Click **Send test notice** to send a sample email. The card shows which addresses the mail server accepted and which it rejected.
+
+The settings apply to the whole deployment, not to one organization.
+
+## Settings
+
+| Setting | Default | Range | What it does |
+|---------|---------|-------|--------------|
+| **Lead time** | 5 minutes | 0 to 5 | Delay between the mail server accepting the notice and tests starting. The countdown starts at acceptance, so the engineers always get the full lead time. |
+| **Max wait for delivery** | 60 minutes | 15 to 1440 | How long a run may wait for the notice to be accepted. After that the run is marked **Not run**. |
+| **Pickup window** | 120 minutes | 30 to 1440 | How long, after the tests are released, hosts may still pick them up. |
+| **Send finished email** | On | on/off | Sends a second email when the run is over. |
+
+## What triggers a notice
+
+Every test run is covered: **Run Now**, a **manual retry**, and every **schedule**. Only test runs are covered. Agent updates, uninstalls and shell commands never wait for a notice.
+
+- **Run Now and manual retry:** one notice per click. A manual retry sends a new notice, because a person decided to run it again.
+- **Fleet and fixed-time schedules:** all schedules that come due in the same minute share one notice that lists every test and host.
+- **Per-machine (randomized) schedules:** one notice **per schedule per day**, in the schedule's timezone. It covers the day's randomization window (for example 09:00 to 17:00), and each machine runs at its own random time inside it. Machines that come due later the same day join the notice that was already sent, so they do not wait again.
+- **Automatic retries** (after an agent drops or a task times out) belong to the same announced run. They do not send another email.
+
+## What the email contains
+
+The subject looks like `[ProjectAchilles] Security testing starts 2026-10-23 09:05 UTC (09:05 UTC) — 3 tests on 12 hosts`.
+
+The body has:
+
+- A **run tag** such as `PA-RUN-7f3c9a`, with a line telling the SOC to search for it in their tools.
+- The earliest start time, in the schedule's timezone and in UTC, and the time after which nothing new starts. Per-machine notices show the day's window instead.
+- Who or what triggered the run: a user for Run Now, or the schedule name.
+- For each test: name, severity, category, and the MITRE ATT&CK techniques and tactics.
+- The hosts: hostname, operating system, and whether each is online. Offline hosts run only if they reconnect before the window ends. Past 50 hosts, the first 50 are listed and the full list is attached as a CSV file.
+- An EDR section for the integrations you have configured (Microsoft Defender, CrowdStrike Falcon). It says which alerts to expect and whether auto-resolve is on, in dry-run, or off. With neither configured, it lists techniques and hosts in vendor-neutral wording.
+- A link to the Tasks page.
+
+A calendar file (`.ics`) is attached so the window shows up in the engineers' calendars.
+
+The **finished email** is sent once the window is over and every task has ended. It repeats the run tag, shows the actual start and finish, and counts outcomes: protected, unprotected, error and not run. It also updates the calendar entry to end at the real finish time. If it cannot be sent, nothing is held back by that.
+
+## What the Tasks page shows
+
+| Badge | Meaning |
+|-------|---------|
+| **Waiting for notice** | The notice has not been accepted yet. Hover to see the last SMTP error. |
+| **Starting soon** | The notice was accepted and the lead time is counting down. |
+| **Not run** | The task was never executed. Hover for the reason. |
+
+A task that is held is still in the `pending` state. The agents are unchanged: the server simply does not hand the task out until it is allowed to start.
+
+## Not run: the two reasons
+
+A task that does not run is marked **Expired** with one of these reasons. It is never sent to Elasticsearch, so it does not affect the Defense Score.
+
+- **Not run: notice not delivered.** The mail server did not accept the notice for every recipient within the max wait. A partial rejection counts as a failure: the whole list is retried every minute until it succeeds or time runs out.
+- **Not run: host offline during notice window.** The host did not pick up the task before the window ended. Automatic retries share the original window, so a retry created after it also expires.
+
+## When delivery fails
+
+A stuck notice must never go unnoticed, because an old Defense Score can look healthy while testing has stopped.
+
+- A **banner** appears at the top of the app when a notice has been pending for more than 5 minutes, or when any notice was not delivered in the last 7 days. You can dismiss it for the current session. It points back to the Settings card.
+- The Settings card shows the result of the **daily SMTP check**, which catches an expired mail password before it blocks a real run.
+- If Slack is configured under Alerting, one message is posted the first time a notice fails to send, and one when it becomes undelivered.
+
+## Release a notice without sending it
+
+An administrator can release a pending notice without email delivery, with a required written reason. The tasks start immediately, with no lead time. The notice records who did it, when and why, so it stays on the audit trail.
+
+This is available through the API (`POST /api/notices/:id/release`). See the [API reference](../../api-reference/alerting#pre-execution-notices). It needs the permission that creates tasks.
+
+## Audit record
+
+Every notice is stored with its recipients, which addresses were accepted or rejected, the number of attempts, the last error, the send and release times, and any override. Notices are kept for audit and to prevent duplicate emails after a restart.
