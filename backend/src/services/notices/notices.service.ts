@@ -22,6 +22,8 @@ import { MAX_INLINE_HOSTS, buildFinishedEmail, buildHostsCsv, buildNoticeEmail, 
 import type { FinishedEmailData, NoticeEmailData } from './render.js';
 import { computeDayRelease, computeRunRelease, runTag } from './window.js';
 import * as repo from './notices.repo.js';
+import { resolveUserLabel } from './userLabel.js';
+import { getTestMetadata } from '../agent/test-catalog.service.js';
 import type { NoticeRow, NoticeScope, NoticeSourceType } from './types.js';
 import type { TaskPayload, TaskResult, TaskStatus } from '../../types/agent.js';
 import type { PreExecutionNoticeSettings } from '../../types/integrations.js';
@@ -381,12 +383,13 @@ export function createSchedulerTick(now: Date): SchedulerTick {
 // Send pass
 // ---------------------------------------------------------------------------
 
-function triggerText(n: NoticeRow): string {
+/** `user` is the display label for `n.created_by` (see resolveUserLabel). */
+function triggerText(n: NoticeRow, user: string = n.created_by): string {
   switch (n.source_type) {
     case 'run_now':
-      return `Run Now by ${n.created_by}`;
+      return `Run Now by ${user}`;
     case 'manual_retry':
-      return `Manual retry by ${n.created_by}`;
+      return `Manual retry by ${user}`;
     case 'schedule': {
       const ids = parseJsonArray(n.schedule_ids);
       if (ids.length === 0 && n.schedule_id) ids.push(n.schedule_id);
@@ -394,8 +397,23 @@ function triggerText(n: NoticeRow): string {
       return ids.map((id) => `Schedule "${names.get(id) ?? id}"`).join(', ');
     }
     default:
-      return n.created_by;
+      return user;
   }
+}
+
+/**
+ * The Stages cell: the library's stage count (a single-binary test is 1),
+ * a bundle's control count from its last completed run, "bundle" before it
+ * has run, or a dash when the test is no longer in the library.
+ */
+function stagesText(testUuid: string, orgId: string | null): string {
+  const meta = getTestMetadata(testUuid);
+  if (!meta) return '—';
+  if (meta.category === 'cyber-hygiene') {
+    const controls = repo.getLastBundleControlCount(testUuid, orgId);
+    return controls ? `${controls} controls` : 'bundle';
+  }
+  return String(meta.stages?.length || 1);
 }
 
 function parsePayload(s: string): TaskPayload | null {
@@ -436,6 +454,7 @@ function buildNoticeMail(
   linked: repo.LinkedTaskRow[],
   recipients: string[],
   now: Date,
+  userLabel: string,
 ): OutgoingMail {
   const svc = noticeSettings(n);
   const settings = svc.getPreExecutionNoticeSettings();
@@ -451,8 +470,8 @@ function buildNoticeMail(
     if (tests.has(key)) continue;
     tests.set(key, {
       name: p.test_name || key,
-      severity: p.metadata?.severity ?? '',
-      category: p.metadata?.category ?? '',
+      uuid: p.test_uuid ?? '',
+      stages: p.test_uuid ? stagesText(p.test_uuid, n.org_id) : '—',
       techniques: p.metadata?.techniques ?? [],
       tactics: p.metadata?.tactics ?? [],
     });
@@ -493,7 +512,7 @@ function buildNoticeMail(
     edr.push({ vendor: 'CrowdStrike Falcon', autoResolve: svc.getCrowdStrikeAutoResolveMode() });
   }
 
-  const trigger = triggerText(n);
+  const trigger = triggerText(n, userLabel);
   const data: NoticeEmailData = {
     kind: n.kind,
     runTag: tag,
@@ -595,7 +614,8 @@ export async function sendNotice(id: string, now?: Date): Promise<SendOutcome> {
 
     // The email is rendered before sending, from the attempt start: it
     // announces "not before start + lead".
-    const mail = buildNoticeMail(n, linked, recipients, start);
+    const userLabel = await resolveUserLabel(n.created_by);
+    const mail = buildNoticeMail(n, linked, recipients, start, userLabel);
     const result = await sendMail(email, mail);
     accepted = result.accepted;
     rejected = result.rejected;

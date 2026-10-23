@@ -56,9 +56,9 @@ The body has:
 
 - A **run tag** such as `PA-RUN-7f3c9a`, with a line telling the SOC to search for it in their tools.
 - The earliest start time, in the schedule's timezone and in UTC, and the time after which nothing new starts. Per-machine notices show the day's window instead.
-- Who or what triggered the run: a user for Run Now, or the schedule name.
-- For each test: name, severity, category, and the MITRE ATT&CK techniques and tactics.
-- The hosts: hostname, operating system, and whether each is online. Offline hosts run only if they reconnect before the window ends. Past 50 hosts, the first 50 are listed and the full list is attached as a CSV file.
+- Who or what triggered the run: the user's name and email for Run Now or a manual retry, or the schedule name. The name is looked up when the email is sent. If the lookup fails, the email shows the user ID instead.
+- A table of tests: each test's name with its UUID underneath, its number of **stages**, and its MITRE ATT&CK techniques and tactics. A single-binary test counts as 1 stage. A cyber-hygiene bundle shows its number of **controls**, taken from its most recent completed run on your deployment. Before a bundle has run once, it shows `bundle`. A test no longer in the library shows `—`.
+- A table of hosts: hostname, operating system, and whether each is online. Offline hosts run only if they reconnect before the window ends. Past 50 hosts, the first 50 are listed and the full list is attached as a CSV file.
 - An EDR section for the integrations you have configured (Microsoft Defender, CrowdStrike Falcon). It says which alerts to expect and whether auto-resolve is on, in dry-run, or off. With neither configured, it lists techniques and hosts in vendor-neutral wording.
 - A link to the Tasks page.
 

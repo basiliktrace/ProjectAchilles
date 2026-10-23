@@ -12,9 +12,16 @@ vi.mock('../../agent/database.js', async (importOriginal) => {
   return { ...actual, getDatabase: () => testDb };
 });
 
-vi.mock('../../agent/test-catalog.service.js', () => ({
-  getTestMetadata: () => null,
+const { mockGetTestMetadata, mockGetUser } = vi.hoisted(() => ({
+  mockGetTestMetadata: vi.fn((_uuid: string): unknown => null),
+  mockGetUser: vi.fn(),
 }));
+
+vi.mock('../../agent/test-catalog.service.js', () => ({
+  getTestMetadata: mockGetTestMetadata,
+}));
+
+vi.mock('@clerk/express', () => ({ clerkClient: { users: { getUser: mockGetUser } } }));
 
 // Settings are read from a real integrations.json under a temp HOME.
 vi.mock('os', async () => {
@@ -364,6 +371,9 @@ describe('pre-execution notice creation and send pass', () => {
       const a = sendNotice('n1', NOW);
       const takeover = at(6 * MIN);
       const b = sendNotice('n1', takeover);
+      // Both claims are taken synchronously; the sends follow the user lookup.
+      expect(notice('n1').claim_at).toBe(takeover.toISOString());
+      await flush();
       expect(mockSendMail).toHaveBeenCalledTimes(2);
       expect(notice('n1').claim_at).toBe(takeover.toISOString());
 
@@ -398,6 +408,7 @@ describe('pre-execution notice creation and send pass', () => {
       const a = sendNotice('n1', NOW);
       const takeover = at(6 * MIN);
       void sendNotice('n1', takeover);
+      await flush();
       acceptA({ accepted: [...RECIPIENTS], rejected: [] });
       expect(await a).toBe('not_claimed');
       expect(notice('n1')).toMatchObject({ state: 'pending', sent_at: null, claim_at: takeover.toISOString() });
@@ -495,6 +506,76 @@ describe('pre-execution notice creation and send pass', () => {
       await sendNotice('n1', NOW);
       const html = mockSendMail.mock.calls[0][1].html as string;
       expect(html).toContain('Schedule &quot;Nightly&quot;, Schedule &quot;s2&quot;');
+    });
+
+    it('Run Now trigger shows the Clerk user name and email, not the raw id', async () => {
+      mockGetUser.mockResolvedValueOnce({
+        firstName: 'Jane', lastName: 'Doe', primaryEmailAddressId: 'e1',
+        emailAddresses: [{ id: 'e1', emailAddress: 'jane@x.io' }],
+      });
+      insertPendingNotice('n1', { created_by: 'user_39ywWnG' });
+      linkTask('t1', 'n1');
+      await sendNotice('n1', NOW);
+      const mail = mockSendMail.mock.calls[0][1];
+      expect(mail.html).toContain('Run Now by Jane Doe (jane@x.io)');
+      expect(mail.html).not.toContain('user_39ywWnG');
+      expect(mockGetUser).toHaveBeenCalledWith('user_39ywWnG');
+    });
+
+    describe('tests table', () => {
+      afterEach(() => mockGetTestMetadata.mockImplementation(() => null));
+
+      it('shows each test UUID and its stage count from the test library', async () => {
+        mockGetTestMetadata.mockImplementation((u: string) =>
+          u === 'test-uuid-001' ? { category: 'intel-driven', stages: [{}, {}, {}] } : null,
+        );
+        insertPendingNotice('n1');
+        linkTask('t1', 'n1');
+        await sendNotice('n1', NOW);
+        const html = mockSendMail.mock.calls[0][1].html as string;
+        expect(html).toContain('test-uuid-001');
+        expect(html).toMatch(/text-align:center;white-space:nowrap;">3</);
+        expect(html).not.toContain('high /');
+      });
+
+      it('a single-binary test counts as 1 stage; a test missing from the library shows a dash', async () => {
+        mockGetTestMetadata.mockImplementation((u: string) =>
+          u === 'test-uuid-001' ? { category: 'mitre-top10', stages: [] } : null,
+        );
+        insertPendingNotice('n1');
+        linkTask('t1', 'n1');
+        linkTask('t2', 'n1', 'agent-001', { test_uuid: 'gone-uuid', test_name: 'Removed test' });
+        await sendNotice('n1', NOW);
+        const html = mockSendMail.mock.calls[0][1].html as string;
+        expect(html).toMatch(/white-space:nowrap;">1</);
+        expect(html).toMatch(/white-space:nowrap;">—</);
+      });
+
+      it('a bundle shows the control count of its last completed run, or "bundle" before it has run', async () => {
+        mockGetTestMetadata.mockImplementation((u: string) =>
+          u === 'test-uuid-001' ? { category: 'cyber-hygiene', stages: [] } : null,
+        );
+        insertPendingNotice('n1');
+        linkTask('t1', 'n1');
+        await sendNotice('n1', NOW);
+        expect(mockSendMail.mock.calls[0][1].html).toMatch(/white-space:nowrap;">bundle</);
+
+        // Two earlier completed runs: the newer one (52 controls) wins.
+        const done = (id: string, n: number, completedAt: string) => {
+          insertTestTask(testDb, { id, agent_id: 'agent-001', status: 'completed', payload: JSON.stringify({ test_uuid: 'test-uuid-001' }) });
+          testDb.prepare('UPDATE tasks SET result = ?, completed_at = ? WHERE id = ?').run(
+            JSON.stringify({ exit_code: 126, bundle_results: { controls: Array.from({ length: n }, (_, i) => ({ control_id: `C-${i}` })) } }),
+            completedAt, id,
+          );
+        };
+        done('old', 48, '2026-10-01 10:00:00');
+        done('new', 52, '2026-10-20 10:00:00');
+        mockSendMail.mockClear();
+        insertPendingNotice('n2');
+        linkTask('t2', 'n2');
+        await sendNotice('n2', NOW);
+        expect(mockSendMail.mock.calls[0][1].html).toMatch(/white-space:nowrap;">52 controls</);
+      });
     });
 
     it('manual retry trigger text', async () => {
