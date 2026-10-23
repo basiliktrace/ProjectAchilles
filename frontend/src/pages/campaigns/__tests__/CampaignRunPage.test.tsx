@@ -6,13 +6,19 @@ import { MemoryRouter, Route, Routes } from 'react-router-dom';
 const api = vi.hoisted(() => ({ getRun: vi.fn(), exportRunCsv: vi.fn() }));
 vi.mock('@/services/api/campaigns', () => ({ campaignsApi: api }));
 
-import type { RunMatrix, CellState } from '@/services/api/campaigns';
+import type { RunMatrix, CellState, RunNotice } from '@/services/api/campaigns';
 import CampaignRunPage from '../CampaignRunPage';
 
 const cell = (state: CellState, reason: string | null = null) =>
   ({ state, exit_code: null, task_id: 'x', completed_at: null, reason, techniques: [] });
 
-function matrix(states: CellState[], pct: number | null = 50): RunMatrix {
+const SENT_AT = '2026-10-23T09:55:00.000Z';
+const sentNotice: RunNotice = {
+  id: 'n', run_tag: 'PA-RUN-1234', state: 'sent', last_error: null, release_at: null, pickup_deadline: null,
+  sent_at: SENT_AT, recipients: ['a@x.com', 'b@y.com'], override_by: null, override_reason: null, override_at: null,
+};
+
+function matrix(states: CellState[], pct: number | null = 50, notice: RunNotice | null = sentNotice): RunMatrix {
   const agents = states.map((_, i) => ({ id: `a${i}`, hostname: `host${i}`, os: 'windows' }));
   const row: Record<string, ReturnType<typeof cell>> = {};
   states.forEach((s, i) => { row[`a${i}`] = cell(s, s === 'na' || s === 'not_run' ? 'no windows binary' : null); });
@@ -21,7 +27,7 @@ function matrix(states: CellState[], pct: number | null = 50): RunMatrix {
   totals.percent_protected = pct;
   return {
     run: { id: 'r1', campaign_id: 'c1', campaign_name: 'CIS Baseline', framework_label: 'CIS v8', started_by: 'user_abc',
-      started_at: '2026-10-23T10:00:00.000Z', notice: { id: 'n', run_tag: 'RUN-1234', state: 'sent', last_error: null, release_at: null, pickup_deadline: null } },
+      started_by_name: 'Jane Doe', started_at: '2026-10-23T10:00:00.000Z', notice },
     tests: [{ uuid: 't1', name: 'Test One' }], agents, cells: { t1: row }, totals, as_of: '2026-10-23T10:05:00.000Z',
   };
 }
@@ -49,8 +55,9 @@ describe('CampaignRunPage', () => {
     expect(within(table).getByText('Not run').closest('td')).toHaveAttribute('title', 'no windows binary');
     expect(screen.getByText('CIS Baseline')).toBeInTheDocument();
     expect(screen.getByText('CIS v8')).toBeInTheDocument();
-    expect(screen.getByText(/RUN-1234/)).toBeInTheDocument();
-    expect(screen.getByText(/user_abc/)).toBeInTheDocument();
+    expect(screen.getByText(/PA-RUN-1234/)).toBeInTheDocument();
+    expect(screen.getByText('Jane Doe')).toBeInTheDocument();
+    expect(screen.queryByText(/user_abc/)).not.toBeInTheDocument();
     expect(screen.getByText(/As of/)).toBeInTheDocument();
   });
 
@@ -109,5 +116,42 @@ describe('CampaignRunPage', () => {
     expect(api.exportRunCsv).toHaveBeenCalledWith('r1');
     expect(createUrl).toHaveBeenCalled();
     expect(click.mock.instances[0]).toHaveProperty('download', 'campaign-run-r1-20261023T1005Z.csv');
+  });
+  it('notice record: sent shows run tag, local sent time and recipients', async () => {
+    api.getRun.mockResolvedValue(matrix(['protected']));
+    setup();
+    const rec = await screen.findByTestId('notice-record');
+    expect(rec).toHaveTextContent(
+      `Notice PA-RUN-1234 sent ${new Date(SENT_AT).toLocaleString()} to a@x.com, b@y.com`,
+    );
+  });
+
+  it('notice record: overridden shows who released it, when and why', async () => {
+    const at = '2026-10-23T09:58:00.000Z';
+    api.getRun.mockResolvedValue(matrix(['protected'], 50, {
+      ...sentNotice, state: 'overridden', sent_at: null, recipients: [],
+      override_by: 'admin@corp.com', override_reason: 'CAB-123 approved', override_at: at,
+    }));
+    setup();
+    const rec = await screen.findByTestId('notice-record');
+    expect(rec).toHaveTextContent(
+      `Notice PA-RUN-1234 released without notice by admin@corp.com at ${new Date(at).toLocaleString()}: CAB-123 approved`,
+    );
+  });
+
+  it('notice record: none says notices were off', async () => {
+    api.getRun.mockResolvedValue(matrix(['protected'], 50, null));
+    setup();
+    expect(await screen.findByTestId('notice-record')).toHaveTextContent('No pre-execution notice (notices off)');
+  });
+
+  it('notice record and started-by name are in the printed area', async () => {
+    api.getRun.mockResolvedValue(matrix(['protected']));
+    const { container } = setup();
+    const rec = await screen.findByTestId('notice-record');
+    const printArea = container.querySelector('.campaign-run-print')!;
+    expect(printArea).toContainElement(rec);
+    expect(printArea).toContainElement(screen.getByText('Jane Doe'));
+    expect(rec.closest('.print\\:hidden')).toBeNull();
   });
 });

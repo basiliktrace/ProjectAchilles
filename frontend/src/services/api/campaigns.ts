@@ -44,6 +44,15 @@ export interface MatrixCell {
   techniques: string[];
 }
 
+/** The run's notice plus its delivery record. */
+export interface RunNotice extends NoticeSummary {
+  sent_at: string | null;
+  recipients: string[];
+  override_by: string | null;
+  override_reason: string | null;
+  override_at: string | null;
+}
+
 export interface RunMatrix {
   run: {
     id: string;
@@ -51,8 +60,10 @@ export interface RunMatrix {
     campaign_name: string;
     framework_label: string | null;
     started_by: string;
+    /** Display name captured at launch (the user id for older runs). */
+    started_by_name: string;
     started_at: string;
-    notice: NoticeSummary | null;
+    notice: RunNotice | null;
   };
   tests: { uuid: string; name: string }[];
   agents: { id: string; hostname: string; os: string }[];
@@ -73,8 +84,26 @@ export interface CampaignRunSummary {
   id: string;
   started_at: string;
   started_by: string;
+  started_by_name: string;
   task_count: number;
   percent_protected: number | null;
+}
+
+/** A run in the org-wide list; the campaign may have been deleted since. */
+export interface AllRunsItem extends CampaignRunSummary {
+  campaign_id: string;
+  campaign_name: string;
+  campaign_deleted: boolean;
+}
+
+export interface Page<T> {
+  items: T[];
+  total: number;
+}
+
+export interface PageParams {
+  limit: number;
+  offset: number;
 }
 
 export interface CampaignRunResult {
@@ -112,8 +141,14 @@ export const campaignsApi = {
     return response.data.data;
   },
 
-  async listRuns(id: string): Promise<CampaignRunSummary[]> {
-    const response = await apiClient.get(`/campaigns/${id}/runs`);
+  async listRuns(id: string, page: PageParams): Promise<Page<CampaignRunSummary>> {
+    const response = await apiClient.get(`/campaigns/${id}/runs`, { params: page });
+    return response.data.data;
+  },
+
+  /** Every run in the caller's org, including runs of deleted campaigns. */
+  async listAllRuns(page: PageParams): Promise<Page<AllRunsItem>> {
+    const response = await apiClient.get('/campaigns/runs', { params: page });
     return response.data.data;
   },
 

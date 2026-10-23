@@ -5,7 +5,7 @@ import { PageContainer, PageHeader } from '@/components/endpoints/Layout';
 import { Button } from '@/components/shared/ui/Button';
 import { Alert } from '@/components/shared/ui/Alert';
 import { Spinner } from '@/components/shared/ui/Spinner';
-import { campaignsApi, type CellState, type RunMatrix } from '@/services/api/campaigns';
+import { campaignsApi, type CellState, type RunMatrix, type RunNotice } from '@/services/api/campaigns';
 
 const POLL_MS = 15_000;
 
@@ -55,6 +55,24 @@ const NOTICE_STATE_LABEL: Record<string, string> = {
   overridden: 'overridden',
   skipped: 'skipped',
 };
+
+/** The notice record as one sentence: sent, released without notice, or none. */
+function noticeRecordText(notice: RunNotice | null): string {
+  if (!notice) return 'No pre-execution notice (notices off)';
+  const tag = `Notice ${notice.run_tag}`;
+  if (notice.state === 'sent') {
+    const when = notice.sent_at ? ` ${new Date(notice.sent_at).toLocaleString()}` : '';
+    const to = notice.recipients.length > 0 ? ` to ${notice.recipients.join(', ')}` : '';
+    return `${tag} sent${when}${to}`;
+  }
+  if (notice.state === 'overridden') {
+    const by = notice.override_by ? ` by ${notice.override_by}` : '';
+    const at = notice.override_at ? ` at ${new Date(notice.override_at).toLocaleString()}` : '';
+    const why = notice.override_reason ? `: ${notice.override_reason}` : '';
+    return `${tag} released without notice${by}${at}${why}`;
+  }
+  return `${tag} · ${NOTICE_STATE_LABEL[notice.state] ?? notice.state}`;
+}
 
 export default function CampaignRunPage() {
   const { runId } = useParams<{ runId: string }>();
@@ -136,13 +154,11 @@ export default function CampaignRunPage() {
         {error && <Alert variant="destructive" className="mb-4">{error}</Alert>}
 
         <dl className="mb-4 grid gap-x-8 gap-y-1 text-sm sm:grid-cols-2">
-          <div><dt className="inline text-muted">Started by </dt><dd className="inline">{run.started_by}</dd></div>
+          <div><dt className="inline text-muted">Started by </dt><dd className="inline">{run.started_by_name || run.started_by}</dd></div>
           <div><dt className="inline text-muted">Started </dt><dd className="inline">{new Date(run.started_at).toLocaleString()}</dd></div>
-          <div>
-            <dt className="inline text-muted">Notice </dt>
-            <dd className="inline">
-              {notice ? `${notice.run_tag} · ${NOTICE_STATE_LABEL[notice.state] ?? notice.state}` : 'none'}
-            </dd>
+          <div className="sm:col-span-2">
+            <dt className="sr-only">Pre-execution notice</dt>
+            <dd data-testid="notice-record">{noticeRecordText(notice)}</dd>
           </div>
           <div><dd className="inline font-medium">{`As of ${new Date(matrix.as_of).toLocaleString()}`}</dd></div>
         </dl>
