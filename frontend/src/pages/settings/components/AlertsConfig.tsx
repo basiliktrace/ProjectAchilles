@@ -3,6 +3,7 @@ import { CheckCircle, Info } from 'lucide-react';
 import { alertsApi } from '@/services/api/alerts';
 import type { AlertHistoryItem } from '@/services/api/alerts';
 import { integrationsApi } from '@/services/api/integrations';
+import { sentinelOneApi } from '@/services/api/sentinelone';
 import { Input } from '@/components/shared/ui/Input';
 import { Button } from '@/components/shared/ui/Button';
 import { Alert } from '@/components/shared/ui/Alert';
@@ -18,6 +19,9 @@ export function AlertsConfig({ onStatusChange }: AlertsConfigProps) {
   const [defenseScoreMin, setDefenseScoreMin] = useState('');
   const [errorRateMax, setErrorRateMax] = useState('');
   const [secureScoreMin, setSecureScoreMin] = useState('');
+  const [s1InfectedMax, setS1InfectedMax] = useState('');
+  const [s1DetectOnlyMax, setS1DetectOnlyMax] = useState('');
+  const [s1OutdatedMax, setS1OutdatedMax] = useState('');
   const [cooldownMinutes, setCooldownMinutes] = useState('');
 
   // Slack
@@ -49,6 +53,7 @@ export function AlertsConfig({ onStatusChange }: AlertsConfigProps) {
   const [error, setError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [defenderConfigured, setDefenderConfigured] = useState(false);
+  const [s1Configured, setS1Configured] = useState(false);
   const [alertHistory, setAlertHistory] = useState<AlertHistoryItem[]>([]);
   const [editMode, setEditMode] = useState(false);
 
@@ -58,13 +63,15 @@ export function AlertsConfig({ onStatusChange }: AlertsConfigProps) {
 
   const loadExistingSettings = async () => {
     try {
-      const [settings, defenderSettings, history] = await Promise.all([
+      const [settings, defenderSettings, history, s1Settings] = await Promise.all([
         alertsApi.getAlertSettings(),
         integrationsApi.getDefenderSettings().catch(() => ({ configured: false })),
         alertsApi.getAlertHistory(),
+        sentinelOneApi.getSettings().catch(() => ({ configured: false })),
       ]);
 
       setDefenderConfigured(defenderSettings.configured);
+      setS1Configured(!!s1Settings?.configured);
       setAlertHistory(history);
 
       if (settings.configured) {
@@ -73,6 +80,9 @@ export function AlertsConfig({ onStatusChange }: AlertsConfigProps) {
         if (settings.thresholds?.defense_score_min != null) setDefenseScoreMin(String(settings.thresholds.defense_score_min));
         if (settings.thresholds?.error_rate_max != null) setErrorRateMax(String(settings.thresholds.error_rate_max));
         if (settings.thresholds?.secure_score_min != null) setSecureScoreMin(String(settings.thresholds.secure_score_min));
+        if (settings.thresholds?.s1_infected_agents_max != null) setS1InfectedMax(String(settings.thresholds.s1_infected_agents_max));
+        if (settings.thresholds?.s1_detect_only_agents_max != null) setS1DetectOnlyMax(String(settings.thresholds.s1_detect_only_agents_max));
+        if (settings.thresholds?.s1_outdated_agents_max != null) setS1OutdatedMax(String(settings.thresholds.s1_outdated_agents_max));
         if (settings.cooldown_minutes != null) setCooldownMinutes(String(settings.cooldown_minutes));
 
         setSlackEnabled(settings.slack?.enabled ?? false);
@@ -107,6 +117,13 @@ export function AlertsConfig({ onStatusChange }: AlertsConfigProps) {
       defense_score_min: numOrUndefined(defenseScoreMin),
       error_rate_max: numOrUndefined(errorRateMax),
       ...(defenderConfigured ? { secure_score_min: numOrUndefined(secureScoreMin) } : {}),
+      ...(s1Configured
+        ? {
+            s1_infected_agents_max: numOrUndefined(s1InfectedMax),
+            s1_detect_only_agents_max: numOrUndefined(s1DetectOnlyMax),
+            s1_outdated_agents_max: numOrUndefined(s1OutdatedMax),
+          }
+        : {}),
     },
     cooldown_minutes: numOrUndefined(cooldownMinutes),
     slack: {
@@ -259,6 +276,21 @@ export function AlertsConfig({ onStatusChange }: AlertsConfigProps) {
             onChange={(e) => setSecureScoreMin(e.target.value)}
             helperText="Alert when Microsoft Secure Score drops below this value"
           />
+        )}
+
+        {s1Configured && (
+          <div className="space-y-3 rounded-lg bg-raised/50 p-4">
+            <p className="text-sm font-medium text-card-foreground">SentinelOne agent health</p>
+            <p className="text-xs text-muted-foreground">
+              Counts from the latest SentinelOne /agents/count snapshot (refreshed every 6 hours). Alert when a count is above
+              the maximum. Leave empty to skip.
+            </p>
+            <div className="grid grid-cols-3 gap-3">
+              <Input label="Infected agents max" type="number" min={0} placeholder="0" value={s1InfectedMax} onChange={(e) => setS1InfectedMax(e.target.value)} />
+              <Input label="Detect-only agents max" type="number" min={0} placeholder="0" value={s1DetectOnlyMax} onChange={(e) => setS1DetectOnlyMax(e.target.value)} />
+              <Input label="Outdated agents max" type="number" min={0} placeholder="10" value={s1OutdatedMax} onChange={(e) => setS1OutdatedMax(e.target.value)} />
+            </div>
+          </div>
         )}
 
         <Input

@@ -34,6 +34,8 @@ import { defenderSyncService } from './api/integrations.routes.js';
 import { crowdstrikeSyncService } from './api/integrations.routes.js';
 import defenderRoutes from './api/defender.routes.js';
 import crowdstrikeRoutes from './api/crowdstrike.routes.js';
+import sentinelOneAnalyticsRoutes from './api/sentinelone-analytics.routes.js';
+import sentinelOneRoutes, { sentinelOneSyncService } from './api/sentinelone.routes.js';
 import riskAcceptanceRoutes from './api/risk-acceptance.routes.js';
 import reportsRoutes from './api/reports.routes.js';
 import cliAuthRoutes from './api/cli-auth.routes.js';
@@ -333,6 +335,9 @@ async function startServer() {
   // User management - RBAC role assignment (admin-only)
   app.use('/api/users', usersRoutes);
 
+  // SentinelOne integration (settings, alert sync, response actions)
+  app.use('/api/integrations/sentinelone', sentinelOneRoutes);
+
   // Integrations - external service credentials (Azure, etc.)
   app.use('/api/integrations', integrationsRoutes);
 
@@ -341,6 +346,9 @@ async function startServer() {
 
   // CrowdStrike analytics - ZTA score, alerts
   app.use('/api/analytics/crowdstrike', crowdstrikeRoutes);
+
+  // SentinelOne analytics - alerts, correlation, technique coverage
+  app.use('/api/analytics/sentinelone', sentinelOneAnalyticsRoutes);
 
   // Risk acceptance - formal risk acceptance for security controls
   app.use('/api/risk-acceptances', riskAcceptanceRoutes);
@@ -491,8 +499,25 @@ function startBackgroundJobs(httpServer?: http.Server) {
     await crowdstrikeSyncService.runAutoResolvePass().catch(logCrowdStrikeError('auto-resolve'));
   }, 5 * 60 * 1000); // 5 minutes
 
+  // --- SentinelOne sync: poll at the integration's configured interval ---
+  // A 1-minute tick checks configuration and whether poll_interval_minutes
+  // has elapsed, so settings changed in the UI apply without a restart.
+  // syncAll() runs the S1 enrichment pass after each poll.
+  const logSentinelOneError = (err: unknown) => {
+    console.warn('⚠ SentinelOne sync failed:', err instanceof Error ? err.message : err);
+  };
+  if (sentinelOneSyncService.isDue()) {
+    console.log('🛡  SentinelOne integration configured — starting background sync');
+    sentinelOneSyncService.syncAll().catch(logSentinelOneError);
+  }
+  const sentinelOneInterval = setInterval(() => {
+    if (!sentinelOneSyncService.isDue()) return;
+    sentinelOneSyncService.syncAll().catch(logSentinelOneError);
+  }, 60_000);
+
   const shutdown = () => {
     clearInterval(schedulerInterval);
+    clearInterval(sentinelOneInterval);
     clearInterval(autoRotationInterval);
     clearInterval(heartbeatPruneInterval);
     clearInterval(offlineDetectionInterval);

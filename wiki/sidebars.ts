@@ -100,6 +100,7 @@ const sidebars: SidebarsConfig = {
             'user-guide/integrations/defender-auto-resolve',
             'user-guide/integrations/crowdstrike',
             'user-guide/integrations/crowdstrike-auto-resolve',
+            'user-guide/integrations/sentinelone',
             'user-guide/integrations/alerting',
           ],
         },

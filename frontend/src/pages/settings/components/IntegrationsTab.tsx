@@ -1,5 +1,6 @@
 import { useState, useCallback, useEffect } from 'react';
-import { Database, Cloud, ShieldCheck, Bird, Bell } from 'lucide-react';
+import { Database, Cloud, ShieldCheck, Bell } from 'lucide-react';
+import { CrowdStrikeLogo, SentinelOneLogo } from '@/components/shared/VendorLogos';
 import { useAnalyticsAuth } from '@/hooks/useAnalyticsAuth';
 import type { IntegrationStatus } from './IntegrationCard';
 import { IntegrationGridCard } from './IntegrationGridCard';
@@ -7,9 +8,11 @@ import { AnalyticsConfig } from './AnalyticsConfig';
 import { AzureConfig } from './AzureConfig';
 import { DefenderConfig } from './DefenderConfig';
 import { CrowdStrikeConfig } from './CrowdStrikeConfig';
+import { SentinelOneConfig } from './SentinelOneConfig';
 import { AlertsConfig } from './AlertsConfig';
 import { integrationsApi } from '@/services/api/integrations';
 import { alertsApi } from '@/services/api/alerts';
+import { sentinelOneApi } from '@/services/api/sentinelone';
 
 export function IntegrationsTab() {
   const { configured: analyticsConfigured } = useAnalyticsAuth();
@@ -21,6 +24,7 @@ export function IntegrationsTab() {
   const [azureStatus, setAzureStatus] = useState<IntegrationStatus>('not-configured');
   const [defenderStatus, setDefenderStatus] = useState<IntegrationStatus>('not-configured');
   const [crowdstrikeStatus, setCrowdStrikeStatus] = useState<IntegrationStatus>('not-configured');
+  const [sentinelOneStatus, setSentinelOneStatus] = useState<IntegrationStatus>('not-configured');
   const [alertsStatus, setAlertsStatus] = useState<IntegrationStatus>('not-configured');
 
   const handleAnalyticsStatusChange = useCallback((configured: boolean) => {
@@ -39,6 +43,10 @@ export function IntegrationsTab() {
     setCrowdStrikeStatus(configured ? 'connected' : 'not-configured');
   }, []);
 
+  const handleSentinelOneStatusChange = useCallback((configured: boolean) => {
+    setSentinelOneStatus(configured ? 'connected' : 'not-configured');
+  }, []);
+
   const handleAlertsStatusChange = useCallback((configured: boolean) => {
     setAlertsStatus(configured ? 'connected' : 'not-configured');
   }, []);
@@ -55,6 +63,10 @@ export function IntegrationsTab() {
 
     integrationsApi.getCrowdStrikeSettings().then((settings) => {
       setCrowdStrikeStatus(settings.configured ? 'connected' : 'not-configured');
+    }).catch(() => {});
+
+    sentinelOneApi.getSettings().then((settings) => {
+      setSentinelOneStatus(settings.configured ? 'connected' : 'not-configured');
     }).catch(() => {});
 
     alertsApi.getAlertSettings().then((settings) => {
@@ -92,12 +104,21 @@ export function IntegrationsTab() {
       </IntegrationGridCard>
 
       <IntegrationGridCard
-        icon={Bird}
+        icon={CrowdStrikeLogo}
         title="CrowdStrike Falcon"
         description="Alerts, posture scores, and detection correlation via CrowdStrike Falcon"
         status={crowdstrikeStatus}
       >
         <CrowdStrikeConfig onStatusChange={handleCrowdStrikeStatusChange} />
+      </IntegrationGridCard>
+
+      <IntegrationGridCard
+        icon={SentinelOneLogo}
+        title="SentinelOne"
+        description="Threats and detection alerts via the SentinelOne API, with optional response actions"
+        status={sentinelOneStatus}
+      >
+        <SentinelOneConfig onStatusChange={handleSentinelOneStatusChange} />
       </IntegrationGridCard>
 
       <IntegrationGridCard

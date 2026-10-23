@@ -1,19 +1,28 @@
-// Per-vendor copy and defaults for the shared integration (CrowdStrike / Defender) tab components.
+// Per-vendor copy and defaults for the shared integration (CrowdStrike / Defender / SentinelOne) tab components.
 
 import { crowdstrikeApi } from '@/services/api/crowdstrike';
 import { defenderApi } from '@/services/api/defender';
+import { sentineloneAnalyticsApi } from '@/services/api/sentineloneAnalytics';
 
 import type { IntegrationApi } from '@/services/api/integrationTypes';
 
 export type { TimeWindow } from '@/services/api/integrationTypes';
 
-export type VendorId = 'crowdstrike' | 'defender';
+export type VendorId = 'crowdstrike' | 'defender' | 'sentinelone';
 
 export interface SeveritySegment {
   key: string;
   label: string;
   /** null = no severity filter. */
   severities: string[] | null;
+}
+
+/** Optional record-type filter (e.g. SentinelOne threats vs detection alerts). */
+export interface AlertTypeSegment {
+  key: string;
+  label: string;
+  /** null = no filter. */
+  sourceType: string | null;
 }
 
 export interface IntegrationVendor {
@@ -24,6 +33,7 @@ export interface IntegrationVendor {
   knownSeverities: string[];
   severitySegments: SeveritySegment[];
   defaultSeverityKey: string;
+  alertTypeSegments?: AlertTypeSegment[];
   api: IntegrationApi;
 }
 
@@ -62,6 +72,29 @@ export const VENDORS: Record<VendorId, IntegrationVendor> = {
       getAlertTrend: defenderApi.getAlertTrend,
       getAlertSummary: defenderApi.getAlertSummary,
       getTechniqueCoverage: defenderApi.getTechniqueCoverage,
+    },
+  },
+  sentinelone: {
+    id: 'sentinelone',
+    alertsTitle: 'SentinelOne Alerts',
+    portalLabel: 'Open in SentinelOne console',
+    responseLabel: 'SentinelOne response',
+    knownSeverities: ['critical', 'high', 'medium', 'low', 'informational'],
+    severitySegments: [
+      { key: 'all', label: 'All severities', severities: null },
+      { key: 'hc', label: 'High & critical', severities: ['critical', 'high'] },
+    ],
+    defaultSeverityKey: 'all',
+    alertTypeSegments: [
+      { key: 'all', label: 'All types', sourceType: null },
+      { key: 'threats', label: 'Threats', sourceType: 'threats' },
+      { key: 'alerts', label: 'Detection alerts', sourceType: 'cloud_detection_alerts' },
+    ],
+    api: {
+      getAlerts: sentineloneAnalyticsApi.getAlerts,
+      getAlertTrend: sentineloneAnalyticsApi.getAlertTrend,
+      getAlertSummary: sentineloneAnalyticsApi.getAlertSummary,
+      getTechniqueCoverage: sentineloneAnalyticsApi.getTechniqueCoverage,
     },
   },
 };

@@ -104,6 +104,10 @@ export interface AlertThresholds {
   defense_score_min?: number;    // Alert if Defense Score < this (e.g., 70)
   error_rate_max?: number;       // Alert if Error Rate > this (e.g., 20)
   secure_score_min?: number;     // Alert if Secure Score < this (e.g., 60)
+  // SentinelOne agent health — alert if the latest /agents/count snapshot exceeds these.
+  s1_infected_agents_max?: number;
+  s1_detect_only_agents_max?: number;
+  s1_outdated_agents_max?: number;
   enabled: boolean;
 }
 
