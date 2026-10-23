@@ -5,7 +5,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import { encrypt as sharedEncrypt, decrypt as sharedDecrypt } from '../shared/encryption.js';
-import type { AzureIntegrationSettings, AzureCredentials, DefenderIntegrationSettings, DefenderCredentials, CrowdStrikeIntegrationSettings, CrowdStrikeCredentials, AlertSettings, IntegrationsSettings, OrgIntegrationSettings } from '../../types/integrations.js';
+import type { AzureIntegrationSettings, AzureCredentials, DefenderIntegrationSettings, DefenderCredentials, CrowdStrikeIntegrationSettings, CrowdStrikeCredentials, AlertSettings, IntegrationsSettings, OrgIntegrationSettings, PreExecutionNoticeSettings } from '../../types/integrations.js';
 import type { AutoResolveMode } from '../../types/defender.js';
 import type { CrowdStrikeRegion, CrowdStrikeZtaStatus } from '../../types/crowdstrike.js';
 import { CROWDSTRIKE_REGION_BASE_URLS, DEFAULT_CROWDSTRIKE_REGION } from '../crowdstrike/falcon-client.js';
@@ -15,6 +15,36 @@ const DEFAULT_AUTO_RESOLVE_MODE: AutoResolveMode = 'disabled';
 
 const SETTINGS_DIR = path.join(os.homedir(), '.projectachilles');
 const SETTINGS_FILE = path.join(SETTINGS_DIR, 'integrations.json');
+
+const NOTICE_DEFAULTS: PreExecutionNoticeSettings = {
+  enabled: false,
+  recipients: [],
+  lead_minutes: 5,
+  max_wait_minutes: 60,
+  pickup_window_minutes: 120,
+  send_finished: true,
+};
+
+function clampInt(value: unknown, min: number, max: number, fallback: number): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return fallback;
+  return Math.min(max, Math.max(min, Math.trunc(value)));
+}
+
+/** Fill defaults and clamp numeric fields of pre-execution notice settings. */
+export function clampNoticeSettings(s: Partial<PreExecutionNoticeSettings>): PreExecutionNoticeSettings {
+  const out: PreExecutionNoticeSettings = {
+    enabled: s.enabled ?? NOTICE_DEFAULTS.enabled,
+    recipients: Array.isArray(s.recipients) ? [...s.recipients] : [],
+    lead_minutes: clampInt(s.lead_minutes, 0, 5, NOTICE_DEFAULTS.lead_minutes),
+    max_wait_minutes: clampInt(s.max_wait_minutes, 15, 1440, NOTICE_DEFAULTS.max_wait_minutes),
+    pickup_window_minutes: clampInt(s.pickup_window_minutes, 30, 1440, NOTICE_DEFAULTS.pickup_window_minutes),
+    send_finished: s.send_finished ?? NOTICE_DEFAULTS.send_finished,
+  };
+  if (s.last_smtp_check_at !== undefined) out.last_smtp_check_at = s.last_smtp_check_at;
+  if (s.last_smtp_check_ok !== undefined) out.last_smtp_check_ok = s.last_smtp_check_ok;
+  if (s.last_smtp_check_message !== undefined) out.last_smtp_check_message = s.last_smtp_check_message;
+  return out;
+}
 
 export class IntegrationsSettingsService {
   /**
@@ -988,6 +1018,25 @@ export class IntegrationsSettingsService {
     }
 
     fs.writeFileSync(SETTINGS_FILE, JSON.stringify(raw, null, 2), { mode: 0o600 });
+  }
+
+  // ---------------------------------------------------------------------------
+  // Pre-execution notices (deployment-wide: always the legacy top level)
+  // ---------------------------------------------------------------------------
+
+  /** Always returns a full settings object (defaults filled, numbers clamped). */
+  getPreExecutionNoticeSettings(): PreExecutionNoticeSettings {
+    return clampNoticeSettings(this.getFileSettings()?.pre_execution_notices ?? {});
+  }
+
+  /** Merge a patch into the stored settings, clamp, and persist at the top level regardless of orgId. */
+  savePreExecutionNoticeSettings(patch: Partial<PreExecutionNoticeSettings>): PreExecutionNoticeSettings {
+    this.ensureSettingsDir();
+    const merged = clampNoticeSettings({ ...this.getPreExecutionNoticeSettings(), ...patch });
+    const raw = this.getRawFileSettings() ?? {};
+    raw.pre_execution_notices = merged;
+    fs.writeFileSync(SETTINGS_FILE, JSON.stringify(raw, null, 2), { mode: 0o600 });
+    return merged;
   }
 
   /** Check if alerting is configured: thresholds enabled + at least one channel configured & enabled. */

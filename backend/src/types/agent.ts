@@ -1,3 +1,4 @@
+import type { NoticeSummary } from '../services/notices/types.js';
 /**
  * TypeScript type definitions for the custom agent management system.
  * Replaces LimaCharlie with a self-hosted agent infrastructure.
@@ -231,6 +232,8 @@ export interface Task {
   /** Attempts made by route + retry worker; capped at MAX_INGEST_ATTEMPTS */
   ingest_attempts: number;
   last_ingest_attempt_at: string | null;
+  /** Pre-execution notice gating this task; null for ungated (legacy) tasks */
+  notice_id: string | null;
 }
 
 export interface TaskGroup {
@@ -242,6 +245,7 @@ export interface TaskGroup {
   agent_count: number;
   status_counts: Partial<Record<TaskStatus, number>>;
   tasks: Task[];
+  notices?: Record<string, NoticeSummary>;
 }
 
 export interface TaskResult {

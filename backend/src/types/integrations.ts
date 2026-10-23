@@ -156,11 +156,28 @@ export interface OrgIntegrationSettings {
  * Legacy keys are kept for backward compat — they act as the fallback when no
  * org-specific settings exist.
  */
+/** Deployment-wide pre-execution notice settings (legacy top level of integrations.json). */
+export interface PreExecutionNoticeSettings {
+  enabled: boolean;
+  recipients: string[];
+  /** Minutes between notice acceptance and task release (int 0-5). */
+  lead_minutes: number;
+  /** Max minutes a task is held waiting for delivery (15-1440). */
+  max_wait_minutes: number;
+  /** Minutes after release that hosts have to pick up tasks (30-1440). */
+  pickup_window_minutes: number;
+  send_finished: boolean;
+  last_smtp_check_at?: string;
+  last_smtp_check_ok?: boolean;
+  last_smtp_check_message?: string;
+}
+
 export interface IntegrationsSettings {
   azure?: AzureIntegrationSettings;
   defender?: DefenderIntegrationSettings;
   crowdstrike?: CrowdStrikeIntegrationSettings;
   alerts?: AlertSettings;
+  pre_execution_notices?: PreExecutionNoticeSettings;
   /** Per-org overrides. Key is the Clerk org_id. */
   orgs?: Record<string, OrgIntegrationSettings>;
 }
