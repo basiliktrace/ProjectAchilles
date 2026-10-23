@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterAll, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vitest';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -22,7 +22,20 @@ vi.mock('os', async () => {
   return { ...actual, ...overrides, default: { ...actual, ...overrides } };
 });
 
+const { mockSendMail, mockTestEmailConnection } = vi.hoisted(() => ({
+  mockSendMail: vi.fn(),
+  mockTestEmailConnection: vi.fn(),
+}));
+
+// Only the late-run tests (R23) send notices; nothing else here emails.
+vi.mock('../../alerts/email.service.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../alerts/email.service.js')>();
+  return { ...actual, sendMail: mockSendMail, testEmailConnection: mockTestEmailConnection };
+});
+
 const { processSchedules } = await import('../schedules.service.js');
+const { processNotices, LATE_LINK_MIN_PICKUP_MS } = await import('../../notices/notices.service.js');
+const { getNextTask, resetExpireThrottle } = await import('../tasks.service.js');
 
 const HOME = os.homedir();
 const SETTINGS_DIR = path.join(HOME, '.projectachilles');
@@ -254,5 +267,335 @@ describe('processSchedules with pre-execution notices', () => {
 
     expect(tasksOf()).toHaveLength(2);
     expect(notices()).toHaveLength(1);
+  });
+});
+
+describe('processSchedules: late per_machine runs and a closed day notice (R23)', () => {
+  // Friday 2026-10-23, UTC: the weekday day window is 09:00-17:00.
+  const T = (hhmmss: string) => new Date(`2026-10-23T${hhmmss}.000Z`);
+  const DAY_DEADLINE = T('17:00:00');
+
+  function insertDayNotice(
+    id: string,
+    scheduleId: string,
+    state: 'pending' | 'sent' | 'overridden',
+    win: { date: string; start: Date; end: Date } = { date: '2026-10-23', start: T('09:00:00'), end: DAY_DEADLINE },
+  ) {
+    const released = state !== 'pending';
+    const plus = (d: Date, ms: number) => new Date(d.getTime() + ms).toISOString();
+    testDb
+      .prepare(`
+        INSERT INTO run_notices (id, kind, state, source_type, schedule_ids, schedule_id, window_date, timezone,
+          announced_agent_ids, day_window_start, day_window_end, created_by, created_at, recipients,
+          sent_at, release_at, pickup_deadline, window_end, org_id)
+        VALUES (?, 'day', ?, 'schedule', ?, ?, ?, 'UTC', '[]', ?, ?, 'creator', ?, '["a@x.com"]',
+          ?, ?, ?, ?, 'org-001')
+      `)
+      .run(
+        id,
+        state,
+        JSON.stringify([scheduleId]),
+        scheduleId,
+        win.date,
+        win.start.toISOString(),
+        win.end.toISOString(),
+        plus(win.start, MIN),
+        released ? plus(win.start, 5 * MIN) : null,
+        released ? plus(win.start, 10 * MIN) : null,
+        // The usual case: accepted early, so the deadline is the window end.
+        released ? win.end.toISOString() : null,
+        released ? plus(win.end, 5 * MIN) : null,
+      );
+  }
+
+  function perMachine(id: string, due: Record<string, Date>) {
+    const runs = Object.fromEntries(Object.entries(due).map(([a, d]) => [a, d.toISOString()]));
+    const min = Object.values(due).reduce((m, d) => (d < m ? d : m));
+    insertSchedule(id, Object.keys(due), {
+      nextRunAt: min,
+      config: { time: '12:00', randomize_mode: 'per_machine' },
+      agentNextRuns: runs,
+    });
+  }
+
+  const noticeById = (id: string) => testDb.prepare('SELECT * FROM run_notices WHERE id = ?').get(id) as Record<string, any>;
+  const taskStatus = (id: string) => (testDb.prepare('SELECT status FROM tasks WHERE id = ?').get(id) as { status: string }).status;
+
+  async function tick(at: Date) {
+    vi.setSystemTime(at);
+    resetExpireThrottle();
+    return processNotices(at);
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockSendMail.mockResolvedValue({ accepted: ['a@x.com'], rejected: [] });
+    mockTestEmailConnection.mockResolvedValue({ success: true, message: 'ok' });
+    vi.useFakeTimers({ toFake: ['Date'] });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('late slot: a run due 5 min before the day deadline gets its own run notice and is served after it is sent', async () => {
+    insertDayNotice('day-1', 'pm', 'sent');
+    perMachine('pm', { 'agent-1': T('16:55:00') });
+    const now = T('16:55:30');
+    vi.setSystemTime(now);
+
+    expect(processSchedules(now).errors).toEqual([]);
+
+    const [t] = tasksOf();
+    expect(t.agent_id).toBe('agent-1');
+    expect(t.notice_id).not.toBe('day-1');
+    const run = noticeById(t.notice_id!);
+    expect(run).toMatchObject({ kind: 'run', state: 'pending', source_type: 'schedule', org_id: 'org-001' });
+    expect(JSON.parse(run.schedule_ids)).toEqual(['pm']);
+    expect(noticeById('day-1').pickup_deadline).toBe(DAY_DEADLINE.toISOString()); // never extended
+
+    const r = await tick(now);
+    expect(r.sent).toBe(1);
+    expect(mockSendMail).toHaveBeenCalledTimes(1);
+    expect(mockSendMail.mock.calls[0][1].html).toContain('Schedule &quot;Sched pm&quot;');
+    const sent = noticeById(t.notice_id!);
+    expect(sent.state).toBe('sent');
+    // Normal run window from its own acceptance: lead 5 + pickup 120.
+    expect(sent.release_at).toBe(T('17:00:30').toISOString());
+    expect(sent.pickup_deadline).toBe(T('19:00:30').toISOString());
+
+    expect(getNextTask('agent-1', new Date(Date.parse(sent.release_at) - 1000))).toBeNull(); // still held
+    await tick(T('17:01:00')); // the day notice's deadline has passed
+    expect(taskStatus(t.id)).toBe('pending');
+    expect(getNextTask('agent-1', new Date(sent.release_at))?.id).toBe(t.id);
+  });
+
+  it('catch-up after a restart: missed runs of closed day notices share one run notice and outlive the day deadline', async () => {
+    insertDayNotice('day-pm', 'pm', 'sent');
+    insertDayNotice('day-pm2', 'pm2', 'overridden');
+    perMachine('pm', { 'agent-1': T('15:00:00'), 'agent-2': T('15:45:00') });
+    perMachine('pm2', { 'agent-3': T('16:30:00') });
+    const now = T('17:05:00');
+    vi.setSystemTime(now);
+
+    expect(processSchedules(now).errors).toEqual([]);
+
+    const ts = tasksOf();
+    expect(ts.map((t) => t.agent_id)).toEqual(['agent-1', 'agent-2', 'agent-3']);
+    const ids = new Set(ts.map((t) => t.notice_id));
+    expect(ids.size).toBe(1);
+    const runId = [...ids][0]!;
+    expect(['day-pm', 'day-pm2']).not.toContain(runId);
+    const run = noticeById(runId);
+    expect(run.kind).toBe('run');
+    expect(JSON.parse(run.schedule_ids).sort()).toEqual(['pm', 'pm2']);
+
+    expect((await tick(now)).sent).toBe(1);
+    const sent = noticeById(runId);
+    expect(sent.pickup_deadline).toBe(T('19:10:00').toISOString());
+
+    // Nothing expires before the run notice's own deadline...
+    await tick(T('17:06:00'));
+    await tick(T('19:09:00'));
+    expect(ts.map((t) => taskStatus(t.id))).toEqual(['pending', 'pending', 'pending']);
+    // ...and the day notices were never extended.
+    expect(noticeById('day-pm').pickup_deadline).toBe(DAY_DEADLINE.toISOString());
+    expect(noticeById('day-pm2').pickup_deadline).toBe(DAY_DEADLINE.toISOString());
+  });
+
+  it('normal path unchanged: a run due at 10:00 joins the sent day notice', () => {
+    insertDayNotice('day-1', 'pm', 'sent');
+    perMachine('pm', { 'agent-1': T('10:00:00') });
+    const now = T('10:00:30');
+    vi.setSystemTime(now);
+
+    expect(processSchedules(now).errors).toEqual([]);
+
+    expect(tasksOf().map((t) => t.notice_id)).toEqual(['day-1']);
+    expect(notices()).toHaveLength(1);
+  });
+
+  it('joins the day notice with exactly LATE_LINK_MIN_PICKUP_MS left, and redirects with less', () => {
+    expect(LATE_LINK_MIN_PICKUP_MS).toBe(10 * MIN);
+    insertDayNotice('day-1', 'pm', 'sent');
+    const edge = new Date(DAY_DEADLINE.getTime() - LATE_LINK_MIN_PICKUP_MS);
+    perMachine('pm', { 'agent-1': edge, 'agent-2': new Date(edge.getTime() + 1000) });
+
+    vi.setSystemTime(edge);
+    processSchedules(edge);
+    vi.setSystemTime(new Date(edge.getTime() + 1000));
+    processSchedules(new Date(edge.getTime() + 1000));
+
+    const [t1, t2] = tasksOf();
+    expect(t1.notice_id).toBe('day-1');
+    expect(t2.notice_id).not.toBe('day-1');
+    expect(noticeById(t2.notice_id!).kind).toBe('run');
+  });
+
+  it('a still-pending day notice keeps taking late runs (its deadline is set at acceptance)', () => {
+    insertDayNotice('day-1', 'pm', 'pending');
+    perMachine('pm', { 'agent-1': T('16:55:00') });
+    const now = T('16:55:30');
+    vi.setSystemTime(now);
+
+    expect(processSchedules(now).errors).toEqual([]);
+
+    expect(tasksOf().map((t) => t.notice_id)).toEqual(['day-1']);
+    expect(notices()).toHaveLength(1);
+  });
+
+  // Guards the redirect against someone adding the fleet collision skip to it:
+  // these per-machine runs are already due and must not be dropped.
+  it('a pending run notice for the same schedule does not skip the late per_machine runs', () => {
+    insertDayNotice('day-1', 'pm', 'sent');
+    testDb
+      .prepare(`
+        INSERT INTO run_notices (id, kind, state, source_type, schedule_ids, timezone, created_by, created_at, recipients, org_id)
+        VALUES ('run-old', 'run', 'pending', 'schedule', '["pm"]', 'UTC', 'creator', ?, '["a@x.com"]', 'org-001')
+      `)
+      .run(T('16:50:00').toISOString());
+    perMachine('pm', { 'agent-1': T('16:55:00'), 'agent-2': T('16:56:00') });
+    const now = T('16:56:30');
+    vi.setSystemTime(now);
+
+    expect(processSchedules(now).errors).toEqual([]);
+
+    const ts = tasksOf();
+    expect(ts.map((t) => t.agent_id)).toEqual(['agent-1', 'agent-2']);
+    const ids = new Set(ts.map((t) => t.notice_id));
+    expect(ids.size).toBe(1);
+    const runId = [...ids][0]!;
+    expect(['day-1', 'run-old']).not.toContain(runId);
+    expect(noticeById(runId)).toMatchObject({ kind: 'run', state: 'pending' });
+    expect(notices().filter((n) => n.state === 'skipped')).toHaveLength(0);
+  });
+
+  describe('R24: the late tail of a window is batched into one run notice', () => {
+    const scheduleRow = (id: string) =>
+      testDb.prepare('SELECT agent_next_runs, next_run_at FROM schedules WHERE id = ?').get(id) as {
+        agent_next_runs: string;
+        next_run_at: string;
+      };
+    const runNotices = () => notices().filter((n) => n.kind === 'run');
+
+    beforeEach(() => {
+      // Re-rolls land at 09:00 local: today's is already past, so every advanced
+      // agent moves to tomorrow (keeps the advance deterministic).
+      vi.spyOn(Math, 'random').mockReturnValue(0);
+      for (const a of ['agent-4', 'agent-5']) insertTestAgent(testDb, { id: a, hostname: `host-${a}` });
+    });
+
+    afterEach(() => {
+      vi.mocked(Math.random).mockRestore();
+    });
+
+    it('agents due 16:51-16:59 share ONE run notice created on the first late tick; later ticks add nothing', () => {
+      insertDayNotice('day-1', 'pm', 'sent');
+      perMachine('pm', {
+        'agent-1': T('16:51:00'),
+        'agent-2': T('16:53:00'),
+        'agent-3': T('16:55:00'),
+        'agent-4': T('16:57:00'),
+        'agent-5': T('16:59:00'),
+      });
+
+      for (let m = 51; m <= 59; m++) {
+        const now = T(`16:${m}:30`);
+        vi.setSystemTime(now);
+        expect(processSchedules(now).errors).toEqual([]);
+        if (m === 51) {
+          // Everything up to the window end is dispatched on the first late tick.
+          expect(tasksOf()).toHaveLength(5);
+          expect(runNotices()).toHaveLength(1);
+        }
+      }
+
+      const runs = runNotices();
+      expect(runs).toHaveLength(1);
+      expect(JSON.parse(runs[0].schedule_ids)).toEqual(['pm']);
+      const ts = tasksOf();
+      expect(ts.map((t) => t.agent_id)).toEqual(['agent-1', 'agent-2', 'agent-3', 'agent-4', 'agent-5']);
+      expect(ts.every((t) => t.notice_id === runs[0].id)).toBe(true);
+      // All five were advanced as if they had fired: next run is tomorrow.
+      const map = JSON.parse(scheduleRow('pm').agent_next_runs) as Record<string, string>;
+      expect(Object.values(map).every((v) => v > DAY_DEADLINE.toISOString())).toBe(true);
+      expect(noticeById('day-1').pickup_deadline).toBe(DAY_DEADLINE.toISOString());
+    });
+
+    it('does not sweep an agent whose next run is tomorrow', () => {
+      insertDayNotice('day-1', 'pm', 'sent');
+      const tomorrow = new Date('2026-10-24T09:30:00.000Z');
+      perMachine('pm', { 'agent-1': T('16:55:00'), 'agent-2': T('16:58:00'), 'agent-3': tomorrow });
+      const now = T('16:55:30');
+      vi.setSystemTime(now);
+
+      expect(processSchedules(now).errors).toEqual([]);
+
+      expect(tasksOf().map((t) => t.agent_id)).toEqual(['agent-1', 'agent-2']);
+      const map = JSON.parse(scheduleRow('pm').agent_next_runs) as Record<string, string>;
+      expect(map['agent-3']).toBe(tomorrow.toISOString());
+    });
+
+    it('weekend: an agent at next-day 00:00 (the window end instant) is not swept', () => {
+      // Saturday 2026-10-24: the window is 00:00 to Sunday 00:00.
+      const sat = (hhmmss: string) => new Date(`2026-10-24T${hhmmss}.000Z`);
+      const sunday0 = new Date('2026-10-25T00:00:00.000Z');
+      insertDayNotice('day-sat', 'pm', 'sent', { date: '2026-10-24', start: sat('00:00:00'), end: sunday0 });
+      perMachine('pm', { 'agent-1': sat('23:55:00'), 'agent-2': sat('23:58:00'), 'agent-3': sunday0 });
+      const now = sat('23:55:30');
+      vi.setSystemTime(now);
+
+      expect(processSchedules(now).errors).toEqual([]);
+
+      expect(tasksOf().map((t) => t.agent_id)).toEqual(['agent-1', 'agent-2']);
+      const map = JSON.parse(scheduleRow('pm').agent_next_runs) as Record<string, string>;
+      expect(map['agent-3']).toBe(sunday0.toISOString());
+    });
+
+    it('tolerates malformed agent_next_runs entries: the tick does not throw and they are advanced', () => {
+      insertSchedule('pm', ['agent-1', 'agent-2', 'agent-3'], {
+        nextRunAt: T('11:59:00'),
+        config: { time: '12:00', randomize_mode: 'per_machine' },
+        agentNextRuns: {
+          'agent-1': T('11:59:00').toISOString(),
+          // Sorts before now, so it counts as past-due; Date.parse gives NaN.
+          'agent-2': '0000-garbage',
+          // Sorts after any ISO time, so it is never past-due by string compare.
+          'agent-3': 'garbage',
+        },
+      });
+      const now = T('12:00:30');
+      vi.setSystemTime(now);
+
+      expect(() => processSchedules(now)).not.toThrow();
+
+      const map = JSON.parse(scheduleRow('pm').agent_next_runs) as Record<string, string>;
+      for (const id of ['agent-1', 'agent-2', 'agent-3']) {
+        expect(map[id]).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+        expect(map[id] > now.toISOString()).toBe(true);
+      }
+      expect(scheduleRow('pm').next_run_at > now.toISOString()).toBe(true);
+    });
+
+    it('redirect path: a createTasks failure leaves the schedule off the notice, which is skipped without email', async () => {
+      insertDayNotice('day-1', 'pm', 'sent');
+      perMachine('pm', { 'agent-1': T('16:55:00'), 'agent-2': T('16:58:00') });
+      fs.rmSync(path.join(SETTINGS_DIR, 'builds', 'uuid-pm'), { recursive: true, force: true });
+      const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const now = T('16:55:30');
+      vi.setSystemTime(now);
+
+      expect(processSchedules(now).errors).toHaveLength(1);
+
+      expect(tasksOf()).toHaveLength(0);
+      const runs = runNotices();
+      expect(runs).toHaveLength(1);
+      expect(JSON.parse(runs[0].schedule_ids)).toEqual([]);
+
+      await tick(now);
+      expect(noticeById(runs[0].id)).toMatchObject({ state: 'skipped', skip_reason: 'no tasks were created' });
+      expect(mockSendMail).not.toHaveBeenCalled();
+      errSpy.mockRestore();
+    });
   });
 });
