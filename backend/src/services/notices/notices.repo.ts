@@ -282,6 +282,26 @@ export function hasPendingLinkedTask(noticeId: string): boolean {
   );
 }
 
+/** Parse tasks.created_at (SQLite 'YYYY-MM-DD HH:MM:SS' UTC) or an ISO string. */
+function parseSqlTime(s: string | null): number | null {
+  if (!s) return null;
+  const iso = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(s) ? `${s.replace(' ', 'T')}Z` : s;
+  const ms = Date.parse(iso);
+  return Number.isNaN(ms) ? null : ms;
+}
+
+/** Pending day notices matching `where`, with the created_at of their oldest still-pending task (none: absent). */
+function oldestHeldTaskByDayNotice(where: string, params: unknown[]): Array<{ id: string; oldest: string }> {
+  return getDatabase()
+    .prepare(`
+      SELECT n.id AS id, MIN(t.created_at) AS oldest
+      FROM run_notices n JOIN tasks t ON t.notice_id = n.id AND t.status = 'pending'
+      WHERE n.kind = 'day' AND ${where}
+      GROUP BY n.id
+    `)
+    .all(...params) as Array<{ id: string; oldest: string }>;
+}
+
 /**
  * Bounded wait: pending notices created at or before `createdCutoffIso` become
  * `not_delivered`. A run notice that holds no pending task (none were created,
@@ -308,14 +328,27 @@ export function markNotDelivered(
       WHERE ${due} AND kind = 'run'
         AND NOT EXISTS (SELECT 1 FROM tasks t WHERE t.notice_id = run_notices.id AND t.status = 'pending')
     `).run(reasons.noneHeld, reasons.noTasks, createdCutoffIso, staleClaimCutoffIso);
+    // Run notices wait from their own creation; day notices from the oldest
+    // task they hold (they are created at the first agent of the day and may
+    // sit empty for hours). Day comparison is in JS: tasks.created_at is
+    // SQLite's space-separated form, notices use ISO.
     const rows = db
       .prepare(`
         UPDATE run_notices SET state = 'not_delivered', claim_at = NULL
-        WHERE ${due}
+        WHERE ${due} AND kind = 'run'
           AND EXISTS (SELECT 1 FROM tasks t WHERE t.notice_id = run_notices.id AND t.status = 'pending')
         RETURNING id
       `)
       .all(createdCutoffIso, staleClaimCutoffIso) as Array<{ id: string }>;
+    const cutoffMs = Date.parse(createdCutoffIso);
+    for (const d of oldestHeldTaskByDayNotice(`state = 'pending' AND (claim_at IS NULL OR claim_at < ?)`, [staleClaimCutoffIso])) {
+      const ms = parseSqlTime(d.oldest);
+      if (ms === null || ms > cutoffMs) continue;
+      const moved = db
+        .prepare(`UPDATE run_notices SET state = 'not_delivered', claim_at = NULL WHERE id = ? AND state = 'pending'`)
+        .run(d.id).changes;
+      if (moved > 0) rows.push({ id: d.id });
+    }
     return rows.map((r) => r.id);
   })();
 }
@@ -454,16 +487,21 @@ export function overrideNotice(
 // Read models (status banner, notice log, Tasks UI badges)
 // ---------------------------------------------------------------------------
 
-/** Pending notices past the cutoff. A day notice holding no pending task is inert, not overdue. */
+/**
+ * Pending notices past the cutoff. A run notice counts from its own creation;
+ * a day notice from its oldest still-pending task, and not at all while it
+ * holds none (it is inert, not overdue).
+ */
 export function countPendingCreatedBefore(cutoffIso: string): number {
-  const row = getDatabase()
-    .prepare(`
-      SELECT COUNT(*) AS c FROM run_notices n
-      WHERE state = 'pending' AND created_at <= ?
-        AND (kind = 'run' OR EXISTS (SELECT 1 FROM tasks t WHERE t.notice_id = n.id AND t.status = 'pending'))
-    `)
+  const runs = getDatabase()
+    .prepare(`SELECT COUNT(*) AS c FROM run_notices WHERE state = 'pending' AND kind = 'run' AND created_at <= ?`)
     .get(cutoffIso) as { c: number };
-  return row.c;
+  const cutoffMs = Date.parse(cutoffIso);
+  const days = oldestHeldTaskByDayNotice(`state = 'pending'`, []).filter((d) => {
+    const ms = parseSqlTime(d.oldest);
+    return ms !== null && ms <= cutoffMs;
+  });
+  return runs.c + days.length;
 }
 
 export function countNotDeliveredSince(sinceIso: string): number {

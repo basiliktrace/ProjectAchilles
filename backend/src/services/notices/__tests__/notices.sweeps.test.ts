@@ -167,6 +167,7 @@ function linkTask(
     assignedAt?: string | null;
     originalTaskId?: string;
     retryCount?: number;
+    createdAt?: string;
   } = {},
 ) {
   insertTestTask(testDb, { id: taskId, agent_id: v.agentId ?? 'agent-001' });
@@ -190,7 +191,11 @@ function linkTask(
       v.retryCount ?? 0,
       taskId,
     );
+  if (v.createdAt) testDb.prepare('UPDATE tasks SET created_at = ? WHERE id = ?').run(v.createdAt, taskId);
 }
+
+/** SQLite datetime('now') form, as tasks.created_at is stored. */
+const sqlTime = (d: Date) => d.toISOString().replace('T', ' ').slice(0, 19);
 
 function notice(id: string): Record<string, unknown> {
   return testDb.prepare('SELECT * FROM run_notices WHERE id = ?').get(id) as Record<string, unknown>;
@@ -330,7 +335,7 @@ describe('pre-execution notice sweeps', () => {
         day_window_start: '2026-10-23T09:00:00.000Z',
         day_window_end: '2026-10-23T17:00:00.000Z',
       });
-      linkTask('t1', 'n-day');
+      linkTask('t1', 'n-day', { createdAt: sqlTime(at(-61 * MIN)) });
       await processNotices(NOW);
       expect(notice('n-day').state).toBe('not_delivered');
 
@@ -398,12 +403,38 @@ describe('pre-execution notice sweeps', () => {
 
     it('a day notice holding a pending task past max_wait is still not_delivered and expires it (R18b)', async () => {
       dayNotice('n-held');
-      linkTask('t1', 'n-held');
+      linkTask('t1', 'n-held', { createdAt: sqlTime(at(-61 * MIN)) });
       const r = await processNotices(NOW);
       expect(r.notDelivered).toBe(1);
       expect(notice('n-held').state).toBe('not_delivered');
       expect(task('t1').status).toBe('expired');
       expect(getNoticeStatus(NOW).notDeliveredLast7d).toBe(1);
+    });
+
+    it('day notice: max_wait counts from the oldest held task, not the notice (R19)', async () => {
+      // Notice created ~09:10, holds nothing until a task links at 14:00.
+      dayNotice('n-late', { created_at: at(-170 * MIN).toISOString() });
+      const linked = at(2 * HOUR);
+      linkTask('t1', 'n-late', { createdAt: sqlTime(linked) });
+
+      const r1 = await processNotices(linked);
+      expect(r1.notDelivered).toBe(0);
+      expect(notice('n-late').state).toBe('pending');
+      expect(task('t1').status).toBe('pending');
+      expect(getNoticeStatus(linked).pendingOverdue).toBe(0);
+
+      // Still inside max_wait (60 min) of the task.
+      await processNotices(at(2 * HOUR + 59 * MIN));
+      expect(notice('n-late').state).toBe('pending');
+      expect(task('t1').status).toBe('pending');
+
+      // Banner clock: task older than 5 min counts as overdue.
+      expect(getNoticeStatus(at(2 * HOUR + 6 * MIN)).pendingOverdue).toBe(1);
+
+      const r2 = await processNotices(at(2 * HOUR + 61 * MIN));
+      expect(r2.notDelivered).toBe(1);
+      expect(notice('n-late').state).toBe('not_delivered');
+      expect(task('t1').status).toBe('expired');
     });
 
     it('a run notice whose linked tasks were all cancelled is skipped at max_wait (R18c)', async () => {
