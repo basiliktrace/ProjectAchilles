@@ -18,10 +18,10 @@ Pre-execution notices work on Docker Compose, Render, Fly.io, Railway and server
 
 ## Turn it on
 
-1. Set up SMTP first. Go to **Settings → Integrations → Alerting → Email** and save a working SMTP host, credentials and from-address. Notices reuse this configuration.
+1. Set up SMTP first. Go to **Settings → Integrations → Alerting → Email** and save a working SMTP host, credentials and from-address. Notices reuse this configuration. Notices count SMTP as set up once a host and a from-address are saved.
 2. Open **Settings → Integrations → Pre-execution notices**.
 3. Enter the recipients (comma or newline separated, up to 50). This list is separate from the alert recipients, because the audience is different. Use plain addresses such as `secops@example.com`, not `Name <address>`.
-4. Tick **Enable pre-execution notices** and save. You can only enable it when SMTP is configured and there is at least one recipient.
+4. Tick **Enable pre-execution notices** and save. You can only enable it when SMTP is configured and there is at least one recipient. If SMTP is removed or breaks later, runs still wait for a notice: the notice fails to send and the [failure alerts](#when-delivery-fails) fire, so no test runs unannounced.
 5. Click **Send test notice** to send a sample email. The card shows which addresses the mail server accepted and which it rejected.
 
 The settings apply to the whole deployment, not to one organization.
@@ -39,14 +39,14 @@ The settings apply to the whole deployment, not to one organization.
 
 Every test run is covered: **Run Now**, a **manual retry**, and every **schedule**. Only test runs are covered. Agent updates, uninstalls and shell commands never wait for a notice.
 
-- **Run Now and manual retry:** one notice per click. A manual retry sends a new notice, because a person decided to run it again.
+- **Run Now and manual retry:** one notice per click. Running several selected tests at once from the test browser is still one click and one notice, which lists every test. A manual retry sends a new notice, because a person decided to run it again.
 - **Fleet and fixed-time schedules:** all schedules that come due in the same minute share one notice that lists every test and host.
 - **Per-machine (randomized) schedules:** one notice **per schedule per day**, in the schedule's timezone. It covers the day's randomization window (for example 09:00 to 17:00), and each machine runs at its own random time inside it. Machines that come due later the same day join the notice that was already sent, so they do not wait again.
 - **Automatic retries** (after an agent drops or a task times out) belong to the same announced run. They do not send another email.
 
 ## What the email contains
 
-The subject looks like `[ProjectAchilles] Security testing starts 2026-10-23 09:05 UTC (09:05 UTC) — 3 tests on 12 hosts`.
+The subject looks like `[ProjectAchilles] Security testing starts 2026-10-23 09:05 AST (13:05 UTC) — 3 tests on 12 hosts`. When the timezone is UTC, the time is shown once: `2026-10-23 13:05 UTC`.
 
 The body has:
 
@@ -76,20 +76,22 @@ A task that is held is still in the `pending` state. The agents are unchanged: t
 
 A task that does not run is marked **Expired** with one of these reasons. It is never sent to Elasticsearch, so it does not affect the Defense Score.
 
-- **Not run: notice not delivered.** The mail server did not accept the notice for every recipient within the max wait. A partial rejection counts as a failure: the whole list is retried every minute until it succeeds or time runs out.
+- **Not run: notice not delivered.** The mail server did not accept the notice for every recipient within the max wait. A partial rejection counts as a failure, and the whole list is sent again on the next attempt. Attempts back off: the first retry comes 1 minute after a failure, then 2, 4 and 8 minutes, then every 15 minutes until it succeeds or the max wait runs out. Each attempt uses the recipient list currently saved in Settings, so fixing a mistyped address takes effect on the next attempt.
+
+If every task in a run is cancelled while its notice is still waiting, the notice is dropped and no email is sent.
 - **Not run: host offline during notice window.** The host did not pick up the task before the window ended. Automatic retries share the original window, so a retry created after it also expires.
 
 ## When delivery fails
 
 A stuck notice must never go unnoticed, because an old Defense Score can look healthy while testing has stopped.
 
-- A **banner** appears at the top of the app when a notice has been pending for more than 5 minutes, or when any notice was not delivered in the last 7 days. You can dismiss it for the current session. It points back to the Settings card.
-- The Settings card shows the result of the **daily SMTP check**, which catches an expired mail password before it blocks a real run.
+- A **banner** appears at the top of the app when a notice has been pending for more than 5 minutes, or when any notice was not delivered in the last 7 days. It also appears when the daily SMTP check failed. In that case it reads "The daily notice email check failed." You can dismiss it for the current session. It points back to the Settings card.
+- The Settings card shows the result of the **daily SMTP check**, which catches an expired mail password before it blocks a real run. The check only runs while notices are enabled. After you turn notices off, a past check failure no longer raises the banner, but notices that were still pending or not delivered do.
 - If Slack is configured under Alerting, one message is posted the first time a notice fails to send, and one when it becomes undelivered.
 
 ## Release a notice without sending it
 
-An administrator can release a pending notice without email delivery, with a required written reason. The tasks start immediately, with no lead time. The notice records who did it, when and why, so it stays on the audit trail.
+A user with permission to create tasks can release a pending notice without email delivery, with a required written reason. The tasks start immediately, with no lead time. The notice records who did it, when and why, so it stays on the audit trail.
 
 This is available through the API (`POST /api/notices/:id/release`). See the [API reference](../../api-reference/alerting#pre-execution-notices). It needs the permission that creates tasks.
 

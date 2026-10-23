@@ -58,7 +58,7 @@ Settings and status for [pre-execution notices](../user-guide/integrations/pre-e
 | `PUT` | `/api/notices/settings` | `integrations:write` | Update settings. Returns 400 if you enable without SMTP configured or without a recipient |
 | `POST` | `/api/notices/settings/test` | `integrations:write` | Send a sample notice to the recipients |
 | `GET` | `/api/notices/status` | `endpoints:tasks:read` | Banner data: overdue pending notices, not-delivered count (7 days), last SMTP check |
-| `GET` | `/api/notices?limit=&offset=` | `endpoints:tasks:read` | List notices, newest first (`limit` 1 to 100, default 25) |
+| `GET` | `/api/notices?limit=&offset=` | `endpoints:tasks:read` | List notices, newest first (`limit` 1 to 100, default 25; `offset` 0 or more, default 0) |
 | `POST` | `/api/notices/:id/release` | `endpoints:tasks:create` | Release a pending notice without delivery. Body: `{ "reason": "..." }` (required). Returns 400 if the notice is no longer pending |
 
 **Settings body (`PUT /api/notices/settings`):** all fields are optional.
@@ -89,4 +89,32 @@ Settings and status for [pre-execution notices](../user-guide/integrations/pre-e
 }
 ```
 
-The grouped task list response adds a `notices` map (notice id to `run_tag`, `state`, `last_error`, `release_at`, `pickup_deadline`) on each batch group whose tasks are linked to notices.
+The grouped task list response (`GET /api/agent/admin/tasks/grouped`) adds a `notices` map (notice id to `run_tag`, `state`, `last_error`, `release_at`, `pickup_deadline`) on each batch group whose tasks are linked to notices.
+
+`GET /api/notices/status` returns `smtpCheck` as `{ "ok": null, "at": null, "message": null }` while notices are disabled. `pendingOverdue` and `notDeliveredLast7d` are always counted.
+
+### Several tests under one notice
+
+```
+POST /api/agent/admin/tasks/batch
+```
+
+Creates the tasks for several tests as one run, under **one** pre-execution notice (one email), instead of one notice per test. The test browser uses it when you run more than one test at once. Requires `endpoints:tasks:create`.
+
+```json
+{
+  "org_id": "default",
+  "requests": [
+    { "agent_ids": ["agent-uuid-1"], "test_uuid": "test-uuid-a", "test_name": "Test A", "binary_name": "a.exe" },
+    { "agent_ids": ["agent-uuid-1", "agent-uuid-2"], "test_uuid": "test-uuid-b", "test_name": "Test B", "binary_name": "b.exe" }
+  ]
+}
+```
+
+Each entry in `requests` takes the same fields as `POST /api/agent/admin/tasks`, without `org_id`. Send 1 to 50 requests. The batch is all-or-nothing: if any request fails (for example, a test has no build for an agent's OS), nothing is created and no notice is sent. The response is `201` with the task ids of each request, in request order:
+
+```json
+{ "success": true, "data": { "task_ids": [["task-1"], ["task-2", "task-3"]] } }
+```
+
+This route works whether or not notices are enabled.
