@@ -552,6 +552,31 @@ describe('processSchedules: late per_machine runs and a closed day notice (R23)'
       expect(map['agent-3']).toBe(sunday0.toISOString());
     });
 
+    it('tolerates malformed agent_next_runs entries: the tick does not throw and they are advanced', () => {
+      insertSchedule('pm', ['agent-1', 'agent-2', 'agent-3'], {
+        nextRunAt: T('11:59:00'),
+        config: { time: '12:00', randomize_mode: 'per_machine' },
+        agentNextRuns: {
+          'agent-1': T('11:59:00').toISOString(),
+          // Sorts before now, so it counts as past-due; Date.parse gives NaN.
+          'agent-2': '0000-garbage',
+          // Sorts after any ISO time, so it is never past-due by string compare.
+          'agent-3': 'garbage',
+        },
+      });
+      const now = T('12:00:30');
+      vi.setSystemTime(now);
+
+      expect(() => processSchedules(now)).not.toThrow();
+
+      const map = JSON.parse(scheduleRow('pm').agent_next_runs) as Record<string, string>;
+      for (const id of ['agent-1', 'agent-2', 'agent-3']) {
+        expect(map[id]).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+        expect(map[id] > now.toISOString()).toBe(true);
+      }
+      expect(scheduleRow('pm').next_run_at > now.toISOString()).toBe(true);
+    });
+
     it('redirect path: a createTasks failure leaves the schedule off the notice, which is skipped without email', async () => {
       insertDayNotice('day-1', 'pm', 'sent');
       perMachine('pm', { 'agent-1': T('16:55:00'), 'agent-2': T('16:58:00') });

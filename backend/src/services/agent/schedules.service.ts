@@ -540,8 +540,11 @@ export function processSchedules(clock?: Date): { processed: number; errors: str
       );
 
       // Agents advanced below as if they had fired: the past-due ones, plus
-      // (R24) the late tail swept onto a run notice.
-      const fired = new Set(Object.keys(map).filter((id) => map[id] <= nowIso));
+      // (R24) the late tail swept onto a run notice. An unparseable entry is
+      // advanced too (from now), so it heals instead of sticking forever.
+      const fired = new Set(
+        Object.keys(map).filter((id) => map[id] <= nowIso || !Number.isFinite(Date.parse(map[id]))),
+      );
 
       if (dueAgentIds.length > 0) {
         // Rulings R23/R24: today's day notice is already announced and its
@@ -602,7 +605,11 @@ export function processSchedules(clock?: Date): { processed: number; errors: str
       for (const id of fired) {
         // From the agent's own slot (a swept tail slot is later than now), so
         // its next occurrence is never rolled back into the slot just used.
-        const after = new Date(Math.max(now.getTime(), Date.parse(map[id])));
+        // A malformed slot (NaN) falls back to now: an Invalid Date would make
+        // computeNextRun throw and abort the whole tick.
+        const nowMs = now.getTime();
+        const slotMs = Date.parse(map[id]);
+        const after = new Date(Number.isFinite(slotMs) ? Math.max(nowMs, slotMs) : nowMs);
         const next = computeNextRun(schedule.schedule_type, schedule.schedule_config, schedule.timezone, after);
         if (next) map[id] = next.toISOString();
         else delete map[id];
