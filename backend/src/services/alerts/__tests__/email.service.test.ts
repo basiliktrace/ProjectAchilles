@@ -171,3 +171,31 @@ describe('email.service', () => {
     });
   });
 });
+
+describe('sendMail', () => {
+  it('normalises accepted/rejected entries to lowercase addresses and passes attachments', async () => {
+    const { sendMail } = await import('../email.service.js');
+    mockSendMail.mockResolvedValueOnce({
+      accepted: [{ address: 'A@x.com', name: '' }],
+      rejected: ['B@X.com'],
+    });
+    const attachments = [{ filename: 'h.csv', content: 'a,b', contentType: 'text/csv' }];
+    const res = await sendMail(makeSettings(), {
+      to: ['A@x.com', 'B@x.com'],
+      subject: 's',
+      html: '<p>h</p>',
+      attachments,
+    });
+    expect(res).toEqual({ accepted: ['a@x.com'], rejected: ['b@x.com'] });
+    const arg = mockSendMail.mock.calls.at(-1)![0];
+    expect(arg.attachments).toEqual(attachments);
+    expect(arg.to).toBe('A@x.com, B@x.com');
+  });
+
+  it('tolerates missing accepted/rejected lists', async () => {
+    const { sendMail } = await import('../email.service.js');
+    mockSendMail.mockResolvedValueOnce({ messageId: 'x' });
+    const res = await sendMail(makeSettings(), { to: ['a@x.com'], subject: 's', html: 'h' });
+    expect(res).toEqual({ accepted: [], rejected: [] });
+  });
+});

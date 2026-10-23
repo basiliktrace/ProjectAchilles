@@ -116,6 +116,25 @@ export async function sendSlackAlert(
 }
 
 // ---------------------------------------------------------------------------
+// Send plain text via webhook
+// ---------------------------------------------------------------------------
+
+export async function sendSlackText(webhookUrl: string, text: string): Promise<void> {
+  const response = await fetch(webhookUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ text }),
+  });
+
+  if (!response.ok) {
+    const responseBody = await response.text();
+    throw new Error(
+      `Slack webhook failed with status ${response.status}: ${responseBody}`,
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Test webhook connectivity
 // ---------------------------------------------------------------------------
 
