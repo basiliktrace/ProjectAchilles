@@ -196,6 +196,27 @@ export function listRuns(campaignId: string, callerOrg: string | undefined) {
   }));
 }
 
+/** All runs of the caller's org, newest first, including runs whose campaign was deleted. */
+export function listAllRuns(callerOrg: string | undefined) {
+  const db = getDatabase();
+  const rows = (callerOrg !== undefined
+    ? db.prepare('SELECT * FROM campaign_runs WHERE org_id = ? ORDER BY started_at DESC, rowid DESC').all(callerOrg)
+    : db.prepare('SELECT * FROM campaign_runs ORDER BY started_at DESC, rowid DESC').all()) as CampaignRunRow[];
+  const live = new Set(
+    (db.prepare('SELECT id FROM campaigns').all() as { id: string }[]).map((c) => c.id),
+  );
+  return rows.map((r) => ({
+    id: r.id,
+    campaign_id: r.campaign_id,
+    campaign_name: (JSON.parse(r.snapshot) as RunSnapshot).campaign_name,
+    campaign_deleted: !live.has(r.campaign_id),
+    started_at: r.started_at,
+    started_by: r.started_by,
+    task_count: r.task_count,
+    percent_protected: computeRunTotals(r.id).percent_protected,
+  }));
+}
+
 export function runMatrixCsv(m: RunMatrix): string {
   const lines = ['test,techniques,host,os,outcome,exit_code,completed_at'];
   for (const t of m.tests) {

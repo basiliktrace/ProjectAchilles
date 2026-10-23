@@ -18,7 +18,7 @@ import {
 } from '../services/campaigns/campaigns.service.js';
 import { preflightCampaign } from '../services/campaigns/preflight.js';
 import { launchRun, PartialRunError } from '../services/campaigns/runs.service.js';
-import { getRunMatrix, listRuns, runMatrixCsv } from '../services/campaigns/matrix.js';
+import { getRunMatrix, listRuns, listAllRuns, runMatrixCsv } from '../services/campaigns/matrix.js';
 import {
   CreateCampaignSchema,
   UpdateCampaignSchema,
@@ -48,6 +48,12 @@ function requireUser(req: Request): string {
   return userId;
 }
 
+// Isolation guard for every route (before validation), so a future route can't skip it.
+router.use((req, _res, next) => {
+  callerOrg(req);
+  next();
+});
+
 const READ = 'endpoints:tasks:read';
 const WRITE = 'endpoints:tasks:create';
 
@@ -56,6 +62,10 @@ router.get('/', requirePermission(READ), asyncHandler(async (req, res) => {
 }));
 
 // Run routes first: `/runs/:runId` must not be captured by `/:id`.
+router.get('/runs', requirePermission(READ), asyncHandler(async (req, res) => {
+  res.json({ success: true, data: listAllRuns(callerOrg(req)) });
+}));
+
 router.get('/runs/:runId', requirePermission(READ), asyncHandler(async (req, res) => {
   res.json({ success: true, data: getRunMatrix(req.params.runId, callerOrg(req)) });
 }));
@@ -72,7 +82,6 @@ router.get('/runs/:runId/export.csv', requirePermission(READ), asyncHandler(asyn
 
 router.post('/', requirePermission(WRITE), validate(CreateCampaignSchema), asyncHandler(async (req, res) => {
   const userId = requireUser(req);
-  callerOrg(req);
   const { org_id, ...input } = req.body;
   validateRequestOrgId(org_id, req.auth);
   res.status(201).json({ success: true, data: createCampaign(input, org_id, userId) });

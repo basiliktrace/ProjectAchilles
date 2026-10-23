@@ -164,6 +164,59 @@ describe('cross-org isolation', () => {
   });
 });
 
+describe('hardening (fix round 1)', () => {
+  it('PUT and DELETE as another org 404 and leave the row untouched', async () => {
+    const c = await create();
+    const id = c.body.data.id;
+    auth = { userId: 'u2', orgId: 'org-2' };
+    expect((await request(app()).put(`/api/campaigns/${id}`).send(body({ org_id: 'org-2', name: 'Hijacked' }))).status).toBe(404);
+    expect((await request(app()).delete(`/api/campaigns/${id}`)).status).toBe(404);
+    auth = { userId: 'u1', orgId: 'org-1' };
+    const got = await request(app()).get(`/api/campaigns/${id}`);
+    expect(got.status).toBe(200);
+    expect(got.body.data.name).toBe('Q4 plan');
+  });
+
+  it('isolation 403 beats validation 400 for a no-org caller', async () => {
+    process.env.REQUIRE_ORG_ISOLATION = 'true';
+    auth = { userId: 'u1' };
+    const res = await request(app()).post('/api/campaigns').send({ name: 5 });
+    expect(res.status).toBe(403);
+  });
+
+  it('caps description and framework_label length', async () => {
+    expect((await create({ description: 'x'.repeat(2001) })).status).toBe(400);
+    expect((await create({ framework_label: 'x'.repeat(121) })).status).toBe(400);
+    expect((await create({ description: 'x'.repeat(2000), framework_label: 'x'.repeat(120) })).status).toBe(201);
+  });
+});
+
+describe('GET /runs (all runs, incl. deleted campaigns)', () => {
+  it('lists a deleted campaign run with its snapshot name; org-2 does not see it', async () => {
+    const c = await create();
+    const id = c.body.data.id;
+    insertRun('run-1', id, 'org-1');
+    await request(app()).delete(`/api/campaigns/${id}`);
+    const res = await request(app()).get('/api/campaigns/runs');
+    expect(res.status).toBe(200);
+    expect(res.body.data).toEqual([
+      expect.objectContaining({
+        id: 'run-1', campaign_id: id, campaign_name: 'Q4 plan', campaign_deleted: true,
+        started_by: 'u1', task_count: 0, percent_protected: null,
+      }),
+    ]);
+    auth = { userId: 'u2', orgId: 'org-2' };
+    expect((await request(app()).get('/api/campaigns/runs')).body.data).toEqual([]);
+  });
+
+  it('marks a live campaign campaign_deleted false', async () => {
+    const c = await create();
+    insertRun('run-1', c.body.data.id, 'org-1');
+    const res = await request(app()).get('/api/campaigns/runs');
+    expect(res.body.data[0].campaign_deleted).toBe(false);
+  });
+});
+
 describe('run launch', () => {
   it('maps PartialRunError to 409 { success, error, skipped }', async () => {
     const c = await create();

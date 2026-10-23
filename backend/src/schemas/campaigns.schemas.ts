@@ -9,8 +9,8 @@ const IdList = z.array(z.string().min(1));
 
 const campaignFields = {
   name: z.string().trim().min(1, 'name is required').max(120, 'name must be at most 120 characters'),
-  description: z.string().nullable().optional(),
-  framework_label: z.string().nullable().optional(),
+  description: z.string().max(2000, 'description must be at most 2000 characters').nullable().optional(),
+  framework_label: z.string().max(120, 'framework_label must be at most 120 characters').nullable().optional(),
   test_uuids: IdList,
   agent_ids: IdList,
 };
