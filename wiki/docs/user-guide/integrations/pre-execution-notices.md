@@ -24,7 +24,7 @@ Pre-execution notices work on Docker Compose, Render, Fly.io, Railway and server
 4. Tick **Enable pre-execution notices** and save. You can only enable it when SMTP is configured and there is at least one recipient. If SMTP is removed or breaks later, runs still wait for a notice: the notice fails to send and the [failure alerts](#when-delivery-fails) fire, so no test runs unannounced.
 5. Click **Send test notice** to send a sample email. The card shows which addresses the mail server accepted and which it rejected.
 
-The settings apply to the whole deployment, not to one organization.
+The settings apply to your organization. Each organization has its own recipients, settings and notice log, and its notices are sent through the SMTP server saved in that organization's Alerting settings. An organization that has never saved its own settings uses the deployment-wide defaults. A notice belongs to the organization whose tests it announces, and users only see and release their own organization's notices.
 
 ## Settings
 

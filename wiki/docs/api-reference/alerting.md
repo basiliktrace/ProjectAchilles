@@ -50,7 +50,7 @@ Credentials are encrypted at rest with AES-256-GCM.
 
 ## Pre-execution notices
 
-Settings and status for [pre-execution notices](../user-guide/integrations/pre-execution-notices). All routes need Clerk authentication. Settings are deployment-wide. These routes are not available on the Vercel (serverless) backend.
+Settings and status for [pre-execution notices](../user-guide/integrations/pre-execution-notices). All routes need Clerk authentication. Settings and the notice log are per organization: the caller's Clerk organization is used, and an organization without its own settings falls back to the deployment-wide (legacy) settings. A notice belongs to the organization of the tasks it gates. `GET /api/notices`, `GET /api/notices/status` and `POST /api/notices/:id/release` only see the caller's organization's notices; another organization's notice id returns `404 Notice not found`. A caller without an organization (single-organization deployments) sees every notice, unless `REQUIRE_ORG_ISOLATION=true`, which returns `403`. These routes are not available on the Vercel (serverless) backend.
 
 | Method | Path | Permission | Purpose |
 |--------|------|------------|---------|
