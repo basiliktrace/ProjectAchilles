@@ -59,6 +59,17 @@ describe('alert channel `configured` is derived server-side', () => {
     expect(service.isAlertingConfigured()).toBe(true);
   });
 
+  it('a masked username echoed back by the reopened form does not overwrite the saved one', () => {
+    service.saveAlertSettings(uiPayload() as never);
+    const p = uiPayload() as { email: Record<string, unknown> };
+    p.email.smtp_user = '****user';
+    delete p.email.smtp_pass;
+    service.saveAlertSettings(p as never);
+    const s = service.getAlertSettings()!;
+    expect(s.email?.smtp_user).toBe('user');
+    expect(s.email?.smtp_pass).toBe('pass');
+  });
+
   it('persists the derived flag to disk', () => {
     service.saveAlertSettings(uiPayload() as never);
     const raw = JSON.parse(fs.readFileSync(settingsFile(), 'utf8'));

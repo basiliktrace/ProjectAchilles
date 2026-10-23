@@ -9,6 +9,7 @@ import type { AzureIntegrationSettings, AzureCredentials, DefenderIntegrationSet
 import type { AutoResolveMode } from '../../types/defender.js';
 import type { CrowdStrikeRegion, CrowdStrikeZtaStatus } from '../../types/crowdstrike.js';
 import { CROWDSTRIKE_REGION_BASE_URLS, DEFAULT_CROWDSTRIKE_REGION } from '../crowdstrike/falcon-client.js';
+import { isMaskedSecret } from '../alerts/testEmailSettings.js';
 
 const AUTO_RESOLVE_MODES: ReadonlyArray<AutoResolveMode> = ['disabled', 'dry_run', 'enabled'] as const;
 const DEFAULT_AUTO_RESOLVE_MODE: AutoResolveMode = 'disabled';
@@ -991,7 +992,8 @@ export class IntegrationsSettingsService {
         smtp_host: newEmail?.smtp_host || currentEmail?.smtp_host || '',
         smtp_port: newEmail?.smtp_port ?? currentEmail?.smtp_port ?? 587,
         smtp_secure: newEmail?.smtp_secure ?? currentEmail?.smtp_secure ?? false,
-        smtp_user: newEmail?.smtp_user || currentEmail?.smtp_user || '',
+        // A reopened form echoes the masked username back; keep the real one.
+        smtp_user: (isMaskedSecret(newEmail?.smtp_user) ? '' : newEmail?.smtp_user) || currentEmail?.smtp_user || '',
         smtp_pass: newEmail?.smtp_pass || currentEmail?.smtp_pass || '',
         from_address: newEmail?.from_address || currentEmail?.from_address || '',
         recipients: newEmail?.recipients ?? currentEmail?.recipients ?? [],
