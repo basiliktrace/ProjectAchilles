@@ -91,4 +91,19 @@ describe('RunCampaignDialog', () => {
     expect(api.startRun).toHaveBeenLastCalledWith('c1', { org_id: 'org-1', confirm_partial: true });
     await waitFor(() => expect(nav).toHaveBeenCalledWith('/campaigns/runs/r2'));
   });
+
+  it('blocks a second launch while one is in flight, including via Cancel', async () => {
+    api.startRun.mockReturnValue(new Promise(() => undefined));
+    const onClose = vi.fn();
+    const user = userEvent.setup();
+    render(<MemoryRouter><RunCampaignDialog open campaign={campaign} onClose={onClose} /></MemoryRouter>);
+    await screen.findByText('Will create 3 tasks');
+    await user.click(screen.getByRole('button', { name: 'Run' }));
+    expect(screen.getByRole('button', { name: 'Cancel' })).toBeDisabled();
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    await user.keyboard('{Escape}');
+    expect(onClose).not.toHaveBeenCalled();
+    await user.click(screen.getByRole('button', { name: /Starting/ }));
+    expect(api.startRun).toHaveBeenCalledTimes(1);
+  });
 });

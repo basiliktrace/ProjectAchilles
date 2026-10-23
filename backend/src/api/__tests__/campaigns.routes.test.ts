@@ -257,7 +257,7 @@ describe('run matrix and CSV', () => {
     expect(new Date(asOf).toISOString()).toBe(asOf);
     const compact = asOf.replace(/[-:]/g, '').replace(/\.\d+Z$/, 'Z').replace(/^(\d{8}T\d{4})\d{2}Z$/, '$1Z');
     expect(csv.headers['content-disposition']).toBe(`attachment; filename="campaign-run-run-1-${compact}.csv"`);
-    expect(csv.text.split('\r\n')[0]).toBe('test,techniques,host,os,outcome,exit_code,completed_at');
+    expect(csv.text.split('\r\n')[0]).toBe('test,techniques,host,os,outcome,exit_code,completed_at,as_of');
   });
 });
 

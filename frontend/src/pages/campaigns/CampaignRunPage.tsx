@@ -87,11 +87,11 @@ export default function CampaignRunPage() {
     if (!runId || exporting) return;
     setExporting(true);
     try {
-      const blob = await campaignsApi.exportRunCsv(runId);
+      const { blob, filename } = await campaignsApi.exportRunCsv(runId);
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `campaign-run-${runId}.csv`;
+      a.download = filename ?? `campaign-run-${runId}.csv`;
       document.body.appendChild(a);
       a.click();
       a.remove();

@@ -93,7 +93,7 @@ describe('CampaignRunPage', () => {
 
   it('prints and downloads the CSV via a blob', async () => {
     api.getRun.mockResolvedValue(matrix(['protected']));
-    api.exportRunCsv.mockResolvedValue(new Blob(['a,b']));
+    api.exportRunCsv.mockResolvedValue({ blob: new Blob(['a,b']), filename: 'campaign-run-r1-20261023T1005Z.csv' });
     const print = vi.spyOn(window, 'print').mockImplementation(() => undefined);
     const createUrl = vi.fn(() => 'blob:x');
     const revoke = vi.fn();
@@ -108,5 +108,6 @@ describe('CampaignRunPage', () => {
     await vi.waitFor(() => expect(click).toHaveBeenCalled());
     expect(api.exportRunCsv).toHaveBeenCalledWith('r1');
     expect(createUrl).toHaveBeenCalled();
+    expect(click.mock.instances[0]).toHaveProperty('download', 'campaign-run-r1-20261023T1005Z.csv');
   });
 });

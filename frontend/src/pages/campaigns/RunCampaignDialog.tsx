@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Dialog, DialogHeader, DialogTitle, DialogContent, DialogFooter } from '@/components/shared/ui/Dialog';
 import { Button } from '@/components/shared/ui/Button';
@@ -55,6 +55,8 @@ export function RunCampaignDialog({ open, campaign, onClose }: Props) {
   const [runError, setRunError] = useState<string | null>(null);
   const [partial, setPartial] = useState<Skipped | null>(null);
   const [launching, setLaunching] = useState(false);
+  // Only a launch's own completion clears this; closing/reopening the dialog must not.
+  const inFlight = useRef(false);
 
   const campaignId = campaign?.id;
   useEffect(() => {
@@ -78,7 +80,8 @@ export function RunCampaignDialog({ open, campaign, onClose }: Props) {
   }, [open, campaignId, preExecutionNotices]);
 
   async function launch(confirmPartial: boolean) {
-    if (!campaign || launching) return;
+    if (!campaign || inFlight.current) return;
+    inFlight.current = true;
     setLaunching(true);
     setRunError(null);
     try {
@@ -86,9 +89,11 @@ export function RunCampaignDialog({ open, campaign, onClose }: Props) {
         ? { org_id: campaign.org_id, confirm_partial: true }
         : { org_id: campaign.org_id };
       const result = await campaignsApi.startRun(campaign.id, body);
+      inFlight.current = false;
       onClose();
       navigate(`/campaigns/runs/${result.run_id}`);
     } catch (err) {
+      inFlight.current = false;
       const skipped = partialSkipped(err);
       if (skipped) setPartial(skipped);
       else setRunError(errorMessage(err));
@@ -96,11 +101,13 @@ export function RunCampaignDialog({ open, campaign, onClose }: Props) {
     }
   }
 
+  const requestClose = () => { if (!inFlight.current) onClose(); };
+
   const noTasks = preflight !== null && preflight.task_count === 0;
 
   return (
-    <Dialog open={open} onClose={onClose}>
-      <DialogHeader onClose={onClose}>
+    <Dialog open={open} onClose={requestClose}>
+      <DialogHeader onClose={launching ? undefined : requestClose}>
         <DialogTitle>{campaign ? `Run ${campaign.name}` : 'Run campaign'}</DialogTitle>
       </DialogHeader>
       <DialogContent>
@@ -123,7 +130,7 @@ export function RunCampaignDialog({ open, campaign, onClose }: Props) {
         {runError && <Alert variant="destructive" className="mt-3">{runError}</Alert>}
       </DialogContent>
       <DialogFooter>
-        <Button variant="outline" onClick={onClose}>Cancel</Button>
+        <Button variant="outline" onClick={requestClose} disabled={launching}>Cancel</Button>
         {partial ? (
           <Button onClick={() => void launch(true)} disabled={launching}>
             {launching ? 'Starting…' : 'Run the rest'}

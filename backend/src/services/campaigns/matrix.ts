@@ -218,7 +218,7 @@ export function listAllRuns(callerOrg: string | undefined) {
 }
 
 export function runMatrixCsv(m: RunMatrix): string {
-  const lines = ['test,techniques,host,os,outcome,exit_code,completed_at'];
+  const lines = ['test,techniques,host,os,outcome,exit_code,completed_at,as_of'];
   for (const t of m.tests) {
     for (const a of m.agents) {
       const c = m.cells[t.uuid]?.[a.id];
@@ -232,6 +232,7 @@ export function runMatrixCsv(m: RunMatrix): string {
           c.state === 'na' ? '' : c.state,
           c.exit_code === null ? '' : String(c.exit_code),
           csvCell(c.completed_at ?? ''),
+          csvCell(m.as_of),
         ].join(','),
       );
     }

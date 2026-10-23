@@ -156,11 +156,14 @@ describe('campaign run matrix', () => {
     s.skipped = [{ test_uuid: 't2', agent_id: 'a1', reason: 'no windows binary' }] as never;
     insertRun('r8', 'c1', s);
     insertTask({ runId: 'r8', agent: 'a1', test: 't1', status: 'completed', exit: 101, techniques: ['T1059', 'T1105'] });
-    const csv = runMatrixCsv(getRunMatrix('r8', ORG));
+    const m8 = getRunMatrix('r8', ORG);
+    const csv = runMatrixCsv(m8);
     const lines = csv.trimEnd().split('\r\n');
-    expect(lines[0]).toBe('test,techniques,host,os,outcome,exit_code,completed_at');
-    expect(lines[1]).toBe(`'=cmd|' /C calc'!A0,T1059; T1105,"web,01",windows,unprotected,101,2026-10-23T10:05:00.000Z`);
-    expect(lines[2]).toBe('Test t2,,"web,01",windows,,,');
+    expect(lines[0]).toBe('test,techniques,host,os,outcome,exit_code,completed_at,as_of');
+    const asOf = m8.as_of;
+    expect(lines[1]).toMatch(/^'=cmd\|' \/C calc'!A0,T1059; T1105,"web,01",windows,unprotected,101,2026-10-23T10:05:00.000Z,/);
+    expect(lines.slice(1).every((l) => l.endsWith(',' + asOf))).toBe(true);
+    expect(lines[2]).toMatch(/^Test t2,,"web,01",windows,,,,/);
   });
 
   it('large stdout does not affect the matrix; not_run surfaces result.error as reason', () => {

@@ -128,8 +128,11 @@ export const campaignsApi = {
     return response.data.data;
   },
 
-  async exportRunCsv(runId: string): Promise<Blob> {
+  /** Returns the CSV and the server's filename (carries the as-of time); null if the header is absent. */
+  async exportRunCsv(runId: string): Promise<{ blob: Blob; filename: string | null }> {
     const response = await apiClient.get(`/campaigns/runs/${runId}/export.csv`, { responseType: 'blob' });
-    return response.data;
+    const disposition = String(response.headers?.['content-disposition'] ?? '');
+    const match = /filename="?([^";]+)"?/i.exec(disposition);
+    return { blob: response.data, filename: match ? match[1] : null };
   },
 };
