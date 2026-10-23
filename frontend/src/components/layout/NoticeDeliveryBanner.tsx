@@ -56,7 +56,7 @@ export function NoticeDeliveryBanner() {
   return (
     <div
       role="alert"
-      className="flex items-start gap-2.5 border-b border-warning/30 bg-warning-dim px-4 py-2.5 text-sm text-warning lg:pl-[calc(15rem+1rem)]"
+      className="flex items-start gap-2.5 print:hidden border-b border-warning/30 bg-warning-dim px-4 py-2.5 text-sm text-warning lg:pl-[calc(15rem+1rem)]"
     >
       <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
       <p className="flex-1">{message}</p>

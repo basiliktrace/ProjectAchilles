@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Plus, Pencil, Trash2 } from 'lucide-react';
+import { Plus, Pencil, Trash2, Play } from 'lucide-react';
 import { PageContainer, PageHeader } from '@/components/endpoints/Layout';
 import { Button } from '@/components/shared/ui/Button';
 import { Badge } from '@/components/shared/ui/Badge';
@@ -9,6 +9,7 @@ import { Spinner } from '@/components/shared/ui/Spinner';
 import { useHasPermission } from '@/hooks/useAppRole';
 import { campaignsApi, type CampaignListItem } from '@/services/api/campaigns';
 import { CampaignEditorDialog } from './CampaignEditorDialog';
+import { RunCampaignDialog } from './RunCampaignDialog';
 
 export default function CampaignsPage() {
   const canWrite = useHasPermission('endpoints:tasks:create');
@@ -16,6 +17,7 @@ export default function CampaignsPage() {
   const [error, setError] = useState<string | null>(null);
   const [editorOpen, setEditorOpen] = useState(false);
   const [editing, setEditing] = useState<CampaignListItem | null>(null);
+  const [running, setRunning] = useState<CampaignListItem | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -89,6 +91,9 @@ export default function CampaignsPage() {
                 )}
                 {canWrite && (
                   <>
+                    <Button size="sm" aria-label={`Run ${c.name}`} onClick={() => setRunning(c)}>
+                      <Play className="w-4 h-4 mr-1" />Run
+                    </Button>
                     <Button variant="outline" size="sm" aria-label={`Edit ${c.name}`}
                       onClick={() => { setEditing(c); setEditorOpen(true); }}>
                       <Pencil className="w-4 h-4" />
@@ -111,6 +116,7 @@ export default function CampaignsPage() {
         onClose={() => setEditorOpen(false)}
         onSaved={() => { setEditorOpen(false); void load(); }}
       />
+      <RunCampaignDialog open={running !== null} campaign={running} onClose={() => setRunning(null)} />
     </PageContainer>
   );
 }

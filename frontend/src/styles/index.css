@@ -288,3 +288,12 @@ code {
     }
   }
 }
+
+/* Campaign evidence page: print the matrix landscape, edge to edge. */
+@page campaign-run { size: landscape; margin: 10mm; }
+@media print {
+  html:has(.campaign-run-print) { background: #ffffff; }
+  .campaign-run-print { page: campaign-run; }
+  .campaign-run-print .campaign-matrix-scroll { overflow: visible; }
+  .campaign-run-print tr { break-inside: avoid; }
+}

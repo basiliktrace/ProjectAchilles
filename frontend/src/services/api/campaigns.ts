@@ -1,4 +1,5 @@
 import { apiClient } from '@/hooks/useAuthenticatedApi';
+import type { NoticeSummary } from '@/types/agent';
 
 export type CellState =
   | 'waiting_for_notice'
@@ -51,7 +52,7 @@ export interface RunMatrix {
     framework_label: string | null;
     started_by: string;
     started_at: string;
-    notice: unknown | null;
+    notice: NoticeSummary | null;
   };
   tests: { uuid: string; name: string }[];
   agents: { id: string; hostname: string; os: string }[];

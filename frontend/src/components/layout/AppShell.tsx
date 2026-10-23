@@ -200,12 +200,12 @@ export function AppShell({ children }: { children: ReactNode }) {
   return (
     <div className="min-h-screen bg-background">
       {/* Fixed sidebar ≥lg */}
-      <aside className="fixed inset-y-0 left-0 z-40 hidden w-60 border-r border-border bg-surface lg:block">
+      <aside className="fixed inset-y-0 left-0 z-40 print:hidden hidden w-60 border-r border-border bg-surface lg:block">
         <SidebarBody {...sidebarProps} />
       </aside>
 
       {/* Mobile top strip <lg */}
-      <header className="flex items-center gap-3 border-b border-border bg-surface px-4 py-3 lg:hidden">
+      <header className="flex items-center gap-3 print:hidden border-b border-border bg-surface px-4 py-3 lg:hidden">
         <Sheet open={mobileOpen} onOpenChange={setMobileOpen}>
           <SheetTrigger asChild>
             <Button variant="ghost" size="icon-sm" aria-label="Open navigation">
@@ -223,7 +223,7 @@ export function AppShell({ children }: { children: ReactNode }) {
       <NoticeDeliveryBanner />
 
       {/* Main */}
-      <main className="lg:pl-60">
+      <main className="lg:pl-60 print:pl-0">
         <div className="mx-auto max-w-7xl px-4 py-5 sm:px-6 sm:py-6">{children}</div>
       </main>
 
