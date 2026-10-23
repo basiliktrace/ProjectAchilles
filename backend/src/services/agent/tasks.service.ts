@@ -1,7 +1,4 @@
 import crypto from 'crypto';
-import fs from 'fs';
-import path from 'path';
-import os from 'os';
 import { getDatabase } from './database.js';
 import { AppError } from '../../middleware/error.middleware.js';
 import type {
@@ -18,6 +15,7 @@ import type {
   ListTasksRequest,
 } from '../../types/agent.js';
 import { getTestMetadata } from './test-catalog.service.js';
+import { readBuildMeta, resolveTestArtifact } from './testArtifacts.js';
 import { IntegrationsSettingsService } from '../integrations/settings.js';
 import { recordEvent } from './events.service.js';
 import { getNoticeSummaries } from '../notices/notices.repo.js';
@@ -191,52 +189,35 @@ export function createTasks(
     throw new AppError('test_uuid, test_name, and binary_name are required', 400);
   }
 
-  // Resolve build directory and read build-meta.json
-  const buildDir = path.join(os.homedir(), '.projectachilles', 'builds', test_uuid);
-  const metaPath = path.join(buildDir, 'build-meta.json');
+  // Build metadata must exist (404 otherwise); per-OS artifact resolution is
+  // shared with campaign preflight in testArtifacts.ts.
+  const buildMeta = readBuildMeta(test_uuid);
 
-  if (!fs.existsSync(metaPath)) {
+  if (!buildMeta) {
     throw new AppError(`Build metadata not found for test ${test_uuid}`, 404);
   }
 
-  const buildMeta = JSON.parse(fs.readFileSync(metaPath, 'utf-8'));
-
-  // Resolve the test binary PER AGENT OS. A cross-platform build records a
-  // per-OS `binaries` map ({ windows: {filename}, linux: {filename}, ... });
-  // older single-binary builds only have one `filename`/`binary_name`. Shipping
-  // one binary to every agent regardless of OS caused Windows agents to receive
-  // the Linux orchestrator (no `.exe`), which Windows refuses to launch
-  // ("executable file not found in %PATH%"). Each agent now gets the artifact
-  // built for its own OS; hashes/sizes are memoized so each file is read once.
-  const legacyFilename: string = buildMeta.binary_name ?? buildMeta.filename ?? binary_name;
-  const hasOsMap = buildMeta.binaries && typeof buildMeta.binaries === 'object';
+  // Resolve the test binary PER AGENT OS (see resolveTestArtifact). Shipping one
+  // binary to every agent regardless of OS caused Windows agents to receive the
+  // Linux orchestrator. Results are memoized per OS so each file is read once.
   const artifactCache = new Map<string, { name: string; sha256: string; size: number }>();
 
   function resolveArtifactForOs(agentOs: string): { name: string; sha256: string; size: number } {
-    const filename: string | undefined = hasOsMap
-      ? buildMeta.binaries[agentOs]?.filename
-      : legacyFilename;
-    if (!filename) {
-      const built = hasOsMap ? Object.keys(buildMeta.binaries).join(', ') : 'none';
+    const cached = artifactCache.get(agentOs);
+    if (cached) return cached;
+    const res = resolveTestArtifact(test_uuid, agentOs, { fallbackFilename: binary_name, meta: buildMeta });
+    if (!res.ok) {
+      if (res.reason === 'binary missing on server') {
+        throw new AppError(`Binary file not found: ${res.filename}`, 404);
+      }
+      const built = res.built && res.built.length > 0 ? res.built.join(', ') : 'none';
       throw new AppError(
         `No binary was built for OS '${agentOs}' (test ${test_uuid}; built for: ${built})`,
         422,
       );
     }
-    const cached = artifactCache.get(filename);
-    if (cached) return cached;
-
-    const resolvedPath = path.join(buildDir, filename);
-    if (!fs.existsSync(resolvedPath)) {
-      throw new AppError(`Binary file not found: ${filename}`, 404);
-    }
-    const buffer = fs.readFileSync(resolvedPath);
-    const artifact = {
-      name: filename,
-      sha256: crypto.createHash('sha256').update(buffer).digest('hex'),
-      size: fs.statSync(resolvedPath).size,
-    };
-    artifactCache.set(filename, artifact);
+    const artifact = { name: res.binaryName, sha256: res.sha256, size: res.size };
+    artifactCache.set(agentOs, artifact);
     return artifact;
   }
 
