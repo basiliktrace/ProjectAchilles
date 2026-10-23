@@ -28,9 +28,6 @@ router.use(requireClerkAuth());
  * org_id of the tasks it gates).
  */
 
-/** The caller's org settings (the `getSettingsService(req)` pattern of integrations.routes). */
-const settingsService = (req: Request): IntegrationsSettingsService =>
-  new IntegrationsSettingsService(getUserOrgId(req.auth));
 
 /**
  * Which notices the caller may see or act on. A caller with a Clerk org sees
@@ -46,6 +43,17 @@ function noticeScope(req: Request): NoticeScope {
   }
   return { kind: 'all' };
 }
+
+/**
+ * The caller's org settings (the `getSettingsService(req)` pattern of
+ * integrations.routes). Same isolation rule as noticeScope (Ruling R22): a
+ * no-org caller under REQUIRE_ORG_ISOLATION=true gets 403; otherwise it edits
+ * the legacy top level.
+ */
+const settingsService = (req: Request): IntegrationsSettingsService => {
+  const scope = noticeScope(req);
+  return new IntegrationsSettingsService(scope.kind === 'org' ? scope.orgId : undefined);
+};
 
 // Usable SMTP (host + from address), not the alerts `configured` flag: the
 // Alerts UI never sends that flag, so it stays false after a UI save.

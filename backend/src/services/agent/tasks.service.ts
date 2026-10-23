@@ -21,6 +21,7 @@ import { getTestMetadata } from './test-catalog.service.js';
 import { IntegrationsSettingsService } from '../integrations/settings.js';
 import { recordEvent } from './events.service.js';
 import { getNoticeSummaries } from '../notices/notices.repo.js';
+import type { NoticeScope } from '../notices/types.js';
 
 // ============================================================================
 // HELPERS
@@ -895,9 +896,12 @@ export function listTasks(
 /**
  * List tasks grouped by batch_id with server-side pagination.
  * A group is included if ANY task within it matches the filter conditions.
+ * `noticeScope` limits each group's `notices` map (Ruling R21); it does not
+ * filter the task rows.
  */
 export function listTasksGrouped(
-  filters: ListTasksRequest
+  filters: ListTasksRequest,
+  noticeScope: NoticeScope,
 ): { groups: TaskGroup[]; total: number } {
   const db = getDatabase();
 
@@ -1002,7 +1006,7 @@ export function listTasksGrouped(
       tasks,
     };
     if (noticeIds.length > 0) {
-      const notices = getNoticeSummaries(noticeIds);
+      const notices = getNoticeSummaries(noticeIds, noticeScope);
       if (Object.keys(notices).length > 0) group.notices = notices;
     }
     return group;

@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { asyncHandler, AppError } from '../../middleware/error.middleware.js';
-import { getUserId, requirePermission, validateRequestOrgId } from '../../middleware/clerk.middleware.js';
+import { getUserId, getUserOrgId, requirePermission, validateRequestOrgId } from '../../middleware/clerk.middleware.js';
 import {
   createTasks,
   createTasksBatch,
@@ -357,7 +357,10 @@ adminTasksRouter.get(
       offset: req.query.offset ? parseInt(req.query.offset as string, 10) : undefined,
     };
 
-    const result = listTasksGrouped(filters);
+    // Ruling R21: an org caller's notice map holds only its own org's notices.
+    // The task rows themselves are not org-scoped here (separate follow-up).
+    const callerOrg = getUserOrgId(req.auth);
+    const result = listTasksGrouped(filters, callerOrg ? { kind: 'org', orgId: callerOrg } : { kind: 'all' });
 
     // Strip env_vars from admin responses
     for (const group of result.groups) {

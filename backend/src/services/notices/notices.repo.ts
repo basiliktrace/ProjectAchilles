@@ -548,16 +548,21 @@ export function listNotices(limit: number, offset: number, scope: NoticeScope): 
 
 const SUMMARY_CHUNK = 500;
 
-/** Summaries keyed by notice id; unknown ids are omitted. */
-export function getNoticeSummaries(ids: string[]): Record<string, NoticeSummary> {
+/**
+ * Summaries keyed by notice id; unknown ids and notices outside `scope` are
+ * omitted (Ruling R21: an org caller never sees another org's notice, even
+ * next to a task row it can see).
+ */
+export function getNoticeSummaries(ids: string[], scope: NoticeScope): Record<string, NoticeSummary> {
   const unique = [...new Set(ids.filter((id) => typeof id === 'string' && id.length > 0))];
   const out: Record<string, NoticeSummary> = {};
   for (let i = 0; i < unique.length; i += SUMMARY_CHUNK) {
     const chunk = unique.slice(i, i + SUMMARY_CHUNK);
     const placeholders = chunk.map(() => '?').join(', ');
+    const f = scopeFilter(scope);
     const rows = getDatabase()
-      .prepare(`SELECT id, state, last_error, release_at, pickup_deadline FROM run_notices WHERE id IN (${placeholders})`)
-      .all(...chunk) as Array<Omit<NoticeSummary, 'run_tag'>>;
+      .prepare(`SELECT id, state, last_error, release_at, pickup_deadline FROM run_notices WHERE id IN (${placeholders})${f.sql}`)
+      .all(...chunk, ...f.params) as Array<Omit<NoticeSummary, 'run_tag'>>;
     for (const r of rows) {
       out[r.id] = {
         id: r.id,

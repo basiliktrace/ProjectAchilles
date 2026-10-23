@@ -446,6 +446,64 @@ describe("5. legacy: tasks with org_id 'default' and settings only at the top le
   });
 });
 
+describe('R21. grouped task list: the notices map is scoped to the caller org', () => {
+  const NA = 'aaaaaa11-0000-0000-0000-000000000000';
+  const NB = 'bbbbbb22-0000-0000-0000-000000000000';
+  beforeEach(() => {
+    insertTestAgent(testDb, { id: 'agent-a', org_id: ORG_A });
+    insertTestAgent(testDb, { id: 'agent-b', org_id: ORG_B });
+    insertNotice(NA, ORG_A);
+    insertNotice(NB, ORG_B);
+    insertTestTask(testDb, { id: 'task-a', agent_id: 'agent-a', org_id: ORG_A, batch_id: 'batch-a' });
+    insertTestTask(testDb, { id: 'task-b', agent_id: 'agent-b', org_id: ORG_B, batch_id: 'batch-b' });
+    testDb.prepare('UPDATE tasks SET notice_id = ? WHERE id = ?').run(NA, 'task-a');
+    testDb.prepare('UPDATE tasks SET notice_id = ? WHERE id = ?').run(NB, 'task-b');
+  });
+  const groups = async () => {
+    const res = await request(app()).get('/api/agent/admin/tasks/grouped');
+    expect(res.status).toBe(200);
+    return new Map<string, { notices?: Record<string, unknown> }>(
+      res.body.data.groups.map((g: { batch_id: string }) => [g.batch_id, g]),
+    );
+  };
+
+  it("an org A caller still gets org B's group, but not org B's notice; org A's notice is there", async () => {
+    asOrg(ORG_A);
+    const g = await groups();
+    expect([...g.keys()].sort()).toEqual(['batch-a', 'batch-b']);
+    expect(Object.keys(g.get('batch-a')!.notices ?? {})).toEqual([NA]);
+    expect(g.get('batch-b')!.notices).toBeUndefined();
+  });
+
+  it('a no-org caller sees both notices', async () => {
+    asNoOrg();
+    const g = await groups();
+    expect(Object.keys(g.get('batch-a')!.notices ?? {})).toEqual([NA]);
+    expect(Object.keys(g.get('batch-b')!.notices ?? {})).toEqual([NB]);
+  });
+});
+
+describe('R22. notice settings routes honour REQUIRE_ORG_ISOLATION', () => {
+  it('a no-org caller gets 403 from PUT /settings and nothing is written', async () => {
+    process.env.REQUIRE_ORG_ISOLATION = 'true';
+    asNoOrg();
+    const before = fs.readFileSync(SETTINGS_FILE, 'utf8');
+    const put = await request(app()).put('/api/notices/settings').send({ enabled: true, recipients: ['x@x.test'] });
+    expect(put.status).toBe(403);
+    expect(fs.readFileSync(SETTINGS_FILE, 'utf8')).toBe(before);
+    expect((await request(app()).get('/api/notices/settings')).status).toBe(403);
+    expect((await request(app()).post('/api/notices/settings/test')).status).toBe(403);
+    expect(mockSendMail).not.toHaveBeenCalled();
+  });
+
+  it('an org caller is unaffected by REQUIRE_ORG_ISOLATION', async () => {
+    process.env.REQUIRE_ORG_ISOLATION = 'true';
+    asOrg(ORG_A);
+    const put = await request(app()).put('/api/notices/settings').send({ enabled: true, recipients: ['a@a.test'] });
+    expect(put.status).toBe(200);
+  });
+});
+
 describe('6-8. scheduler and sweeps use the owning org', () => {
   const NOW = new Date('2026-10-23T12:00:00.000Z');
   const METADATA = {

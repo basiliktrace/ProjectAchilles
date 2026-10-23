@@ -732,7 +732,7 @@ describe('pre-execution notice sweeps', () => {
     it('getNoticeSummaries maps ids to summaries', () => {
       insertNotice('7f3c9a12-0000-4000-8000-000000000000');
       insertSentNotice('n-sent', 10 * MIN);
-      const s = getNoticeSummaries(['7f3c9a12-0000-4000-8000-000000000000', 'n-sent', 'missing']);
+      const s = getNoticeSummaries(['7f3c9a12-0000-4000-8000-000000000000', 'n-sent', 'missing'], ALL);
       expect(Object.keys(s).sort()).toEqual(['7f3c9a12-0000-4000-8000-000000000000', 'n-sent']);
       expect(s['7f3c9a12-0000-4000-8000-000000000000']).toEqual({
         id: '7f3c9a12-0000-4000-8000-000000000000',
@@ -744,7 +744,7 @@ describe('pre-execution notice sweeps', () => {
       });
       expect(s['n-sent'].state).toBe('sent');
       expect(s['n-sent'].pickup_deadline).toBe(at(10 * MIN).toISOString());
-      expect(getNoticeSummaries([])).toEqual({});
+      expect(getNoticeSummaries([], ALL)).toEqual({});
     });
   });
 
