@@ -223,12 +223,14 @@ export interface SchedulerTick {
   confirmRunSchedule(scheduleId: string, orgId: string | null): void;
   dayNoticeFor(schedule: DayNoticeSchedule): string | null;
   /**
-   * Ruling R23: whether today's day notice for `schedule` is already announced
-   * (`sent`/`overridden`) with less than LATE_LINK_MIN_PICKUP_MS before its
-   * pickup deadline. If so, link this tick's due tasks to runNoticeFor instead
-   * of dayNoticeFor. False when the gate is off or there is no such notice.
+   * Rulings R23/R24: today's day notice for `schedule` when it is already
+   * announced (`sent`/`overridden`) with less than LATE_LINK_MIN_PICKUP_MS
+   * before its pickup deadline, as `{ dayWindowEnd }`. The caller then links
+   * this tick's due tasks, plus every remaining agent slotted before
+   * `dayWindowEnd`, to runNoticeFor instead of dayNoticeFor. Null when the
+   * gate is off or there is no such notice.
    */
-  isDayNoticeClosed(schedule: Pick<DayNoticeSchedule, 'id' | 'org_id' | 'timezone'>): boolean;
+  closedDayNotice(schedule: Pick<DayNoticeSchedule, 'id' | 'org_id' | 'timezone'>): { dayWindowEnd: Date } | null;
   hasPendingRunNotice(scheduleId: string, orgId: string | null): boolean;
   recordSkippedOccurrence(scheduleId: string, createdBy: string, timezone: string, orgId: string | null): void;
 }
@@ -337,16 +339,19 @@ export function createSchedulerTick(now: Date): SchedulerTick {
       }
     },
 
-    isDayNoticeClosed(schedule) {
-      if (!gateEnabled(schedule.org_id)) return false;
+    closedDayNotice(schedule) {
+      if (!gateEnabled(schedule.org_id)) return null;
       const tz = safeTimezone(schedule.timezone);
       const existing = repo.getDayNotice(schedule.id, todayInTimezone(tz, now));
       // Pending: its deadline is computed at acceptance (R7). not_delivered /
       // skipped keep their own rules (R5/R18/R19).
-      if (!existing || (existing.state !== 'sent' && existing.state !== 'overridden')) return false;
+      if (!existing || (existing.state !== 'sent' && existing.state !== 'overridden')) return null;
       const deadline = parseTimestamp(existing.pickup_deadline);
       // A released notice with no deadline would never serve a task.
-      return deadline === null || deadline - now.getTime() < LATE_LINK_MIN_PICKUP_MS;
+      const closed = deadline === null || deadline - now.getTime() < LATE_LINK_MIN_PICKUP_MS;
+      if (!closed) return null;
+      // Without a stored window end, sweep nothing beyond the agents due now.
+      return { dayWindowEnd: new Date(parseTimestamp(existing.day_window_end) ?? now.getTime()) };
     },
 
     hasPendingRunNotice(scheduleId, orgId) {

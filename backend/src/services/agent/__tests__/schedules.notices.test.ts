@@ -275,14 +275,20 @@ describe('processSchedules: late per_machine runs and a closed day notice (R23)'
   const T = (hhmmss: string) => new Date(`2026-10-23T${hhmmss}.000Z`);
   const DAY_DEADLINE = T('17:00:00');
 
-  function insertDayNotice(id: string, scheduleId: string, state: 'pending' | 'sent' | 'overridden') {
+  function insertDayNotice(
+    id: string,
+    scheduleId: string,
+    state: 'pending' | 'sent' | 'overridden',
+    win: { date: string; start: Date; end: Date } = { date: '2026-10-23', start: T('09:00:00'), end: DAY_DEADLINE },
+  ) {
     const released = state !== 'pending';
+    const plus = (d: Date, ms: number) => new Date(d.getTime() + ms).toISOString();
     testDb
       .prepare(`
         INSERT INTO run_notices (id, kind, state, source_type, schedule_ids, schedule_id, window_date, timezone,
           announced_agent_ids, day_window_start, day_window_end, created_by, created_at, recipients,
           sent_at, release_at, pickup_deadline, window_end, org_id)
-        VALUES (?, 'day', ?, 'schedule', ?, ?, '2026-10-23', 'UTC', '[]', ?, ?, 'creator', ?, '["a@x.com"]',
+        VALUES (?, 'day', ?, 'schedule', ?, ?, ?, 'UTC', '[]', ?, ?, 'creator', ?, '["a@x.com"]',
           ?, ?, ?, ?, 'org-001')
       `)
       .run(
@@ -290,13 +296,15 @@ describe('processSchedules: late per_machine runs and a closed day notice (R23)'
         state,
         JSON.stringify([scheduleId]),
         scheduleId,
-        T('09:00:00').toISOString(),
-        T('17:00:00').toISOString(),
-        T('09:01:00').toISOString(),
-        released ? T('09:05:00').toISOString() : null,
-        released ? T('09:10:00').toISOString() : null,
-        released ? DAY_DEADLINE.toISOString() : null,
-        released ? T('17:05:00').toISOString() : null,
+        win.date,
+        win.start.toISOString(),
+        win.end.toISOString(),
+        plus(win.start, MIN),
+        released ? plus(win.start, 5 * MIN) : null,
+        released ? plus(win.start, 10 * MIN) : null,
+        // The usual case: accepted early, so the deadline is the window end.
+        released ? win.end.toISOString() : null,
+        released ? plus(win.end, 5 * MIN) : null,
       );
   }
 
@@ -436,6 +444,8 @@ describe('processSchedules: late per_machine runs and a closed day notice (R23)'
     expect(notices()).toHaveLength(1);
   });
 
+  // Guards the redirect against someone adding the fleet collision skip to it:
+  // these per-machine runs are already due and must not be dropped.
   it('a pending run notice for the same schedule does not skip the late per_machine runs', () => {
     insertDayNotice('day-1', 'pm', 'sent');
     testDb
@@ -458,5 +468,109 @@ describe('processSchedules: late per_machine runs and a closed day notice (R23)'
     expect(['day-1', 'run-old']).not.toContain(runId);
     expect(noticeById(runId)).toMatchObject({ kind: 'run', state: 'pending' });
     expect(notices().filter((n) => n.state === 'skipped')).toHaveLength(0);
+  });
+
+  describe('R24: the late tail of a window is batched into one run notice', () => {
+    const scheduleRow = (id: string) =>
+      testDb.prepare('SELECT agent_next_runs, next_run_at FROM schedules WHERE id = ?').get(id) as {
+        agent_next_runs: string;
+        next_run_at: string;
+      };
+    const runNotices = () => notices().filter((n) => n.kind === 'run');
+
+    beforeEach(() => {
+      // Re-rolls land at 09:00 local: today's is already past, so every advanced
+      // agent moves to tomorrow (keeps the advance deterministic).
+      vi.spyOn(Math, 'random').mockReturnValue(0);
+      for (const a of ['agent-4', 'agent-5']) insertTestAgent(testDb, { id: a, hostname: `host-${a}` });
+    });
+
+    afterEach(() => {
+      vi.mocked(Math.random).mockRestore();
+    });
+
+    it('agents due 16:51-16:59 share ONE run notice created on the first late tick; later ticks add nothing', () => {
+      insertDayNotice('day-1', 'pm', 'sent');
+      perMachine('pm', {
+        'agent-1': T('16:51:00'),
+        'agent-2': T('16:53:00'),
+        'agent-3': T('16:55:00'),
+        'agent-4': T('16:57:00'),
+        'agent-5': T('16:59:00'),
+      });
+
+      for (let m = 51; m <= 59; m++) {
+        const now = T(`16:${m}:30`);
+        vi.setSystemTime(now);
+        expect(processSchedules(now).errors).toEqual([]);
+        if (m === 51) {
+          // Everything up to the window end is dispatched on the first late tick.
+          expect(tasksOf()).toHaveLength(5);
+          expect(runNotices()).toHaveLength(1);
+        }
+      }
+
+      const runs = runNotices();
+      expect(runs).toHaveLength(1);
+      expect(JSON.parse(runs[0].schedule_ids)).toEqual(['pm']);
+      const ts = tasksOf();
+      expect(ts.map((t) => t.agent_id)).toEqual(['agent-1', 'agent-2', 'agent-3', 'agent-4', 'agent-5']);
+      expect(ts.every((t) => t.notice_id === runs[0].id)).toBe(true);
+      // All five were advanced as if they had fired: next run is tomorrow.
+      const map = JSON.parse(scheduleRow('pm').agent_next_runs) as Record<string, string>;
+      expect(Object.values(map).every((v) => v > DAY_DEADLINE.toISOString())).toBe(true);
+      expect(noticeById('day-1').pickup_deadline).toBe(DAY_DEADLINE.toISOString());
+    });
+
+    it('does not sweep an agent whose next run is tomorrow', () => {
+      insertDayNotice('day-1', 'pm', 'sent');
+      const tomorrow = new Date('2026-10-24T09:30:00.000Z');
+      perMachine('pm', { 'agent-1': T('16:55:00'), 'agent-2': T('16:58:00'), 'agent-3': tomorrow });
+      const now = T('16:55:30');
+      vi.setSystemTime(now);
+
+      expect(processSchedules(now).errors).toEqual([]);
+
+      expect(tasksOf().map((t) => t.agent_id)).toEqual(['agent-1', 'agent-2']);
+      const map = JSON.parse(scheduleRow('pm').agent_next_runs) as Record<string, string>;
+      expect(map['agent-3']).toBe(tomorrow.toISOString());
+    });
+
+    it('weekend: an agent at next-day 00:00 (the window end instant) is not swept', () => {
+      // Saturday 2026-10-24: the window is 00:00 to Sunday 00:00.
+      const sat = (hhmmss: string) => new Date(`2026-10-24T${hhmmss}.000Z`);
+      const sunday0 = new Date('2026-10-25T00:00:00.000Z');
+      insertDayNotice('day-sat', 'pm', 'sent', { date: '2026-10-24', start: sat('00:00:00'), end: sunday0 });
+      perMachine('pm', { 'agent-1': sat('23:55:00'), 'agent-2': sat('23:58:00'), 'agent-3': sunday0 });
+      const now = sat('23:55:30');
+      vi.setSystemTime(now);
+
+      expect(processSchedules(now).errors).toEqual([]);
+
+      expect(tasksOf().map((t) => t.agent_id)).toEqual(['agent-1', 'agent-2']);
+      const map = JSON.parse(scheduleRow('pm').agent_next_runs) as Record<string, string>;
+      expect(map['agent-3']).toBe(sunday0.toISOString());
+    });
+
+    it('redirect path: a createTasks failure leaves the schedule off the notice, which is skipped without email', async () => {
+      insertDayNotice('day-1', 'pm', 'sent');
+      perMachine('pm', { 'agent-1': T('16:55:00'), 'agent-2': T('16:58:00') });
+      fs.rmSync(path.join(SETTINGS_DIR, 'builds', 'uuid-pm'), { recursive: true, force: true });
+      const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const now = T('16:55:30');
+      vi.setSystemTime(now);
+
+      expect(processSchedules(now).errors).toHaveLength(1);
+
+      expect(tasksOf()).toHaveLength(0);
+      const runs = runNotices();
+      expect(runs).toHaveLength(1);
+      expect(JSON.parse(runs[0].schedule_ids)).toEqual([]);
+
+      await tick(now);
+      expect(noticeById(runs[0].id)).toMatchObject({ state: 'skipped', skip_reason: 'no tasks were created' });
+      expect(mockSendMail).not.toHaveBeenCalled();
+      errSpy.mockRestore();
+    });
   });
 });
