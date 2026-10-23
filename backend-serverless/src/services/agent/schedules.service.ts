@@ -60,43 +60,69 @@ function parseScheduleRow(row: ScheduleRow): Schedule {
 }
 
 /**
- * For active recurring schedules whose next_run_at is in the past (e.g. after
- * the machine was off and missed a run), recompute next_run_at to the next
- * future occurrence and persist it so the cron tick reads the same value
- * the UI shows. See the backend/ counterpart for full rationale.
- *
- * Persistence is conditional: we only write when next_run_at was already in
- * the past, to keep `randomize_time` stable across page refreshes.
+ * How far past due a schedule (or a per_machine agent slot) must be before
+ * listSchedules/getSchedule advance it. Within this window the scheduler cron
+ * still fires the run; advancing it on a read would silently skip it (the
+ * Dashboard and Tasks pages poll every 10-15 seconds).
  */
-async function freshenNextRun(schedule: Schedule): Promise<Schedule> {
+export const FRESHEN_GRACE_MS = 5 * 60_000;
+
+/**
+ * For active recurring schedules whose next_run_at is more than
+ * FRESHEN_GRACE_MS in the past (e.g. after the machine was off and missed a
+ * run), recompute next_run_at to the next future occurrence and persist it so
+ * the cron tick reads the same value the UI shows. Missed runs are skipped,
+ * not backfilled, and today's slot is still allowed (no afterFire). See the
+ * backend/ counterpart for full rationale.
+ *
+ * Persistence is conditional: we only write when next_run_at is past the
+ * grace period, to keep `randomize_time` stable across page refreshes and to
+ * leave a run that is about to fire for the cron.
+ *
+ * The write only applies if the row still holds the values read here. A
+ * request reads, computes and writes across awaits, so the cron can advance
+ * the row in between; overwriting it could schedule a same-day second run.
+ * When 0 rows change, the cron's value wins and is returned.
+ */
+async function freshenNextRun(row: ScheduleRow): Promise<Schedule> {
+  const schedule = parseScheduleRow(row);
   if (
     schedule.status !== 'active' ||
     schedule.schedule_type === 'once' ||
-    !schedule.next_run_at
+    !row.next_run_at
   ) {
     return schedule;
   }
 
-  const nextRunDate = new Date(schedule.next_run_at);
-  if (nextRunDate > new Date()) return schedule;
+  const cutoffMs = Date.now() - FRESHEN_GRACE_MS;
+  if (new Date(row.next_run_at).getTime() >= cutoffMs) return schedule;
 
-  // per_machine: advance each past-due agent to its next occurrence and re-min.
+  const db = await getDb();
+  const reread = async (): Promise<Schedule> => {
+    const current = await db.get('SELECT * FROM schedules WHERE id = ?', [schedule.id]) as unknown as ScheduleRow | undefined;
+    return current ? parseScheduleRow(current) : schedule;
+  };
+
+  // per_machine: advance each agent slot past the grace period and re-min.
   // Mirrors the fleet semantics below — missed runs are skipped, not backfilled.
   if (resolveRandomizeMode(schedule.schedule_config) === 'per_machine' && schedule.agent_next_runs) {
     const map = { ...schedule.agent_next_runs };
-    const nowIso = new Date().toISOString();
+    let advanced = false;
     for (const id of Object.keys(map)) {
-      if (map[id] > nowIso) continue;
+      if (new Date(map[id]).getTime() >= cutoffMs) continue;
       const next = computeNextRun(schedule.schedule_type, schedule.schedule_config, schedule.timezone);
       if (next) map[id] = next.toISOString();
       else delete map[id];
+      advanced = true;
     }
+    if (!advanced) return schedule;
     const freshMin = minNextRun(map);
-    const db = await getDb();
-    await db.run(
-      'UPDATE schedules SET next_run_at = ?, agent_next_runs = ?, updated_at = datetime(\'now\') WHERE id = ?',
-      [freshMin, JSON.stringify(map), schedule.id]
+    const { changes } = await db.run(
+      'UPDATE schedules SET next_run_at = ?, agent_next_runs = ?, updated_at = datetime(\'now\') ' +
+      'WHERE id = ? AND next_run_at = ? AND agent_next_runs = ?',
+      [freshMin, JSON.stringify(map), schedule.id, row.next_run_at, row.agent_next_runs]
     );
+    if (changes === 0) return reread();
     return { ...schedule, next_run_at: freshMin, agent_next_runs: map };
   }
 
@@ -111,11 +137,11 @@ async function freshenNextRun(schedule: Schedule): Promise<Schedule> {
   const freshNextIso = freshNext.toISOString();
 
   // Persist so the cron tick (processSchedules) reads the fresh value too.
-  const db = await getDb();
-  await db.run(
-    'UPDATE schedules SET next_run_at = ?, updated_at = datetime(\'now\') WHERE id = ?',
-    [freshNextIso, schedule.id]
+  const { changes } = await db.run(
+    'UPDATE schedules SET next_run_at = ?, updated_at = datetime(\'now\') WHERE id = ? AND next_run_at = ?',
+    [freshNextIso, schedule.id, row.next_run_at]
   );
+  if (changes === 0) return reread();
 
   return {
     ...schedule,
@@ -470,14 +496,14 @@ export async function listSchedules(
     [...params]
   ) as unknown as ScheduleRow[];
 
-  return Promise.all(rows.map(parseScheduleRow).map(freshenNextRun));
+  return Promise.all(rows.map(freshenNextRun));
 }
 
 export async function getSchedule(id: string): Promise<Schedule> {
   const db = await getDb();
   const row = await db.get('SELECT * FROM schedules WHERE id = ?', [id]) as unknown as ScheduleRow | undefined;
   if (!row) throw new AppError('Schedule not found', 404);
-  return freshenNextRun(parseScheduleRow(row));
+  return freshenNextRun(row);
 }
 
 export async function updateSchedule(
