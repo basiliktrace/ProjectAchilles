@@ -216,15 +216,30 @@ function addDays(dateStr: string, days: number): string {
   return d.toISOString().slice(0, 10);
 }
 
+export interface ComputeNextRunOptions {
+  /**
+   * Set when advancing a schedule right after it fired (processSchedules).
+   * For randomized modes, every slot on the fire's local calendar day
+   * (`todayInTimezone(timezone, after)`) is skipped, so a fresh roll later the
+   * same day can't schedule a second run. Fixed mode ignores it: its slot
+   * equals the fire time, so it already moves to the next occurrence.
+   */
+  afterFire?: boolean;
+}
+
 /**
  * Compute the next run time (as UTC ISO string) for a given schedule config.
  * Returns null if the schedule should not run again (completed one-time).
+ *
+ * Without `opts.afterFire` today's slot is still allowed (creation, update,
+ * freshenNextRun).
  */
 export function computeNextRun(
   type: ScheduleType,
   config: ScheduleConfig,
   timezone: string,
-  after?: Date
+  after?: Date,
+  opts?: ComputeNextRunOptions,
 ): Date | null {
   const now = after ?? new Date();
 
@@ -232,6 +247,8 @@ export function computeNextRun(
   // uses the configured `time`. (For 'per_machine', the caller invokes this once
   // per agent so each agent gets an independent random roll.)
   const randomize = type !== 'once' && resolveRandomizeMode(config) !== 'fixed';
+  // A randomized schedule that just fired must not land on the same local day.
+  const skipToday = randomize && opts?.afterFire === true;
 
   switch (type) {
     case 'once': {
@@ -243,9 +260,11 @@ export function computeNextRun(
     case 'daily': {
       const c = config as ScheduleConfigDaily;
       const todayStr = todayInTimezone(timezone, now);
-      const time = randomize ? randomTimeForDate(todayStr, timezone) : c.time;
-      const candidate = toUTCDate(todayStr, time, timezone);
-      if (candidate > now) return candidate;
+      if (!skipToday) {
+        const time = randomize ? randomTimeForDate(todayStr, timezone) : c.time;
+        const candidate = toUTCDate(todayStr, time, timezone);
+        if (candidate > now) return candidate;
+      }
       const tomorrowStr = addDays(todayStr, 1);
       const tomorrowTime = randomize ? randomTimeForDate(tomorrowStr, timezone) : c.time;
       return toUTCDate(tomorrowStr, tomorrowTime, timezone);
@@ -260,6 +279,7 @@ export function computeNextRun(
 
       // Check each of the next 8 days (covers wrapping around a week)
       for (let offset = 0; offset <= 7; offset++) {
+        if (skipToday && offset === 0) continue;
         const checkDay = (currentDay + offset) % 7;
         if (c.days.includes(checkDay)) {
           const dateStr = addDays(todayStr, offset);
@@ -279,9 +299,11 @@ export function computeNextRun(
       // Try this month
       const dayStr = String(Math.min(c.dayOfMonth, daysInMonth(year, month))).padStart(2, '0');
       const thisMonthDate = `${year}-${String(month).padStart(2, '0')}-${dayStr}`;
-      const thisTime = randomize ? randomTimeForDate(thisMonthDate, timezone) : c.time;
-      const candidate = toUTCDate(thisMonthDate, thisTime, timezone);
-      if (candidate > now) return candidate;
+      if (!(skipToday && thisMonthDate === todayStr)) {
+        const thisTime = randomize ? randomTimeForDate(thisMonthDate, timezone) : c.time;
+        const candidate = toUTCDate(thisMonthDate, thisTime, timezone);
+        if (candidate > now) return candidate;
+      }
 
       // Next month
       const nextMonth = month === 12 ? 1 : month + 1;
@@ -647,7 +669,9 @@ export async function processSchedules(): Promise<{ processed: number; errors: s
       // is not re-selected on every tick.
       for (const id of Object.keys(map)) {
         if (map[id] > nowIso) continue;
-        const next = computeNextRun(schedule.schedule_type, schedule.schedule_config, schedule.timezone, now);
+        const next = computeNextRun(
+          schedule.schedule_type, schedule.schedule_config, schedule.timezone, now, { afterFire: true },
+        );
         if (next) map[id] = next.toISOString();
         else delete map[id];
       }
@@ -701,6 +725,7 @@ export async function processSchedules(): Promise<{ processed: number; errors: s
         schedule.schedule_config,
         schedule.timezone,
         now,
+        { afterFire: true },
       );
       await db.run(
         "UPDATE schedules SET next_run_at = ?, last_run_at = ?, updated_at = datetime('now') WHERE id = ?",

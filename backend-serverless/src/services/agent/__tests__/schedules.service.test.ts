@@ -826,4 +826,168 @@ describe('schedules.service', () => {
       expect(updated.agent_next_runs).toBeNull();
     });
   });
+
+  // ==========================================================================
+  // R25: a randomized schedule never runs twice on the same local day
+  // ==========================================================================
+
+  describe('randomized schedules never run twice on the same day (R25)', () => {
+    // processSchedules() here has no clock parameter: its due-query uses
+    // SQLite's wall clock, and the JS `now` comes from vi.setSystemTime. These
+    // dates are in the real past, so the SQL always selects the row and the
+    // fake JS clock alone decides what is due and how it advances.
+
+    // Weekday window is 09:00-17:00 (480 min): 300/480 rolls 14:00.
+    const ROLL_14_00 = 0.625;
+    // Weekend window is 00:00-24:00 (1440 min): 1380/1440 rolls 23:00.
+    const ROLL_23_00 = 1380.5 / 1440;
+    const MON_10_00 = new Date('2026-02-09T10:00:00.000Z'); // Monday, UTC
+
+    const rowOf = async (id: string) =>
+      (await testDb.get('SELECT next_run_at, agent_next_runs FROM schedules WHERE id = ?', [id])) as unknown as {
+        next_run_at: string | null;
+        agent_next_runs: string | null;
+      };
+
+    it('daily fleet: after firing at 10:00, next_run_at is tomorrow inside tomorrow\'s window', async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(MON_10_00);
+      vi.spyOn(Math, 'random').mockReturnValue(ROLL_14_00);
+      const schedule = await createSchedule(baseScheduleRequest({
+        schedule_config: { time: '10:00', randomize_mode: 'fleet' },
+      }), 'user-001');
+      await testDb.run('UPDATE schedules SET next_run_at = ? WHERE id = ?', [MON_10_00.toISOString(), schedule.id]);
+
+      await processSchedules();
+
+      expect(mockCreateTasks).toHaveBeenCalledTimes(1);
+      const next = (await rowOf(schedule.id)).next_run_at!;
+      expect(next).toBe('2026-02-10T14:00:00.000Z');
+      expect(next >= '2026-02-10T09:00:00.000Z' && next < '2026-02-10T17:00:00.000Z').toBe(true);
+    });
+
+    it('daily per_machine: the agent advances to tomorrow and a 14:01 tick does not dispatch again', async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(MON_10_00);
+      vi.spyOn(Math, 'random').mockReturnValue(ROLL_14_00);
+      const schedule = await createSchedule(baseScheduleRequest({
+        schedule_config: { time: '10:00', randomize_mode: 'per_machine' },
+      }), 'user-001');
+      await testDb.run('UPDATE schedules SET agent_next_runs = ?, next_run_at = ? WHERE id = ?',
+        [JSON.stringify({ 'agent-001': MON_10_00.toISOString() }), MON_10_00.toISOString(), schedule.id]);
+
+      await processSchedules();
+      expect(mockCreateTasks).toHaveBeenCalledTimes(1);
+      const map = JSON.parse((await rowOf(schedule.id)).agent_next_runs!) as Record<string, string>;
+      expect(map['agent-001']).toBe('2026-02-10T14:00:00.000Z');
+
+      vi.setSystemTime(new Date('2026-02-09T14:01:00.000Z'));
+      await processSchedules();
+      expect(mockCreateTasks).toHaveBeenCalledTimes(1);
+    });
+
+    it('weekly: after firing today, the next run is the next configured weekday, not today', () => {
+      vi.spyOn(Math, 'random').mockReturnValue(ROLL_14_00);
+      // Mon (today) and Wed (the day after tomorrow).
+      const next = computeNextRun('weekly', { days: [1, 3], time: '10:00', randomize_mode: 'fleet' }, 'UTC', MON_10_00, { afterFire: true });
+      expect(next!.toISOString()).toBe('2026-02-11T14:00:00.000Z');
+    });
+
+    it('weekly through processSchedules: fired Monday, next_run_at is Wednesday', async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(MON_10_00);
+      vi.spyOn(Math, 'random').mockReturnValue(ROLL_14_00);
+      const schedule = await createSchedule(baseScheduleRequest({
+        schedule_type: 'weekly',
+        schedule_config: { days: [1, 3], time: '10:00', randomize_mode: 'fleet' },
+      }), 'user-001');
+      await testDb.run('UPDATE schedules SET next_run_at = ? WHERE id = ?', [MON_10_00.toISOString(), schedule.id]);
+
+      await processSchedules();
+
+      expect((await rowOf(schedule.id)).next_run_at).toBe('2026-02-11T14:00:00.000Z');
+    });
+
+    it('monthly: after firing on the configured day, the next run is next month', () => {
+      vi.spyOn(Math, 'random').mockReturnValue(ROLL_14_00);
+      const next = computeNextRun('monthly', { dayOfMonth: 9, time: '10:00', randomize_mode: 'fleet' }, 'UTC', MON_10_00, { afterFire: true });
+      expect(next!.toISOString()).toBe('2026-03-09T14:00:00.000Z');
+    });
+
+    it('monthly through processSchedules: fired on the 9th, next_run_at is the 9th of next month', async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(MON_10_00);
+      vi.spyOn(Math, 'random').mockReturnValue(ROLL_14_00);
+      const schedule = await createSchedule(baseScheduleRequest({
+        schedule_type: 'monthly',
+        schedule_config: { dayOfMonth: 9, time: '10:00', randomize_mode: 'per_machine' },
+      }), 'user-001');
+      await testDb.run('UPDATE schedules SET agent_next_runs = ?, next_run_at = ? WHERE id = ?',
+        [JSON.stringify({ 'agent-001': MON_10_00.toISOString() }), MON_10_00.toISOString(), schedule.id]);
+
+      await processSchedules();
+
+      const map = JSON.parse((await rowOf(schedule.id)).agent_next_runs!) as Record<string, string>;
+      expect(map['agent-001']).toBe('2026-03-09T14:00:00.000Z');
+    });
+
+    it('fixed mode is unchanged: a 09:00 daily that fires at 09:00 goes to tomorrow 09:00', async () => {
+      const fireAt = new Date('2026-02-09T09:00:00.000Z');
+      expect(computeNextRun('daily', { time: '09:00' }, 'UTC', fireAt)!.toISOString())
+        .toBe('2026-02-10T09:00:00.000Z');
+      expect(computeNextRun('daily', { time: '09:00' }, 'UTC', fireAt, { afterFire: true })!.toISOString())
+        .toBe('2026-02-10T09:00:00.000Z');
+
+      vi.useFakeTimers();
+      vi.setSystemTime(fireAt);
+      const schedule = await createSchedule(baseScheduleRequest({ schedule_config: { time: '09:00' } }), 'user-001');
+      await testDb.run('UPDATE schedules SET next_run_at = ? WHERE id = ?', [fireAt.toISOString(), schedule.id]);
+      await processSchedules();
+      expect((await rowOf(schedule.id)).next_run_at).toBe('2026-02-10T09:00:00.000Z');
+    });
+
+    it('fixed mode afterFire: a later fixed time today is still allowed (behaviour unchanged)', () => {
+      // Fixed mode ignores afterFire entirely.
+      const at = new Date('2026-02-09T08:00:00.000Z');
+      expect(computeNextRun('daily', { time: '09:00' }, 'UTC', at, { afterFire: true })!.toISOString())
+        .toBe('2026-02-09T09:00:00.000Z');
+    });
+
+    it('creation still allows today: a randomized daily created at 10:00 rolling 14:00 runs today', async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(MON_10_00);
+      vi.spyOn(Math, 'random').mockReturnValue(ROLL_14_00);
+
+      const fleet = await createSchedule(baseScheduleRequest({
+        schedule_config: { time: '10:00', randomize_mode: 'fleet' },
+      }), 'user-001');
+      expect(fleet.next_run_at).toBe('2026-02-09T14:00:00.000Z');
+
+      const perMachine = await createSchedule(baseScheduleRequest({
+        schedule_config: { time: '10:00', randomize_mode: 'per_machine' },
+      }), 'user-001');
+      expect(perMachine.agent_next_runs!['agent-001']).toBe('2026-02-09T14:00:00.000Z');
+
+      // Without the option, computeNextRun behaves as before.
+      expect(computeNextRun('daily', { time: '10:00', randomize_mode: 'fleet' }, 'UTC', MON_10_00)!.toISOString())
+        .toBe('2026-02-09T14:00:00.000Z');
+    });
+
+    it('timezone: a 22:30 local run (02:30 UTC next day) advances to the next LOCAL day', () => {
+      vi.spyOn(Math, 'random').mockReturnValue(ROLL_23_00);
+      const tz = 'America/Santo_Domingo'; // UTC-4, no DST
+      // Saturday 2026-02-07 22:30 local = Sunday 2026-02-08 02:30 UTC.
+      const fireAt = new Date('2026-02-08T02:30:00.000Z');
+
+      // Without the option a 23:00 roll would stay on Saturday (the bug).
+      expect(computeNextRun('daily', { time: '10:00', randomize_mode: 'fleet' }, tz, fireAt)!.toISOString())
+        .toBe('2026-02-08T03:00:00.000Z');
+
+      const next = computeNextRun('daily', { time: '10:00', randomize_mode: 'fleet' }, tz, fireAt, { afterFire: true })!;
+      // Sunday 2026-02-08 23:00 local = Monday 2026-02-09 03:00 UTC: one local
+      // day later, not two (a UTC-date skip would land on Monday local).
+      expect(next.toISOString()).toBe('2026-02-09T03:00:00.000Z');
+      expect(new Intl.DateTimeFormat('en-CA', { timeZone: tz }).format(next)).toBe('2026-02-08');
+    });
+  });
 });
