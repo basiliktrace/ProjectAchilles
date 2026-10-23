@@ -25,7 +25,7 @@ describe('buildIcs', () => {
   });
   it('escapes TEXT', () => {
     const ics = buildIcs({ ...base, summary: 'a,b;c', description: 'l1\nl2\\' });
-    expect(ics).toContain('SUMMARY:a\\,b\;c\r\n');
+    expect(ics).toContain('SUMMARY:a\\,b\\;c\r\n');
     expect(ics).toContain('DESCRIPTION:l1\\nl2\\\\\r\n');
   });
 });
