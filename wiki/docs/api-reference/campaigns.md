@@ -87,7 +87,7 @@ GET  /api/campaigns/runs/:runId/export.csv
 { "org_id": "org_XXX", "confirm_partial": false }
 ```
 
-Success (`201`): `{ "success": true, "data": { "run_id", "task_count", "skipped" } }`.
+Success (`201`): `{ "success": true, "data": { "run_id", "task_count", "skipped" } }`. Here `skipped` is a **count**; in the `409` body below it is an **array** of pairs.
 
 | Status | When |
 |--------|------|

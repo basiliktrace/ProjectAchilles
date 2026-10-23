@@ -44,11 +44,13 @@ Some test and host pairs cannot run. They are listed in the dialog with the reas
 | `no <os> binary` | The test has no build for the host's operating system |
 | `binary missing on server` | The build is recorded but the file is gone from the server |
 | `agent <status>` | The agent is not `active` (for example `agent inactive`) |
-| `agent deleted` | The agent no longer exists |
-| `agent not in organization` | The agent is no longer in the campaign's organization |
 | `removed from library` | The test is no longer in the test library |
 
-If anything is skipped, the launch is refused the first time (the API answers `409`) and the dialog asks you to confirm. Choose **Run the rest** to dispatch only the pairs that can run, or cancel and fix the plan. Skipped pairs show as **N/A** in the matrix, with the reason on hover. If every pair is skipped, nothing runs.
+:::warning Deleted or moved agents block the run
+If an agent in the campaign was deleted, or now belongs to a different organization, the launch fails with `Agent <id> does not belong to your organization`. This is not a skip: **Run the rest** cannot run around it. The dry-run preview may list such an agent as `agent deleted` or `agent not in organization`, but you must edit the campaign and remove the agent before you can run it. (Without organizations, only a deleted agent blocks.)
+:::
+
+If anything else is skipped, the launch is refused the first time (the API answers `409`) and the dialog asks you to confirm. Choose **Run the rest** to dispatch only the pairs that can run, or cancel and fix the plan. Skipped pairs show as **N/A** in the matrix, with the reason on hover. If every pair is skipped, nothing runs.
 
 ### Pre-execution notices
 
@@ -77,8 +79,8 @@ The evidence page shows tests as rows, hosts as columns, and one cell per pair. 
 | **Running** | Queued (no notice), assigned, downloading, or executing |
 | **Protected** | The test completed and the control blocked or detected it |
 | **Unprotected** | The test completed and the control did not stop it |
-| **Error** | The task failed |
-| **Not run** | The task expired, or never produced a result |
+| **Error** | The task failed, or it completed with an exit code that is neither Protected (105, 126, 127) nor Unprotected (101): for example 0, 1, 259, 999, or 260 (blocked before execution), or a completed task with no result |
+| **Not run** | The task expired (the reason shows on hover), or there is no task for the pair |
 | **N/A** | Skipped at launch |
 
 Protected and Unprotected are decided by the same exit-code rules as the rest of the platform; see [Exit Codes and Outcomes](../analytics/exit-codes-and-outcomes).
