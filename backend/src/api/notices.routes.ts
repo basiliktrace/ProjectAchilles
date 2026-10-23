@@ -112,7 +112,7 @@ router.post('/settings/test', requirePermission('integrations:write'), asyncHand
     startNotBefore: now,
     pickupDeadline: new Date(now.getTime() + 2 * 3_600_000),
     windowEnd: new Date(now.getTime() + 3 * 3_600_000),
-    tests: [{ name: 'Sample test', severity: 'medium', category: 'sample', techniques: ['T0000'], tactics: [] }],
+    tests: [{ name: 'Sample test', uuid: '00000000-0000-0000-0000-000000000000', stages: '1', techniques: ['T0000'], tactics: [] }],
     hosts: [{ hostname: 'sample-host', os: 'windows', online: true }],
     edr: [],
     uiUrl: tasksUiUrl(),

@@ -235,6 +235,28 @@ export function getLinkedTasks(noticeId: string): LinkedTaskRow[] {
     .all(noticeId) as LinkedTaskRow[];
 }
 
+/**
+ * Number of controls in the most recent completed run of a bundle test, or
+ * null if it has never completed here. The library itself does not declare a
+ * reliable count, so the last real result is the source of truth. Scoped to
+ * `orgId` when given; legacy (null-org) notices look at every run.
+ */
+export function getLastBundleControlCount(testUuid: string, orgId: string | null): number | null {
+  const row = getDatabase()
+    .prepare(`
+      SELECT json_array_length(result, '$.bundle_results.controls') AS n
+      FROM tasks
+      WHERE type = 'execute_test' AND status = 'completed'
+        AND json_valid(payload) AND json_extract(payload, '$.test_uuid') = ?
+        AND (? IS NULL OR org_id = ?)
+        AND json_valid(result) AND json_array_length(result, '$.bundle_results.controls') > 0
+      ORDER BY completed_at DESC, rowid DESC
+      LIMIT 1
+    `)
+    .get(testUuid, orgId, orgId) as { n: number } | undefined;
+  return row?.n ?? null;
+}
+
 export interface AgentHostRow {
   id: string;
   hostname: string;

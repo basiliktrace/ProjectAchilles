@@ -22,7 +22,8 @@ export interface NoticeEmailData {
   pickupDeadline: Date;
   windowEnd: Date;
   dayWindow?: { start: Date; end: Date };
-  tests: Array<{ name: string; severity: string; category: string; techniques: string[]; tactics: string[] }>;
+  /** `stages`: display text, e.g. "3", "52 controls", "bundle" or "—". */
+  tests: Array<{ name: string; uuid: string; stages: string; techniques: string[]; tactics: string[] }>;
   hosts: Array<{ hostname: string; os: string; online: boolean }>;
   edr: Array<{ vendor: 'Microsoft Defender' | 'CrowdStrike Falcon'; autoResolve: 'disabled' | 'dry_run' | 'enabled' }>;
   uiUrl: string;
@@ -46,7 +47,7 @@ function shell(title: string, body: string): string {
 <table width="100%" cellpadding="0" cellspacing="0" style="background-color:#f4f4f5;padding:24px 0;">
 <tr><td align="center">
 <table width="600" cellpadding="0" cellspacing="0" style="background-color:#ffffff;border-radius:8px;overflow:hidden;">
-<tr><td style="background-color:#18181b;padding:20px 24px;color:#ffffff;font-size:18px;font-weight:600;">ProjectAchilles</td></tr>
+<tr><td style="background-color:#18181b;padding:20px 24px;color:#ffffff;font-size:18px;font-weight:600;">ProjectAchilles | f0_csv</td></tr>
 ${body}
 <tr><td style="padding:16px 24px;background-color:#fafafa;color:#71717a;font-size:12px;">Automated message from ProjectAchilles continuous security validation.</td></tr>
 </table>
@@ -61,6 +62,12 @@ function row(label: string, value: string): string {
 
 function section(heading: string, inner: string): string {
   return `<tr><td style="padding:12px 24px;"><div style="font-size:14px;font-weight:600;color:#18181b;margin-bottom:6px;">${escapeHtml(heading)}</div>${inner}</td></tr>`;
+}
+
+const TH = 'padding:6px 8px;border-bottom:1px solid #18181b;font-size:11px;font-weight:600;color:#71717a;text-transform:uppercase;letter-spacing:0.05em;';
+
+function headerRow(cols: Array<[label: string, align?: 'center']>): string {
+  return `<tr>${cols.map(([label, align]) => `<th style="${TH}text-align:${align ?? 'left'};">${escapeHtml(label)}</th>`).join('')}</tr>`;
 }
 
 function edrText(e: NoticeEmailData['edr'][number]): string {
@@ -93,10 +100,11 @@ export function buildNoticeEmail(d: NoticeEmailData): { subject: string; html: s
   when.push(row('Hosts pick up until', escapeHtml(formatDual(d.pickupDeadline, d.timezone))));
   when.push(row('All activity ends by', escapeHtml(formatDual(d.windowEnd, d.timezone))));
 
+  const td = 'padding:6px 8px;border-bottom:1px solid #e4e4e7;vertical-align:top;';
   const testRows = d.tests
     .map(
       (t) =>
-        `<tr data-row="test"><td style="padding:6px 8px;border-bottom:1px solid #e4e4e7;font-size:13px;color:#18181b;">${escapeHtml(t.name)}</td><td style="padding:6px 8px;border-bottom:1px solid #e4e4e7;font-size:12px;color:#52525b;">${escapeHtml(t.severity)} / ${escapeHtml(t.category)}</td><td style="padding:6px 8px;border-bottom:1px solid #e4e4e7;font-size:12px;color:#52525b;">${escapeHtml([...t.techniques, ...t.tactics].join(', '))}</td></tr>`,
+        `<tr data-row="test"><td style="${td}font-size:13px;color:#18181b;">${escapeHtml(t.name)}<div style="font-family:Menlo,Consolas,monospace;font-size:11px;color:#71717a;margin-top:2px;">${escapeHtml(t.uuid)}</div></td><td style="${td}font-size:13px;color:#18181b;text-align:center;white-space:nowrap;">${escapeHtml(t.stages)}</td><td style="${td}font-size:12px;color:#52525b;">${escapeHtml([...t.techniques, ...t.tactics].join(', '))}</td></tr>`,
     )
     .join('');
 
@@ -124,8 +132,8 @@ export function buildNoticeEmail(d: NoticeEmailData): { subject: string; html: s
   const body = [
     `<tr><td style="padding:20px 24px 4px;font-size:16px;font-weight:600;color:#18181b;">Security testing is about to begin</td></tr>`,
     `<tr><td style="padding:0 24px;"><table width="100%" cellpadding="0" cellspacing="0">${when.join('')}</table></td></tr>`,
-    section(`Tests (${d.tests.length})`, `<table width="100%" cellpadding="0" cellspacing="0">${testRows}</table>`),
-    section(`Hosts (${d.hosts.length})`, `<table width="100%" cellpadding="0" cellspacing="0">${hostRows}</table>${more}`),
+    section(`Tests (${d.tests.length})`, `<table width="100%" cellpadding="0" cellspacing="0">${headerRow([['Test'], ['Stages', 'center'], ['Techniques & tactics']])}${testRows}</table>`),
+    section(`Hosts (${d.hosts.length})`, `<table width="100%" cellpadding="0" cellspacing="0">${headerRow([['Host'], ['OS'], ['Status']])}${hostRows}</table>${more}`),
     edr,
     `<tr><td style="padding:12px 24px 20px;"><a href="${escapeHtml(d.uiUrl)}" style="color:#2563eb;font-size:13px;">Open ProjectAchilles</a></td></tr>`,
   ].join('\n');

@@ -7,8 +7,8 @@ const mk = (o: Partial<NoticeEmailData> = {}): NoticeEmailData => ({
   startNotBefore: new Date('2026-10-23T13:05:00Z'), pickupDeadline: new Date('2026-10-23T15:05:00Z'),
   windowEnd: new Date('2026-10-23T15:10:00Z'),
   tests: [
-    { name: 'Test A', severity: 'high', category: 'intel-driven', techniques: ['T1486'], tactics: ['impact'] },
-    { name: 'Test B', severity: 'low', category: 'x', techniques: ['T1059.001'], tactics: [] },
+    { name: 'Test A', uuid: 'c37d6a01-3934-4e72-9cb1-3dae284b937b', stages: '3', techniques: ['T1486'], tactics: ['impact'] },
+    { name: 'Test B', uuid: '078f1409-9f7b-4492-bb35-3fd596e85ce0', stages: '52 controls', techniques: ['T1059.001'], tactics: [] },
   ],
   hosts: [{ hostname: 'host-1', os: 'windows', online: true }],
   edr: [], uiUrl: 'http://localhost:5173', ...o,
@@ -22,6 +22,20 @@ describe('buildNoticeEmail', () => {
     expect(e.subject).toContain('2026-10-23 09:05 AST (13:05 UTC)');
     for (const s of ['PA-RUN-7f3c9a', 'T1486', 'T1059.001', 'host-1']) expect(e.html).toContain(s);
   });
+  it('brands the header as ProjectAchilles | f0_csv but keeps the subject prefix', () => {
+    const e = buildNoticeEmail(mk());
+    expect(e.html).toContain('ProjectAchilles | f0_csv');
+    expect(e.subject.startsWith('[ProjectAchilles] ')).toBe(true);
+  });
+  it('tests table: headers, UUID under each name, stage column instead of severity/category', () => {
+    const html = buildNoticeEmail(mk()).html;
+    for (const h of ['>Test<', '>Stages<', '>Techniques &amp; tactics<', '>Host<', '>OS<', '>Status<']) expect(html).toContain(h);
+    expect(html).toContain('c37d6a01-3934-4e72-9cb1-3dae284b937b');
+    expect(html).toContain('>3<');
+    expect(html).toContain('>52 controls<');
+    expect(html).not.toContain('high /');
+    expect(html).not.toContain('intel-driven');
+  });
   it('singular test', () => {
     expect(buildNoticeEmail(mk({ tests: [mk().tests[0]] })).subject).toContain('1 test on 1 host');
   });
@@ -31,12 +45,13 @@ describe('buildNoticeEmail', () => {
   });
   it('escapes everything', () => {
     const e = buildNoticeEmail(mk({
-      tests: [{ name: '<script>alert(1)</script>', severity: 's', category: 'c', techniques: [], tactics: [] }],
+      tests: [{ name: '<script>alert(1)</script>', uuid: '<i>u</i>', stages: '<i>1</i>', techniques: [], tactics: [] }],
       uiUrl: 'http://x/"><script>y</script>',
       hosts: [{ hostname: '<b>h</b>', os: 'linux', online: true }],
     }));
     expect(e.html).not.toContain('<script>');
     expect(e.html).not.toContain('<b>h</b>');
+    expect(e.html).not.toContain('<i>');
     expect(e.html).toContain('&lt;script&gt;alert(1)&lt;/script&gt;');
   });
   it('EDR wording', () => {
@@ -67,6 +82,7 @@ describe('buildFinishedEmail', () => {
     const e = buildFinishedEmail({ runTag: 'PA-RUN-abc123', timezone: 'UTC', startedAt: new Date(), finishedAt: new Date(), counts: { protected: 3, unprotected: 1, error: 0, notRun: 2 }, uiUrl: 'http://u' });
     expect(e.subject).toBe('[ProjectAchilles] Security testing finished — PA-RUN-abc123');
     expect(e.html).toContain('>3<');
+    expect(e.html).toContain('ProjectAchilles | f0_csv');
   });
 });
 
