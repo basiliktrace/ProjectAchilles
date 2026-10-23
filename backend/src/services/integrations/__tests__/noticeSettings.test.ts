@@ -144,6 +144,9 @@ describe('pre-execution notice settings', () => {
     const read = svc.getAlertSettings()!;
     expect(read.email).toMatchObject({ smtp_user: 'user-1', smtp_pass: 'pass-1' });
     expect(read.slack?.webhook_url).toBe('https://hooks.slack.test/abc');
+    // #546: `configured` is derived on the org read path too (after decryption).
+    expect(read.slack?.configured).toBe(true);
+    expect(read.email?.configured).toBe(false); // no alert recipients
 
     // A later partial save keeps the credentials single-encrypted.
     svc.saveAlertSettings({ cooldown_minutes: 30 });

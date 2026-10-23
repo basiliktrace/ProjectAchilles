@@ -168,7 +168,7 @@ describe('alerts saved from the UI (no `configured` flag)', () => {
     delete process.env.ENCRYPTION_SECRET;
   });
 
-  function saveAlertsLikeTheUi() {
+  function saveAlertsLikeTheUi(alertRecipients: string[] = ['ops@example.test']) {
     new IntegrationsSettingsService().saveAlertSettings({
       thresholds: { enabled: false },
       slack: { enabled: false },
@@ -180,7 +180,7 @@ describe('alerts saved from the UI (no `configured` flag)', () => {
         smtp_user: 'user',
         smtp_pass: 'pass',
         from_address: 'pa@example.test',
-        recipients: ['ops@example.test'],
+        recipients: alertRecipients,
       },
       agent_alerts: { enabled: false },
     } as any);
@@ -188,7 +188,9 @@ describe('alerts saved from the UI (no `configured` flag)', () => {
 
   it('can enable notices, reports smtp_configured, and a Run Now notice is sent', async () => {
     writeSettings({ smtp: false });
-    saveAlertsLikeTheUi();
+    // `configured` is derived server-side (#546) and needs alert recipients;
+    // notices have their own recipients, so they must work without any.
+    saveAlertsLikeTheUi([]);
     expect(new IntegrationsSettingsService().getAlertSettings()?.email?.configured).toBe(false);
 
     const put = await request(app()).put('/api/notices/settings').send({ enabled: true, recipients: ['a@x.com'] });

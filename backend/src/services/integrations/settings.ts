@@ -46,6 +46,31 @@ export function clampNoticeSettings(s: Partial<PreExecutionNoticeSettings>): Pre
   return out;
 }
 
+/**
+ * `configured` on alert channels means "has everything needed to send". It is
+ * derived server-side and never trusted from the client or from disk.
+ * `enabled` is the separate user intent flag.
+ */
+function isSlackChannelConfigured(slack: AlertSettings['slack']): boolean {
+  return !!slack?.webhook_url?.trim();
+}
+
+function isEmailChannelConfigured(email: AlertSettings['email']): boolean {
+  return !!(
+    email?.smtp_host?.trim() &&
+    email.from_address?.trim() &&
+    Array.isArray(email.recipients) &&
+    email.recipients.length > 0
+  );
+}
+
+function withDerivedConfigured(alerts: AlertSettings): AlertSettings {
+  const out: AlertSettings = { ...alerts };
+  if (out.slack) out.slack = { ...out.slack, configured: isSlackChannelConfigured(out.slack) };
+  if (out.email) out.email = { ...out.email, configured: isEmailChannelConfigured(out.email) };
+  return out;
+}
+
 export class IntegrationsSettingsService {
   /**
    * Optional Clerk org_id for per-org settings isolation (PA-018).
@@ -918,10 +943,10 @@ export class IntegrationsSettingsService {
     const fileSettings = this.getFileSettings();
 
     const orgSection = this.getOrgSection(fileSettings);
-    if (orgSection?.alerts) return orgSection.alerts;
+    if (orgSection?.alerts) return withDerivedConfigured(orgSection.alerts);
 
     if (!fileSettings?.alerts) return null;
-    return fileSettings.alerts;
+    return withDerivedConfigured(fileSettings.alerts);
   }
 
   /** Save alert settings (encrypts sensitive channel fields). Supports partial update. */
@@ -953,7 +978,7 @@ export class IntegrationsSettingsService {
       const newSlack = settings.slack;
       merged.slack = {
         webhook_url: newSlack?.webhook_url || currentSlack?.webhook_url || '',
-        configured: newSlack?.configured ?? currentSlack?.configured ?? false,
+        configured: false, // derived below
         enabled: newSlack?.enabled ?? currentSlack?.enabled ?? false,
       };
     }
@@ -970,7 +995,7 @@ export class IntegrationsSettingsService {
         smtp_pass: newEmail?.smtp_pass || currentEmail?.smtp_pass || '',
         from_address: newEmail?.from_address || currentEmail?.from_address || '',
         recipients: newEmail?.recipients ?? currentEmail?.recipients ?? [],
-        configured: newEmail?.configured ?? currentEmail?.configured ?? false,
+        configured: false, // derived below
         enabled: newEmail?.enabled ?? currentEmail?.enabled ?? false,
       };
     }
@@ -989,8 +1014,9 @@ export class IntegrationsSettingsService {
       };
     }
 
-    // Encrypt sensitive channel fields
-    const alertsToSave: AlertSettings = { ...merged };
+    // Encrypt sensitive channel fields. `configured` is derived from the merged
+    // values; any client-supplied value is ignored.
+    const alertsToSave: AlertSettings = withDerivedConfigured(merged);
 
     if (alertsToSave.slack) {
       alertsToSave.slack = {
