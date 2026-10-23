@@ -11,6 +11,7 @@ import type { TestMetadata, BuildInfo } from '@/types/test';
 import AgentSelector from './AgentSelector';
 import ExecutionConfig, { type ExecutionConfigState, getDefaultConfigState } from './ExecutionConfig';
 import DrawerBuildSection from './DrawerBuildSection';
+import { useCapabilities } from '@/hooks/useCapabilities';
 
 interface ExecutionDrawerProps {
   open: boolean;
@@ -40,6 +41,10 @@ export default function ExecutionDrawer({ open, onClose, tests, onTasksCreated }
   const [agents, setAgents] = useState<AgentSummary[]>([]);
   const [agentsLoading, setAgentsLoading] = useState(false);
   const [targetAgentIds, setTargetAgentIds] = useState<string[]>([]);
+
+  // The batch route (one notice per multi-test run) exists only where pre-execution
+  // notices do; Vercel/serverless has no /tasks/batch, so fall back to per-test POSTs.
+  const { preExecutionNotices } = useCapabilities();
 
   const [builds, setBuilds] = useState<Map<string, BuildInfo | null>>(new Map());
   const [buildsLoading, setBuildsLoading] = useState(false);
@@ -205,7 +210,7 @@ export default function ExecutionDrawer({ open, onClose, tests, onTasksCreated }
           metadata: EMPTY_METADATA,
           target_index,
         }));
-        if (requests.length > 1) {
+        if (requests.length > 1 && preExecutionNotices) {
           // Several tests in one Run: one batch request, so one pre-execution
           // notice (one email) covers them all; all-or-nothing on the server.
           // The server takes at most MAX_BATCH tests per request.

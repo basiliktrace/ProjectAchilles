@@ -26,6 +26,9 @@ vi.mock('@/services/api/browser', () => ({ browserApi: { getBuildInfo: api.getBu
 vi.mock('@/services/api/analytics', () => ({ analyticsApi: { listIndices: api.listIndices } }));
 vi.mock('@/services/api/integrations', () => ({ integrationsApi: { getAzureSettings: api.getAzureSettings } }));
 
+const caps = vi.hoisted(() => ({ preExecutionNotices: true }));
+vi.mock('@/hooks/useCapabilities', () => ({ useCapabilities: () => ({ preExecutionNotices: caps.preExecutionNotices }) }));
+
 const { default: ExecutionDrawer } = await import('../ExecutionDrawer');
 
 const test = (uuid: string, name: string): TestMetadata => ({
@@ -52,6 +55,7 @@ const AGENT: AgentSummary = {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  caps.preExecutionNotices = true;
   api.listAgents.mockResolvedValue({ agents: [AGENT], total: 1 });
   api.getBuildInfo.mockImplementation(async (uuid: string) => ({ exists: true, filename: `${uuid}.exe` }));
   api.listIndices.mockResolvedValue([]);
@@ -114,5 +118,18 @@ describe('ExecutionDrawer Run Now', () => {
 
     expect(await screen.findByText('Error: No binary was built for OS windows')).toBeInTheDocument();
     expect(api.createTasks).not.toHaveBeenCalled();
+  });
+
+  it('without the notices capability (Vercel) sends one POST per test and never the batch route', async () => {
+    caps.preExecutionNotices = false;
+    api.createTasks.mockResolvedValue(['t-x']);
+    render(<ExecutionDrawer open onClose={() => {}} tests={[test('uuid-a', 'Test A'), test('uuid-b', 'Test B')]} />);
+
+    await selectAgentAndExecute();
+
+    await waitFor(() => expect(api.createTasks).toHaveBeenCalledTimes(2));
+    expect(api.createTasksBatch).not.toHaveBeenCalled();
+    expect(api.createTasks.mock.calls.map((c) => c[0].test_uuid)).toEqual(['uuid-a', 'uuid-b']);
+    expect(await screen.findByText('Created 2 task(s) for 1 agent(s)')).toBeInTheDocument();
   });
 });
