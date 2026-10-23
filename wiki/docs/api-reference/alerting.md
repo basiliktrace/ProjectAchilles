@@ -50,7 +50,7 @@ Credentials are encrypted at rest with AES-256-GCM.
 
 ## Pre-execution notices
 
-Settings and status for [pre-execution notices](../user-guide/integrations/pre-execution-notices). All routes need Clerk authentication. Settings and the notice log are per organization: the caller's Clerk organization is used, and an organization without its own settings falls back to the deployment-wide (legacy) settings. A notice belongs to the organization of the tasks it gates. `GET /api/notices`, `GET /api/notices/status` and `POST /api/notices/:id/release` only see the caller's organization's notices; another organization's notice id returns `404 Notice not found`. A caller without an organization (single-organization deployments) sees every notice, unless `REQUIRE_ORG_ISOLATION=true`, which returns `403`. These routes are not available on the Vercel (serverless) backend.
+Settings and status for [pre-execution notices](../user-guide/integrations/pre-execution-notices). All routes need Clerk authentication. Settings and the notice log are per organization: the caller's Clerk organization is used, and an organization without its own settings falls back to the deployment-wide (legacy) settings. A notice belongs to the organization of the tasks it gates. `GET /api/notices`, `GET /api/notices/status` and `POST /api/notices/:id/release` only see the caller's organization's notices; another organization's notice id returns `404 Notice not found`. A caller without an organization (single-organization deployments) sees every notice, unless `REQUIRE_ORG_ISOLATION=true`, which returns `403` from every notice route, including the settings routes. These routes are not available on the Vercel (serverless) backend.
 
 | Method | Path | Permission | Purpose |
 |--------|------|------------|---------|
@@ -89,7 +89,7 @@ Settings and status for [pre-execution notices](../user-guide/integrations/pre-e
 }
 ```
 
-The grouped task list response (`GET /api/agent/admin/tasks/grouped`) adds a `notices` map (notice id to `run_tag`, `state`, `last_error`, `release_at`, `pickup_deadline`) on each batch group whose tasks are linked to notices.
+The grouped task list response (`GET /api/agent/admin/tasks/grouped`) adds a `notices` map (notice id to `run_tag`, `state`, `last_error`, `release_at`, `pickup_deadline`) on each batch group whose tasks are linked to notices. For a caller in an organization, the map only lists that organization's notices.
 
 `GET /api/notices/status` returns `smtpCheck` as `{ "ok": null, "at": null, "message": null }` while notices are disabled. `pendingOverdue` and `notDeliveredLast7d` are always counted.
 
