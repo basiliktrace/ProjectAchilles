@@ -541,22 +541,26 @@ export function processSchedules(clock?: Date): { processed: number; errors: str
 
       if (dueAgentIds.length > 0) {
         try {
-          const noticeId = tick.dayNoticeFor({ ...schedule, agent_next_runs: map });
-          createTasks(
-            {
-              agent_ids: dueAgentIds,
-              test_uuid: schedule.test_uuid,
-              test_name: schedule.test_name,
-              binary_name: schedule.binary_name,
-              execution_timeout: schedule.execution_timeout,
-              priority: schedule.priority,
-              metadata: schedule.metadata,
-              target_index: schedule.target_index ?? undefined,
-            },
-            schedule.org_id,
-            schedule.created_by,
-            { noticeId },
-          );
+          // One transaction: if createTasks throws, today's day notice is not
+          // left behind with no tasks (it would block the day and alarm).
+          db.transaction(() => {
+            const noticeId = tick.dayNoticeFor({ ...schedule, agent_next_runs: map });
+            createTasks(
+              {
+                agent_ids: dueAgentIds,
+                test_uuid: schedule.test_uuid,
+                test_name: schedule.test_name,
+                binary_name: schedule.binary_name,
+                execution_timeout: schedule.execution_timeout,
+                priority: schedule.priority,
+                metadata: schedule.metadata,
+                target_index: schedule.target_index ?? undefined,
+              },
+              schedule.org_id,
+              schedule.created_by,
+              { noticeId },
+            );
+          })();
           processed++;
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
@@ -616,6 +620,9 @@ export function processSchedules(clock?: Date): { processed: number; errors: str
           schedule.created_by,
           { noticeId },
         );
+        // Listed on the shared notice only once its tasks exist, so a failed
+        // schedule never appears in the trigger text or blocks its next run.
+        tick.confirmRunSchedule(schedule.id);
         processed++;
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);

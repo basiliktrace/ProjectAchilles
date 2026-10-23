@@ -132,6 +132,7 @@ export function markSent(
   claimAt: string,
   v: {
     sentAt: string;
+    recipients: string[];
     accepted: string[];
     rejected: string[];
     releaseAt: string;
@@ -142,14 +143,16 @@ export function markSent(
   const res = getDatabase()
     .prepare(`
       UPDATE run_notices
-      SET state = 'sent', sent_at = ?, accepted = ?, rejected = ?, attempts = attempts + 1,
-          last_error = NULL, release_at = ?, pickup_deadline = ?, window_end = ?, claim_at = NULL
+      SET state = 'sent', sent_at = ?, recipients = ?, accepted = ?, rejected = ?, attempts = attempts + 1,
+          last_error = NULL, last_attempt_at = ?, release_at = ?, pickup_deadline = ?, window_end = ?, claim_at = NULL
       WHERE ${OWNED}
     `)
     .run(
       v.sentAt,
+      JSON.stringify(v.recipients),
       JSON.stringify(v.accepted),
       JSON.stringify(v.rejected),
+      v.sentAt,
       v.releaseAt,
       v.pickupDeadline,
       v.windowEnd,
@@ -159,21 +162,32 @@ export function markSent(
   return res.changes > 0;
 }
 
-/** Returns false when the caller no longer owns the claim (nothing written). */
+/**
+ * Record a failed attempt: the recipients it went to, what the server
+ * accepted/rejected, and when it finished (for the retry backoff). Returns
+ * false when the caller no longer owns the claim (nothing written).
+ */
 export function recordSendFailure(
   id: string,
   claimAt: string,
-  error: string,
-  accepted: string[],
-  rejected: string[],
+  v: { error: string; recipients: string[]; accepted: string[]; rejected: string[]; attemptAt: string },
 ): boolean {
   const res = getDatabase()
     .prepare(`
       UPDATE run_notices
-      SET attempts = attempts + 1, last_error = ?, accepted = ?, rejected = ?, claim_at = NULL
+      SET attempts = attempts + 1, last_error = ?, recipients = ?, accepted = ?, rejected = ?,
+          last_attempt_at = ?, claim_at = NULL
       WHERE ${OWNED}
     `)
-    .run(error, JSON.stringify(accepted), JSON.stringify(rejected), id, claimAt);
+    .run(
+      v.error,
+      JSON.stringify(v.recipients),
+      JSON.stringify(v.accepted),
+      JSON.stringify(v.rejected),
+      v.attemptAt,
+      id,
+      claimAt,
+    );
   return res.changes > 0;
 }
 
@@ -243,38 +257,74 @@ export function getScheduleNames(scheduleIds: string[]): Map<string, string | nu
 /** Task states that still count as "in flight" for a notice. */
 const ACTIVE_TASK_STATES = `'pending','assigned','downloading','executing'`;
 
-export function listPendingNoticeIds(): string[] {
-  const rows = getDatabase()
-    .prepare(`SELECT id FROM run_notices WHERE state = 'pending' ORDER BY created_at ASC, id ASC`)
-    .all() as Array<{ id: string }>;
-  return rows.map((r) => r.id);
+export interface PendingNoticeRow {
+  id: string;
+  attempts: number;
+  last_attempt_at: string | null;
+}
+
+/** Pending notices, oldest first, with what the send pass needs for its backoff. */
+export function listPendingNotices(): PendingNoticeRow[] {
+  return getDatabase()
+    .prepare(`
+      SELECT id, attempts, last_attempt_at FROM run_notices
+      WHERE state = 'pending' ORDER BY created_at ASC, id ASC
+    `)
+    .all() as PendingNoticeRow[];
+}
+
+/** Whether any task linked to the notice is still `pending` (held). */
+export function hasPendingLinkedTask(noticeId: string): boolean {
+  return (
+    getDatabase()
+      .prepare(`SELECT 1 FROM tasks WHERE notice_id = ? AND status = 'pending' LIMIT 1`)
+      .get(noticeId) !== undefined
+  );
 }
 
 /**
  * Bounded wait: pending notices created at or before `createdCutoffIso` become
- * `not_delivered`. A notice held by a live (non-stale) send claim is left for
- * the next pass, so a sender mid-SMTP isn't overtaken. Returns the ids moved.
+ * `not_delivered`. One that holds no pending task (none were created, or all
+ * were cancelled) is `skipped` instead: no test was held, so there is nothing
+ * to alarm about. A notice held by a live (non-stale) send claim is left for
+ * the next pass, so a sender mid-SMTP isn't overtaken. Returns the ids moved
+ * to `not_delivered`.
  */
-export function markNotDelivered(createdCutoffIso: string, staleClaimCutoffIso: string): string[] {
-  const rows = getDatabase()
-    .prepare(`
-      UPDATE run_notices SET state = 'not_delivered', claim_at = NULL
-      WHERE state = 'pending' AND created_at <= ? AND (claim_at IS NULL OR claim_at < ?)
-      RETURNING id
-    `)
-    .all(createdCutoffIso, staleClaimCutoffIso) as Array<{ id: string }>;
-  return rows.map((r) => r.id);
+export function markNotDelivered(
+  createdCutoffIso: string,
+  staleClaimCutoffIso: string,
+  reasons: { noTasks: string; noneHeld: string },
+): string[] {
+  const db = getDatabase();
+  const due = `state = 'pending' AND created_at <= ? AND (claim_at IS NULL OR claim_at < ?)`;
+  return db.transaction(() => {
+    db.prepare(`
+      UPDATE run_notices
+      SET state = 'skipped', claim_at = NULL,
+          skip_reason = CASE WHEN EXISTS (SELECT 1 FROM tasks t WHERE t.notice_id = run_notices.id)
+                             THEN ? ELSE ? END
+      WHERE ${due}
+        AND NOT EXISTS (SELECT 1 FROM tasks t WHERE t.notice_id = run_notices.id AND t.status = 'pending')
+    `).run(reasons.noneHeld, reasons.noTasks, createdCutoffIso, staleClaimCutoffIso);
+    const rows = db
+      .prepare(`UPDATE run_notices SET state = 'not_delivered', claim_at = NULL WHERE ${due} RETURNING id`)
+      .all(createdCutoffIso, staleClaimCutoffIso) as Array<{ id: string }>;
+    return rows.map((r) => r.id);
+  })();
 }
 
 /**
- * Expire every still-pending task linked to any `not_delivered` notice
- * (Ruling R5: on every pass, so tasks linked after the transition expire too).
+ * Expire every still-pending task linked to a `not_delivered` or `skipped`
+ * notice (Ruling R5: on every pass, so tasks linked after the transition
+ * expire too; a later per-machine agent can link to a skipped day notice,
+ * which will never be sent).
  */
 export function expireTasksOfNotDelivered(nowIso: string, resultJson: string): number {
   return getDatabase()
     .prepare(`
       UPDATE tasks SET status = 'expired', completed_at = ?, result = ?
-      WHERE status = 'pending' AND notice_id IN (SELECT id FROM run_notices WHERE state = 'not_delivered')
+      WHERE status = 'pending'
+        AND notice_id IN (SELECT id FROM run_notices WHERE state IN ('not_delivered','skipped'))
     `)
     .run(nowIso, resultJson).changes;
 }

@@ -20,6 +20,9 @@ interface AlertData {
 
 export type { MetricStatus, AlertData };
 
+/** A hung webhook must not stall the caller (the notice pass runs on the scheduler tick). */
+const SLACK_TIMEOUT_MS = 10_000;
+
 // ---------------------------------------------------------------------------
 // Slack Block Kit builder
 // ---------------------------------------------------------------------------
@@ -105,6 +108,7 @@ export async function sendSlackAlert(
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body,
+    signal: AbortSignal.timeout(SLACK_TIMEOUT_MS),
   });
 
   if (!response.ok) {
@@ -124,6 +128,7 @@ export async function sendSlackText(webhookUrl: string, text: string): Promise<v
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ text }),
+    signal: AbortSignal.timeout(SLACK_TIMEOUT_MS),
   });
 
   if (!response.ok) {

@@ -56,9 +56,18 @@ export function formatClock(at: Date, timezone: string): string {
   return `${p.hour}:${p.minute}`;
 }
 
-/** e.g. "2026-10-23 09:05 AST (13:05 UTC)" */
+function isUtcZone(timezone: string): boolean {
+  try {
+    return new Intl.DateTimeFormat('en-US', { timeZone: timezone }).resolvedOptions().timeZone === 'UTC';
+  } catch {
+    return false;
+  }
+}
+
+/** e.g. "2026-10-23 09:05 AST (13:05 UTC)", or "2026-10-23 13:05 UTC" for a UTC zone. */
 export function formatDual(at: Date, timezone: string): string {
-  const p = parts(at, timezone, { timeZoneName: 'short' });
   const u = parts(at, 'UTC');
+  if (isUtcZone(timezone)) return `${u.year}-${u.month}-${u.day} ${u.hour}:${u.minute} UTC`;
+  const p = parts(at, timezone, { timeZoneName: 'short' });
   return `${p.year}-${p.month}-${p.day} ${p.hour}:${p.minute} ${p.timeZoneName} (${u.hour}:${u.minute} UTC)`;
 }

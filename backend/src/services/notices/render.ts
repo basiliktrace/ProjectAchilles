@@ -169,7 +169,12 @@ export function classifyOutcome(task: {
   return 'error';
 }
 
-function csvCell(s: string): string {
+/** A cell starting with one of these is run as a formula by spreadsheet apps. */
+const FORMULA_START = /^[=+\-@\t\r]/;
+
+function csvCell(raw: string): string {
+  // Hostnames come from agents; never let one become a spreadsheet formula.
+  const s = FORMULA_START.test(raw) ? `'${raw}` : raw;
   return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 }
 

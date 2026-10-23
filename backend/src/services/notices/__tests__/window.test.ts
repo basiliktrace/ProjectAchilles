@@ -47,4 +47,11 @@ describe('window', () => {
   it('formatDual', () => {
     expect(formatDual(new Date('2026-10-23T13:05:00Z'), 'America/Santo_Domingo')).toBe('2026-10-23 09:05 AST (13:05 UTC)');
   });
+  it('formatDual does not repeat the time when the zone is UTC', () => {
+    for (const tz of ['UTC', 'Etc/UTC', 'GMT']) {
+      expect(formatDual(new Date('2026-10-23T13:05:00Z'), tz)).toBe('2026-10-23 13:05 UTC');
+    }
+    // Zero offset today but not UTC: keep both.
+    expect(formatDual(new Date('2026-12-01T13:05:00Z'), 'Europe/London')).toBe('2026-12-01 13:05 GMT (13:05 UTC)');
+  });
 });

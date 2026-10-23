@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest';
 import express from 'express';
 import request from 'supertest';
 import fs from 'fs';
@@ -49,6 +49,7 @@ vi.mock('../../services/agent/ingestionWorker.service.js', () => ({ retryPending
 const { default: noticesRoutes } = await import('../notices.routes.js');
 const { adminTasksRouter } = await import('../agent/tasks.routes.js');
 const { errorHandler } = await import('../../middleware/error.middleware.js');
+const { IntegrationsSettingsService } = await import('../../services/integrations/settings.js');
 
 const HOME = os.homedir();
 const SETTINGS_DIR = path.join(HOME, '.projectachilles');
@@ -79,8 +80,8 @@ function writeSettings(opts: { smtp?: boolean; notices?: Record<string, unknown>
   fs.writeFileSync(path.join(SETTINGS_DIR, 'integrations.json'), JSON.stringify(body));
 }
 
-function writeBuild() {
-  const dir = path.join(SETTINGS_DIR, 'builds', TEST_UUID);
+function writeBuild(testUuid = TEST_UUID) {
+  const dir = path.join(SETTINGS_DIR, 'builds', testUuid);
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(path.join(dir, 'test.exe'), 'binary');
   fs.writeFileSync(path.join(dir, 'build-meta.json'), JSON.stringify({ binary_name: 'test.exe' }));
@@ -154,6 +155,65 @@ describe('PUT /api/notices/settings', () => {
     deniedPermissions.add('integrations:write');
     const res = await request(app()).put('/api/notices/settings').send({});
     expect(res.status).toBe(403);
+  });
+});
+
+describe('alerts saved from the UI (no `configured` flag)', () => {
+  // Exactly what AlertsConfig.tsx buildSavePayload() sends: no `configured`.
+  beforeEach(() => {
+    process.env.ENCRYPTION_SECRET = 'test-encryption-secret-that-is-at-least-32-chars-long';
+  });
+  afterEach(() => {
+    delete process.env.ENCRYPTION_SECRET;
+  });
+
+  function saveAlertsLikeTheUi() {
+    new IntegrationsSettingsService().saveAlertSettings({
+      thresholds: { enabled: false },
+      slack: { enabled: false },
+      email: {
+        enabled: true,
+        smtp_host: 'smtp.example.test',
+        smtp_port: 587,
+        smtp_secure: false,
+        smtp_user: 'user',
+        smtp_pass: 'pass',
+        from_address: 'pa@example.test',
+        recipients: ['ops@example.test'],
+      },
+      agent_alerts: { enabled: false },
+    } as any);
+  }
+
+  it('can enable notices, reports smtp_configured, and a Run Now notice is sent', async () => {
+    writeSettings({ smtp: false });
+    saveAlertsLikeTheUi();
+    expect(new IntegrationsSettingsService().getAlertSettings()?.email?.configured).toBe(false);
+
+    const put = await request(app()).put('/api/notices/settings').send({ enabled: true, recipients: ['a@x.com'] });
+    expect(put.status).toBe(200);
+    expect(put.body.data).toMatchObject({ enabled: true, smtp_configured: true });
+
+    writeBuild();
+    insertTestAgent(testDb, { id: 'agent-001' });
+    const run = await request(app()).post('/api/agent/admin/tasks').send({
+      org_id: 'org-001',
+      agent_ids: ['agent-001'],
+      test_uuid: TEST_UUID,
+      test_name: 'T',
+      binary_name: 'test.exe',
+    });
+    expect(run.status).toBe(201);
+    await vi.waitFor(() => expect(mockSendMail).toHaveBeenCalledTimes(1));
+    expect(mockSendMail.mock.calls[0][1].to).toEqual(['a@x.com']);
+  });
+
+  it('can send a test notice', async () => {
+    writeSettings({ smtp: false, notices: { enabled: false, recipients: ['a@x.com'] } });
+    saveAlertsLikeTheUi();
+    const res = await request(app()).post('/api/notices/settings/test');
+    expect(res.status).toBe(200);
+    expect(mockSendMail).toHaveBeenCalledTimes(1);
   });
 });
 

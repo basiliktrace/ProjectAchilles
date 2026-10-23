@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterAll, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vitest';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -45,6 +45,7 @@ const {
   releaseWithoutNotice,
   getNoticeStatus,
   listNotices,
+  retryBackoffMs,
 } = await import('../notices.service.js');
 const { getNoticeSummaries } = await import('../notices.repo.js');
 const { classifyOutcome } = await import('../render.js');
@@ -230,6 +231,13 @@ describe('pre-execution notice sweeps', () => {
     mockSendMail.mockResolvedValue({ accepted: [...RECIPIENTS], rejected: [] });
     mockSendSlackText.mockResolvedValue(undefined);
     mockTestEmailConnection.mockResolvedValue({ success: true, message: 'SMTP connection verified successfully' });
+    // Freeze the real clock at NOW so send times are deterministic.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(NOW);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   afterAll(() => {
@@ -243,6 +251,29 @@ describe('pre-execution notice sweeps', () => {
       const r = await processNotices(NOW);
       expect(r.sent).toBe(1);
       expect(notice('n-send').state).toBe('sent');
+    });
+
+    it('backoff schedule is 1, 2, 4, 8, then 15 minutes', () => {
+      expect([1, 2, 3, 4, 5, 6, 20].map((n) => retryBackoffMs(n) / MIN)).toEqual([1, 2, 4, 8, 15, 15, 15]);
+      expect(retryBackoffMs(0)).toBe(0);
+    });
+
+    it('waits out the backoff between failed attempts instead of resending every pass (I1)', async () => {
+      mockSendMail.mockResolvedValue({ accepted: ['a@x.com'], rejected: ['b@x.com'] });
+      insertNotice('n-flood');
+      linkTask('t1', 'n-flood');
+
+      await processNotices(NOW); // attempt 1
+      expect(mockSendMail).toHaveBeenCalledTimes(1);
+      await processNotices(at(30_000)); // within 1 min of attempt 1: skipped
+      expect(mockSendMail).toHaveBeenCalledTimes(1);
+      await processNotices(at(2 * MIN)); // attempt 2
+      expect(mockSendMail).toHaveBeenCalledTimes(2);
+      await processNotices(at(3 * MIN)); // within 2 min of attempt 2: skipped
+      expect(mockSendMail).toHaveBeenCalledTimes(2);
+      await processNotices(at(4 * MIN)); // attempt 3
+      expect(mockSendMail).toHaveBeenCalledTimes(3);
+      expect(notice('n-flood')).toMatchObject({ state: 'pending', attempts: 3, last_attempt_at: at(4 * MIN).toISOString() });
     });
   });
 
@@ -319,6 +350,51 @@ describe('pre-execution notice sweeps', () => {
       expect(r.notDelivered).toBe(0);
       expect(notice('n-claimed').state).toBe('pending');
       expect(task('t1').status).toBe('pending');
+    });
+
+    it('a day notice with no linked tasks past max_wait is skipped, with no banner or Slack (I4)', async () => {
+      insertNotice('n-empty', {
+        kind: 'day',
+        source_type: 'schedule',
+        schedule_id: 'sched-1',
+        window_date: '2026-10-23',
+        created_at: at(-61 * MIN).toISOString(),
+        day_window_start: '2026-10-23T09:00:00.000Z',
+        day_window_end: '2026-10-23T17:00:00.000Z',
+      });
+      const before = getNoticeStatus(NOW).notDeliveredLast7d;
+      const r = await processNotices(NOW);
+      expect(r.notDelivered).toBe(0);
+      expect(notice('n-empty')).toMatchObject({ state: 'skipped', skip_reason: 'no tasks were created' });
+      expect(getNoticeStatus(NOW).notDeliveredLast7d).toBe(before);
+      expect(slackTexts('not delivered')).toHaveLength(0);
+    });
+
+    it('a notice whose linked tasks were all cancelled is skipped at max_wait, not not_delivered', async () => {
+      insertNotice('n-cancelled', {
+        kind: 'day',
+        source_type: 'schedule',
+        schedule_id: 'sched-1',
+        window_date: '2026-10-23',
+        created_at: at(-61 * MIN).toISOString(),
+        day_window_start: '2026-10-23T09:00:00.000Z',
+        day_window_end: '2026-10-23T17:00:00.000Z',
+      });
+      linkTask('t1', 'n-cancelled', { status: 'expired' });
+      const r = await processNotices(NOW);
+      expect(r.notDelivered).toBe(0);
+      expect(notice('n-cancelled')).toMatchObject({
+        state: 'skipped',
+        skip_reason: 'all linked tasks were cancelled or completed',
+      });
+      expect(getNoticeStatus(NOW).notDeliveredLast7d).toBe(0);
+      expect(slackTexts('not delivered')).toHaveLength(0);
+
+      // A later per-machine agent that links to the skipped day notice is not held forever.
+      linkTask('t2', 'n-cancelled', { agentId: 'agent-002' });
+      await processNotices(at(MIN));
+      expect(task('t2').status).toBe('expired');
+      expect(JSON.parse(task('t2').result!).error).toBe(NOT_DELIVERED);
     });
 
     it('still sweeps existing notices when the gate is disabled', async () => {
@@ -555,6 +631,20 @@ describe('pre-execution notice sweeps', () => {
         pendingOverdue: 1,
         notDeliveredLast7d: 1,
         smtpCheck: { ok: true, at: NOW.toISOString(), message: 'ok' },
+      });
+    });
+
+    it('getNoticeStatus hides the SMTP check while notices are disabled but keeps the counts (I5)', () => {
+      writeSettings({
+        enabled: false,
+        notices: { last_smtp_check_at: NOW.toISOString(), last_smtp_check_ok: false, last_smtp_check_message: 'bad' },
+      });
+      insertNotice('p-overdue', { created_at: at(-6 * MIN).toISOString() });
+      insertNotice('nd-recent', { state: 'not_delivered', created_at: at(-2 * HOUR).toISOString() });
+      expect(getNoticeStatus(NOW)).toEqual({
+        pendingOverdue: 1,
+        notDeliveredLast7d: 1,
+        smtpCheck: { ok: null, at: null, message: null },
       });
     });
 

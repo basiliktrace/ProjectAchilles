@@ -206,11 +206,21 @@ export function initializeTables(database: Database.Database): void {
       finished_sent_at TEXT,
       finished_attempts INTEGER NOT NULL DEFAULT 0,
       slack_failure_alerted INTEGER NOT NULL DEFAULT 0,
-      slack_not_delivered_alerted INTEGER NOT NULL DEFAULT 0
+      slack_not_delivered_alerted INTEGER NOT NULL DEFAULT 0,
+      last_attempt_at TEXT
     );
     CREATE INDEX IF NOT EXISTS idx_run_notices_state ON run_notices(state);
     CREATE UNIQUE INDEX IF NOT EXISTS idx_run_notices_day ON run_notices(schedule_id, window_date) WHERE kind = 'day';
   `);
+
+  // Migration: run_notices.last_attempt_at (send retry backoff). run_notices is
+  // never recreated by a later migration, so a plain ADD COLUMN is enough.
+  const noticeCols = new Set(
+    (database.prepare(`PRAGMA table_info(run_notices)`).all() as { name: string }[]).map((c) => c.name),
+  );
+  if (!noticeCols.has('last_attempt_at')) {
+    database.exec('ALTER TABLE run_notices ADD COLUMN last_attempt_at TEXT');
+  }
 
   // Migration: add process metrics columns to heartbeat_history
   const hbCols = database.prepare(`PRAGMA table_info(heartbeat_history)`).all() as { name: string }[];

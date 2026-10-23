@@ -177,6 +177,56 @@ describe('processSchedules with pre-execution notices', () => {
     expect(ts.every((t) => t.notice_id === ns[0].id)).toBe(true);
   });
 
+  it('per_machine: a createTasks failure leaves no day notice; the next agent that day gets a fresh one (I4)', () => {
+    insertSchedule('pm', ['agent-1', 'agent-2'], {
+      nextRunAt: at(1 * MIN),
+      config: { time: '12:00', randomize_mode: 'per_machine' },
+      agentNextRuns: { 'agent-1': at(1 * MIN).toISOString(), 'agent-2': at(8 * MIN).toISOString() },
+    });
+    // The build is missing, so createTasks throws.
+    fs.rmSync(path.join(SETTINGS_DIR, 'builds', 'uuid-pm'), { recursive: true, force: true });
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const first = processSchedules(at(2 * MIN));
+    expect(first.errors).toHaveLength(1);
+    expect(notices()).toHaveLength(0);
+    expect(tasksOf()).toHaveLength(0);
+
+    // Build fixed; agent-2 comes due later the same day.
+    writeBuild('uuid-pm');
+    const second = processSchedules(at(9 * MIN));
+    expect(second.errors).toEqual([]);
+    const ns = notices();
+    expect(ns).toHaveLength(1);
+    expect(ns[0]).toMatchObject({ kind: 'day', state: 'pending', schedule_id: 'pm', window_date: '2026-10-23' });
+    const ts = tasksOf();
+    expect(ts.map((t) => t.agent_id)).toEqual(['agent-2']);
+    expect(ts[0].notice_id).toBe(ns[0].id);
+    errSpy.mockRestore();
+  });
+
+  it('fleet: a schedule whose createTasks throws is not listed on the shared run notice (I4)', () => {
+    insertSchedule('s1', ['agent-1'], { nextRunAt: at(-2 * MIN) });
+    insertSchedule('s2', ['agent-2'], { nextRunAt: at(-MIN) });
+    fs.rmSync(path.join(SETTINGS_DIR, 'builds', 'uuid-s1'), { recursive: true, force: true });
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const result = processSchedules(NOW);
+
+    expect(result.errors).toHaveLength(1);
+    const ns = notices();
+    expect(ns).toHaveLength(1);
+    expect(JSON.parse(ns[0].schedule_ids)).toEqual(['s2']);
+    expect(tasksOf().map((t) => t.agent_id)).toEqual(['agent-2']);
+
+    // s1 is not blocked by s2's pending notice on its next occurrence.
+    writeBuild('uuid-s1');
+    testDb.prepare('UPDATE schedules SET next_run_at = ? WHERE id = ?').run(at(MIN).toISOString(), 's1');
+    processSchedules(at(2 * MIN));
+    expect(tasksOf().map((t) => t.agent_id)).toEqual(['agent-1', 'agent-2']);
+    errSpy.mockRestore();
+  });
+
   it('leaves notice_id NULL and creates no notices when the gate is disabled', () => {
     writeSettings(false);
     insertSchedule('s1', ['agent-1'], { nextRunAt: at(-MIN) });

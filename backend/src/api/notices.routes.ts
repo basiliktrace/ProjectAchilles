@@ -6,6 +6,7 @@ import { IntegrationsSettingsService } from '../services/integrations/settings.j
 import { sendMail } from '../services/alerts/email.service.js';
 import { buildNoticeEmail } from '../services/notices/render.js';
 import { isFullyAccepted } from '../services/notices/acceptance.js';
+import { isSmtpUsable } from '../services/notices/channels.js';
 import {
   getNoticeStatus,
   listNotices,
@@ -21,8 +22,10 @@ router.use(requireClerkAuth());
 // Notice settings are deployment-wide: never org-scoped.
 const settingsService = () => new IntegrationsSettingsService();
 
+// Usable SMTP (host + from address), not the alerts `configured` flag: the
+// Alerts UI never sends that flag, so it stays false after a UI save.
 const smtpConfigured = (svc: IntegrationsSettingsService): boolean =>
-  !!svc.getAlertSettings()?.email?.configured;
+  isSmtpUsable(svc.getAlertSettings()?.email);
 
 router.get('/settings', requirePermission('integrations:read'), asyncHandler(async (_req, res) => {
   const svc = settingsService();
@@ -59,7 +62,7 @@ router.put(
 router.post('/settings/test', requirePermission('integrations:write'), asyncHandler(async (_req, res) => {
   const svc = settingsService();
   const email = svc.getAlertSettings()?.email;
-  if (!email?.configured) {
+  if (!email || !isSmtpUsable(email)) {
     throw new AppError('SMTP email must be configured in Alerts before sending a test notice', 400);
   }
   const recipients = svc.getPreExecutionNoticeSettings().recipients;

@@ -40,6 +40,8 @@ export interface NoticeRow {
   finished_attempts: number;
   slack_failure_alerted: number;
   slack_not_delivered_alerted: number;
+  /** When the latest send attempt finished (retry backoff). */
+  last_attempt_at: string | null;
 }
 
 export interface NoticeSummary {

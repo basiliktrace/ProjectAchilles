@@ -16,6 +16,7 @@ import type { OutgoingMail } from '../alerts/email.service.js';
 import { sendSlackText } from '../alerts/slack.service.js';
 import { AppError } from '../../middleware/error.middleware.js';
 import { isFullyAccepted } from './acceptance.js';
+import { isSlackUsable, isSmtpUsable } from './channels.js';
 import { buildIcs } from './ics.js';
 import { MAX_INLINE_HOSTS, buildFinishedEmail, buildHostsCsv, buildNoticeEmail, classifyOutcome } from './render.js';
 import type { FinishedEmailData, NoticeEmailData } from './render.js';
@@ -36,6 +37,7 @@ const ONLINE_THRESHOLD_MS = 180_000;
 const DEFAULT_EXECUTION_TIMEOUT_SEC = 300;
 
 const SKIP_NO_TASKS = 'no tasks were created';
+const SKIP_NONE_HELD = 'all linked tasks were cancelled or completed';
 const SKIP_COLLISION = 'previous run still waiting for notice delivery';
 
 export type SendOutcome = 'sent' | 'failed' | 'skipped' | 'not_claimed';
@@ -105,15 +107,28 @@ function errorMessage(err: unknown): string {
 // Gate
 // ---------------------------------------------------------------------------
 
-/** The gate applies to new runs when notices are enabled and SMTP is configured. */
+/**
+ * The gate applies to new runs whenever notices are enabled. It does not
+ * depend on SMTP: if SMTP becomes unusable later, notices are still created
+ * and fail to send (recorded on the notice, banner + Slack), so tests are held
+ * and never run unannounced. Enabling requires usable SMTP (settings route).
+ */
 export function isNoticeGateEnabled(): boolean {
-  const svc = settingsService();
-  if (!svc.getPreExecutionNoticeSettings().enabled) return false;
-  return !!svc.getAlertSettings()?.email?.configured;
+  return settingsService().getPreExecutionNoticeSettings().enabled;
 }
 
 function recipientsSnapshot(): string[] {
   return [...settingsService().getPreExecutionNoticeSettings().recipients];
+}
+
+/**
+ * Recipients for a send attempt: the current settings, so fixing a typo takes
+ * effect on the next attempt. Falls back to the notice's own list if settings
+ * have none (notices can be disabled with recipients cleared).
+ */
+function attemptRecipients(n: NoticeRow): string[] {
+  const current = recipientsSnapshot();
+  return current.length > 0 ? current : parseJsonArray(n.recipients);
 }
 
 // ---------------------------------------------------------------------------
@@ -174,7 +189,13 @@ export interface DayNoticeSchedule {
 }
 
 export interface SchedulerTick {
+  /**
+   * The tick's shared run notice (created on first use). Does not list the
+   * schedule on it: call confirmRunSchedule once its tasks were created.
+   */
   runNoticeFor(scheduleId: string, timezone: string, createdBy: string): string | null;
+  /** List a schedule on the tick's run notice, after its createTasks succeeded. */
+  confirmRunSchedule(scheduleId: string): void;
   dayNoticeFor(schedule: DayNoticeSchedule): string | null;
   hasPendingRunNotice(scheduleId: string): boolean;
   recordSkippedOccurrence(scheduleId: string, createdBy: string, timezone: string): void;
@@ -197,19 +218,19 @@ export function createSchedulerTick(now: Date): SchedulerTick {
   let runNoticeId: string | null = null;
 
   return {
-    runNoticeFor(scheduleId, timezone, createdBy) {
+    runNoticeFor(_scheduleId, timezone, createdBy) {
       if (!gateEnabled()) return null;
-      if (runNoticeId) {
-        repo.appendScheduleId(runNoticeId, scheduleId);
-        return runNoticeId;
-      }
+      if (runNoticeId) return runNoticeId;
+      // Not wrapped in a transaction with createTasks: the id is cached for the
+      // whole tick, so a rollback would leave the cache pointing at nothing.
+      // A notice whose createTasks all failed is an orphan the send pass skips.
       const id = crypto.randomUUID();
       repo.insertNotice({
         id,
         kind: 'run',
         state: 'pending',
         sourceType: 'schedule',
-        scheduleIds: [scheduleId],
+        scheduleIds: [],
         timezone: safeTimezone(timezone),
         createdBy,
         createdAt: nowIso,
@@ -217,6 +238,10 @@ export function createSchedulerTick(now: Date): SchedulerTick {
       });
       runNoticeId = id;
       return id;
+    },
+
+    confirmRunSchedule(scheduleId) {
+      if (runNoticeId) repo.appendScheduleId(runNoticeId, scheduleId);
     },
 
     dayNoticeFor(schedule) {
@@ -315,12 +340,6 @@ function parsePayload(s: string): TaskPayload | null {
   }
 }
 
-interface BuiltNotice {
-  mail: OutgoingMail;
-  pickupDeadline: Date;
-  windowEnd: Date;
-}
-
 type ReleaseTimes = { releaseAt: Date; pickupDeadline: Date; windowEnd: Date };
 
 /** Longest `execution_timeout` across the linked tasks' payloads (default 300s). */
@@ -351,7 +370,7 @@ function buildNoticeMail(
   linked: repo.LinkedTaskRow[],
   recipients: string[],
   now: Date,
-): BuiltNotice {
+): OutgoingMail {
   const svc = settingsService();
   const settings = svc.getPreExecutionNoticeSettings();
   const timezone = safeTimezone(n.timezone);
@@ -441,17 +460,13 @@ function buildNoticeMail(
     attachments.push({ filename: `${tag}-hosts.csv`, content: buildHostsCsv(hostList), contentType: 'text/csv; charset=utf-8' });
   }
 
-  return {
-    mail: { to: recipients, subject, html, attachments },
-    pickupDeadline: release.pickupDeadline,
-    windowEnd: release.windowEnd,
-  };
+  return { to: recipients, subject, html, attachments };
 }
 
 async function alertSlackOnFailure(n: NoticeRow, error: string): Promise<void> {
   if (n.slack_failure_alerted) return;
   const slack = settingsService().getAlertSettings()?.slack;
-  if (!slack?.configured || !slack.enabled || !slack.webhook_url) return;
+  if (!slack || !isSlackUsable(slack)) return;
   // Take the once-per-notice flag atomically before sending, so two failing
   // senders can't both alert.
   if (!repo.claimSlackFailureAlert(n.id)) return;
@@ -467,9 +482,14 @@ async function alertSlackOnFailure(n: NoticeRow, error: string): Promise<void> {
   }
 }
 
+/** The later of `now` (the pass clock) and the real clock. */
+function laterOfNow(now: Date | undefined): Date {
+  return new Date(Math.max(now?.getTime() ?? 0, Date.now()));
+}
+
 /**
  * One send attempt for a pending notice. Claims it atomically (a second
- * concurrent caller gets `not_claimed`), emails the recipients snapshot, and on
+ * concurrent caller gets `not_claimed`), emails the current recipients, and on
  * full acceptance marks it `sent` with release times counted from acceptance.
  * Every write after the claim is conditional on still owning it; a sender
  * whose stale claim was taken over gets `not_claimed` and writes nothing.
@@ -484,42 +504,50 @@ export async function sendNotice(id: string, now?: Date): Promise<SendOutcome> {
   if (!n) return 'not_claimed';
 
   const linked = repo.getLinkedTasks(id);
-  if (n.kind === 'run' && linked.length === 0) {
-    // Orphan (e.g. createTasks threw after the notice was created): never email.
-    return repo.markSkipped(id, claimAt, SKIP_NO_TASKS) ? 'skipped' : 'not_claimed';
+  const held = linked.some((t) => t.status === 'pending');
+  if (n.kind === 'run' && !held) {
+    // Orphan (createTasks threw after the notice was created) or every task
+    // was cancelled: nothing is waiting on this notice, so never email.
+    const reason = linked.length === 0 ? SKIP_NO_TASKS : SKIP_NONE_HELD;
+    return repo.markSkipped(id, claimAt, reason) ? 'skipped' : 'not_claimed';
   }
-  if (linked.length === 0) {
-    // Day notice with nothing linked yet: nothing to announce; try next tick.
+  if (!held) {
+    // Day notice with no held task (none linked yet, or all cancelled):
+    // nothing to announce. It stays pending, because later per-machine
+    // agents today link to it; try again next tick.
     repo.releaseClaim(id, claimAt);
     return 'not_claimed';
   }
 
-  const recipients = parseJsonArray(n.recipients);
+  const recipients = attemptRecipients(n);
   let accepted: string[] = [];
   let rejected: string[] = [];
   let error: string;
   try {
     const email = settingsService().getAlertSettings()?.email;
-    if (!email?.configured) throw new Error('SMTP email is not configured');
+    if (!email || !isSmtpUsable(email)) throw new Error('SMTP email is not configured');
 
-    const built = buildNoticeMail(n, linked, recipients, start);
-    const result = await sendMail(email, built.mail);
+    // The email is rendered before sending, from the attempt start: it
+    // announces "not before start + lead".
+    const mail = buildNoticeMail(n, linked, recipients, start);
+    const result = await sendMail(email, mail);
     accepted = result.accepted;
     rejected = result.rejected;
 
     if (isFullyAccepted(recipients, result)) {
-      // The countdown starts at acceptance. The pickup deadline and window end
-      // stay as announced in the email (never later than promised).
-      const sentAt = now ?? new Date();
+      // The countdown starts at acceptance (after SMTP returned), so the
+      // stored release is never earlier than the email's "not before".
+      const sentAt = laterOfNow(now);
       const settings = settingsService().getPreExecutionNoticeSettings();
-      const releaseAt = new Date(sentAt.getTime() + settings.lead_minutes * MIN);
+      const times = releaseTimesFor(n, sentAt, settings, maxExecutionTimeoutSec(linked));
       const applied = repo.markSent(id, claimAt, {
         sentAt: sentAt.toISOString(),
+        recipients,
         accepted,
         rejected,
-        releaseAt: releaseAt.toISOString(),
-        pickupDeadline: built.pickupDeadline.toISOString(),
-        windowEnd: built.windowEnd.toISOString(),
+        releaseAt: times.releaseAt.toISOString(),
+        pickupDeadline: times.pickupDeadline.toISOString(),
+        windowEnd: times.windowEnd.toISOString(),
       });
       // Not applied: this sender lost the claim (stale takeover) or the notice
       // left 'pending' mid-send (admin override). The owner, if any, records it.
@@ -538,7 +566,14 @@ export async function sendNotice(id: string, now?: Date): Promise<SendOutcome> {
   }
 
   // A sender that lost its claim records nothing and alerts nobody.
-  if (!repo.recordSendFailure(id, claimAt, error, accepted, rejected)) return 'not_claimed';
+  const recorded = repo.recordSendFailure(id, claimAt, {
+    error,
+    recipients,
+    accepted,
+    rejected,
+    attemptAt: laterOfNow(now).toISOString(),
+  });
+  if (!recorded) return 'not_claimed';
   await alertSlackOnFailure(n, error);
   return 'failed';
 }
@@ -571,7 +606,7 @@ function notRunResult(reason: string): string {
 /** Post to Slack if it is configured. Returns false if not configured or the post failed. */
 async function postSlack(text: string): Promise<boolean> {
   const slack = settingsService().getAlertSettings()?.slack;
-  if (!slack?.configured || !slack.enabled || !slack.webhook_url) return false;
+  if (!slack || !isSlackUsable(slack)) return false;
   try {
     await sendSlackText(slack.webhook_url, text);
     return true;
@@ -582,8 +617,7 @@ async function postSlack(text: string): Promise<boolean> {
 }
 
 function slackConfigured(): boolean {
-  const slack = settingsService().getAlertSettings()?.slack;
-  return !!(slack?.configured && slack.enabled && slack.webhook_url);
+  return isSlackUsable(settingsService().getAlertSettings()?.slack);
 }
 
 export interface ProcessNoticesResult {
@@ -602,9 +636,26 @@ async function phase(name: string, fn: () => Promise<void> | void): Promise<void
   }
 }
 
+/** Retry backoff after `attempts` failed attempts: 1, 2, 4, 8, then every 15 minutes. */
+export function retryBackoffMs(attempts: number): number {
+  if (attempts < 1) return 0;
+  return Math.min(2 ** (attempts - 1), 15) * MIN;
+}
+
+/** Whether a pending notice's backoff has elapsed (first attempts are never delayed). */
+function backoffElapsed(p: repo.PendingNoticeRow, now: Date): boolean {
+  if (p.attempts < 1) return true;
+  const last = parseTimestamp(p.last_attempt_at);
+  if (last === null) return true;
+  // abs(): a timestamp in the future (clock change) must not block retries forever.
+  return Math.abs(now.getTime() - last) >= retryBackoffMs(p.attempts);
+}
+
 async function sendPass(now: Date): Promise<number> {
   let sent = 0;
-  for (const id of repo.listPendingNoticeIds()) {
+  for (const p of repo.listPendingNotices()) {
+    if (!backoffElapsed(p, now)) continue;
+    const id = p.id;
     try {
       if ((await sendNotice(id, now)) === 'sent') sent++;
     } catch (err) {
@@ -620,7 +671,10 @@ async function boundedWaitPass(now: Date): Promise<{ notDelivered: number; expir
   const createdCutoff = new Date(now.getTime() - settings.max_wait_minutes * MIN).toISOString();
   const staleClaimCutoff = new Date(now.getTime() - STALE_CLAIM_MS).toISOString();
 
-  const moved = repo.markNotDelivered(createdCutoff, staleClaimCutoff);
+  const moved = repo.markNotDelivered(createdCutoff, staleClaimCutoff, {
+    noTasks: SKIP_NO_TASKS,
+    noneHeld: SKIP_NONE_HELD,
+  });
   for (const id of moved) console.warn(`[Notices] ${runTag(id)} not delivered within ${settings.max_wait_minutes} min`);
 
   // Every pass, not only at the transition (Ruling R5).
@@ -709,7 +763,7 @@ async function sendFinished(n: NoticeRow, now: Date): Promise<boolean> {
   const recipients = parseJsonArray(n.recipients);
   try {
     const email = settingsService().getAlertSettings()?.email;
-    if (!email?.configured) throw new Error('SMTP email is not configured');
+    if (!email || !isSmtpUsable(email)) throw new Error('SMTP email is not configured');
     const result = await sendMail(email, {
       to: recipients,
       subject,
@@ -745,7 +799,7 @@ async function dailySmtpCheck(now: Date): Promise<void> {
 
   const email = svc.getAlertSettings()?.email;
   let r: { success: boolean; message: string };
-  if (!email?.configured) {
+  if (!email || !isSmtpUsable(email)) {
     r = { success: false, message: 'SMTP email is not configured' };
   } else {
     try {
@@ -847,12 +901,17 @@ export interface NoticeStatus {
 export function getNoticeStatus(now: Date = new Date()): NoticeStatus {
   const s = settingsService().getPreExecutionNoticeSettings();
   return {
+    // Existing notices still matter after notices are turned off.
     pendingOverdue: repo.countPendingCreatedBefore(new Date(now.getTime() - PENDING_OVERDUE_MS).toISOString()),
     notDeliveredLast7d: repo.countNotDeliveredSince(new Date(now.getTime() - NOT_DELIVERED_LOOKBACK_MS).toISOString()),
-    smtpCheck: {
-      ok: s.last_smtp_check_ok ?? null,
-      at: s.last_smtp_check_at ?? null,
-      message: s.last_smtp_check_message ?? null,
-    },
+    // The daily check only runs while enabled, so a stale failure would
+    // otherwise keep the banner up forever after disabling.
+    smtpCheck: s.enabled
+      ? {
+          ok: s.last_smtp_check_ok ?? null,
+          at: s.last_smtp_check_at ?? null,
+          message: s.last_smtp_check_message ?? null,
+        }
+      : { ok: null, at: null, message: null },
   };
 }

@@ -89,6 +89,19 @@ describe('buildHostsCsv', () => {
     expect(csv).toContain('"a,b",linux,true');
     expect(csv).toContain('"q""x",linux,false');
   });
+  it('neutralises spreadsheet formulas in cells', () => {
+    const csv = buildHostsCsv([
+      { hostname: '=HYPERLINK("http://evil","x")', os: '+cmd', online: true },
+      { hostname: '-2+3', os: '@SUM(A1)', online: false },
+      { hostname: '\tTAB', os: '\rCR', online: true },
+      { hostname: 'safe-host', os: 'linux', online: true },
+    ]);
+    const lines = csv.split('\r\n');
+    expect(lines[1]).toBe(`"'=HYPERLINK(""http://evil"",""x"")",'+cmd,true`);
+    expect(lines[2]).toBe(`'-2+3,'@SUM(A1),false`);
+    expect(lines[3]).toBe(`'\tTAB,"'\rCR",true`);
+    expect(lines[4]).toBe('safe-host,linux,true');
+  });
 });
 
 it('escapeHtml', () => expect(escapeHtml(`&<>"'`)).toBe('&amp;&lt;&gt;&quot;&#39;'));
