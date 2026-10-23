@@ -284,9 +284,11 @@ export function hasPendingLinkedTask(noticeId: string): boolean {
 
 /**
  * Bounded wait: pending notices created at or before `createdCutoffIso` become
- * `not_delivered`. One that holds no pending task (none were created, or all
- * were cancelled) is `skipped` instead: no test was held, so there is nothing
- * to alarm about. A notice held by a live (non-stale) send claim is left for
+ * `not_delivered`. A run notice that holds no pending task (none were created,
+ * or all were cancelled) is `skipped` instead: no test was held, so there is
+ * nothing to alarm about. A day notice that holds no pending task is left
+ * `pending` (it is harmless and waits for a later per-machine agent to link a
+ * task; skipping it would expire those later tasks). A notice held by a live (non-stale) send claim is left for
  * the next pass, so a sender mid-SMTP isn't overtaken. Returns the ids moved
  * to `not_delivered`.
  */
@@ -303,28 +305,34 @@ export function markNotDelivered(
       SET state = 'skipped', claim_at = NULL,
           skip_reason = CASE WHEN EXISTS (SELECT 1 FROM tasks t WHERE t.notice_id = run_notices.id)
                              THEN ? ELSE ? END
-      WHERE ${due}
+      WHERE ${due} AND kind = 'run'
         AND NOT EXISTS (SELECT 1 FROM tasks t WHERE t.notice_id = run_notices.id AND t.status = 'pending')
     `).run(reasons.noneHeld, reasons.noTasks, createdCutoffIso, staleClaimCutoffIso);
     const rows = db
-      .prepare(`UPDATE run_notices SET state = 'not_delivered', claim_at = NULL WHERE ${due} RETURNING id`)
+      .prepare(`
+        UPDATE run_notices SET state = 'not_delivered', claim_at = NULL
+        WHERE ${due}
+          AND EXISTS (SELECT 1 FROM tasks t WHERE t.notice_id = run_notices.id AND t.status = 'pending')
+        RETURNING id
+      `)
       .all(createdCutoffIso, staleClaimCutoffIso) as Array<{ id: string }>;
     return rows.map((r) => r.id);
   })();
 }
 
 /**
- * Expire every still-pending task linked to a `not_delivered` or `skipped`
- * notice (Ruling R5: on every pass, so tasks linked after the transition
- * expire too; a later per-machine agent can link to a skipped day notice,
- * which will never be sent).
+ * Expire every still-pending task linked to a `not_delivered` notice (Ruling
+ * R5: on every pass, so tasks linked after the transition expire too; a later
+ * per-machine agent can link to an undelivered day notice). `skipped` notices
+ * never gain links: run notices are closed at creation and day notices that
+ * hold nothing stay `pending` instead of being skipped.
  */
 export function expireTasksOfNotDelivered(nowIso: string, resultJson: string): number {
   return getDatabase()
     .prepare(`
       UPDATE tasks SET status = 'expired', completed_at = ?, result = ?
       WHERE status = 'pending'
-        AND notice_id IN (SELECT id FROM run_notices WHERE state IN ('not_delivered','skipped'))
+        AND notice_id IN (SELECT id FROM run_notices WHERE state = 'not_delivered')
     `)
     .run(nowIso, resultJson).changes;
 }
@@ -446,9 +454,14 @@ export function overrideNotice(
 // Read models (status banner, notice log, Tasks UI badges)
 // ---------------------------------------------------------------------------
 
+/** Pending notices past the cutoff. A day notice holding no pending task is inert, not overdue. */
 export function countPendingCreatedBefore(cutoffIso: string): number {
   const row = getDatabase()
-    .prepare(`SELECT COUNT(*) AS c FROM run_notices WHERE state = 'pending' AND created_at <= ?`)
+    .prepare(`
+      SELECT COUNT(*) AS c FROM run_notices n
+      WHERE state = 'pending' AND created_at <= ?
+        AND (kind = 'run' OR EXISTS (SELECT 1 FROM tasks t WHERE t.notice_id = n.id AND t.status = 'pending'))
+    `)
     .get(cutoffIso) as { c: number };
   return row.c;
 }

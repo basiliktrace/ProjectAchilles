@@ -352,8 +352,8 @@ describe('pre-execution notice sweeps', () => {
       expect(task('t1').status).toBe('pending');
     });
 
-    it('a day notice with no linked tasks past max_wait is skipped, with no banner or Slack (I4)', async () => {
-      insertNotice('n-empty', {
+    const dayNotice = (id: string, extra: Record<string, unknown> = {}) =>
+      insertNotice(id, {
         kind: 'day',
         source_type: 'schedule',
         schedule_id: 'sched-1',
@@ -361,40 +361,75 @@ describe('pre-execution notice sweeps', () => {
         created_at: at(-61 * MIN).toISOString(),
         day_window_start: '2026-10-23T09:00:00.000Z',
         day_window_end: '2026-10-23T17:00:00.000Z',
+        ...extra,
       });
-      const before = getNoticeStatus(NOW).notDeliveredLast7d;
+
+    it('a day notice with no linked tasks past max_wait stays pending, with no banner or Slack (I4)', async () => {
+      dayNotice('n-empty');
       const r = await processNotices(NOW);
       expect(r.notDelivered).toBe(0);
-      expect(notice('n-empty')).toMatchObject({ state: 'skipped', skip_reason: 'no tasks were created' });
-      expect(getNoticeStatus(NOW).notDeliveredLast7d).toBe(before);
+      expect(notice('n-empty').state).toBe('pending');
+      expect(getNoticeStatus(NOW)).toMatchObject({ pendingOverdue: 0, notDeliveredLast7d: 0 });
       expect(slackTexts('not delivered')).toHaveLength(0);
     });
 
-    it('a notice whose linked tasks were all cancelled is skipped at max_wait, not not_delivered', async () => {
-      insertNotice('n-cancelled', {
-        kind: 'day',
-        source_type: 'schedule',
-        schedule_id: 'sched-1',
-        window_date: '2026-10-23',
-        created_at: at(-61 * MIN).toISOString(),
-        day_window_start: '2026-10-23T09:00:00.000Z',
-        day_window_end: '2026-10-23T17:00:00.000Z',
-      });
+    it('a day notice whose only task was cancelled stays pending; a later agent task is sent and pickable (R18a)', async () => {
+      dayNotice('n-cancelled');
       linkTask('t1', 'n-cancelled', { status: 'expired' });
       const r = await processNotices(NOW);
       expect(r.notDelivered).toBe(0);
-      expect(notice('n-cancelled')).toMatchObject({
+      expect(notice('n-cancelled').state).toBe('pending');
+      expect(getNoticeStatus(NOW)).toMatchObject({ pendingOverdue: 0, notDeliveredLast7d: 0 });
+      expect(slackTexts('not delivered')).toHaveLength(0);
+
+      // A later per-machine agent links a held task; SMTP works again.
+      mockSendMail.mockResolvedValue({ accepted: [...RECIPIENTS], rejected: [] });
+      linkTask('t2', 'n-cancelled', { agentId: 'agent-002' });
+      await processNotices(at(MIN));
+      expect(notice('n-cancelled').state).toBe('sent');
+      expect(task('t2').status).toBe('pending');
+      expect(JSON.parse(notice('n-cancelled').recipients as string)).toEqual(RECIPIENTS);
+      // Released at acceptance + lead time, so pickable after that.
+      const t = at(MIN + 6 * MIN);
+      vi.setSystemTime(t);
+      resetExpireThrottle();
+      expect(getNextTask('agent-002')?.id).toBe('t2');
+    });
+
+    it('a day notice holding a pending task past max_wait is still not_delivered and expires it (R18b)', async () => {
+      dayNotice('n-held');
+      linkTask('t1', 'n-held');
+      const r = await processNotices(NOW);
+      expect(r.notDelivered).toBe(1);
+      expect(notice('n-held').state).toBe('not_delivered');
+      expect(task('t1').status).toBe('expired');
+      expect(getNoticeStatus(NOW).notDeliveredLast7d).toBe(1);
+    });
+
+    it('a run notice whose linked tasks were all cancelled is skipped at max_wait (R18c)', async () => {
+      insertNotice('n-run-cancelled', { created_at: at(-61 * MIN).toISOString() });
+      linkTask('t1', 'n-run-cancelled', { status: 'expired' });
+      const r = await processNotices(NOW);
+      expect(r.notDelivered).toBe(0);
+      expect(notice('n-run-cancelled')).toMatchObject({
         state: 'skipped',
         skip_reason: 'all linked tasks were cancelled or completed',
       });
       expect(getNoticeStatus(NOW).notDeliveredLast7d).toBe(0);
       expect(slackTexts('not delivered')).toHaveLength(0);
+    });
 
-      // A later per-machine agent that links to the skipped day notice is not held forever.
-      linkTask('t2', 'n-cancelled', { agentId: 'agent-002' });
-      await processNotices(at(MIN));
-      expect(task('t2').status).toBe('expired');
-      expect(JSON.parse(task('t2').result!).error).toBe(NOT_DELIVERED);
+    it('a previous-day held-nothing day notice stays pending, inert and out of the status counts (R18d)', async () => {
+      dayNotice('n-yesterday', { window_date: '2026-10-22', created_at: at(-27 * HOUR).toISOString(),
+        day_window_start: '2026-10-22T09:00:00.000Z', day_window_end: '2026-10-22T17:00:00.000Z' });
+      linkTask('t1', 'n-yesterday', { status: 'expired' });
+      for (const offset of [0, MIN, HOUR]) {
+        const r = await processNotices(at(offset));
+        expect(r).toMatchObject({ notDelivered: 0, expiredTasks: 0 });
+      }
+      expect(notice('n-yesterday').state).toBe('pending');
+      expect(mockSendMail).not.toHaveBeenCalled();
+      expect(getNoticeStatus(NOW)).toMatchObject({ pendingOverdue: 0, notDeliveredLast7d: 0 });
     });
 
     it('still sweeps existing notices when the gate is disabled', async () => {
