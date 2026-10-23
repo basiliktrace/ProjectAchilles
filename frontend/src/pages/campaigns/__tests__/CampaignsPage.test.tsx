@@ -33,7 +33,7 @@ describe('CampaignsPage', () => {
     expect(screen.getByText('CIS v8')).toBeInTheDocument();
     expect(screen.getByText('3 tests × 2 hosts')).toBeInTheDocument();
     expect(screen.getByText(/75%/)).toBeInTheDocument();
-    expect(screen.getByText('1 tests × 1 hosts')).toBeInTheDocument();
+    expect(screen.getByText('1 test × 1 host')).toBeInTheDocument();
     await waitFor(() => expect(screen.getByText('Not run yet')).toBeInTheDocument());
   });
 });

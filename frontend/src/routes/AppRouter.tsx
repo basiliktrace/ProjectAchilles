@@ -4,6 +4,7 @@ import { useAnalyticsAuth } from '../hooks/useAnalyticsAuth';
 import { useCanAccessModule } from '../hooks/useAppRole';
 import { RequireAuth } from '../components/auth/RequireAuth';
 import { RequireModule } from '../components/auth/RequireModule';
+import { RequireCapability } from '../components/auth/RequireCapability';
 import Layout from '../components/shared/Layout';
 import { Loading } from '../components/shared/ui/Spinner';
 import { Alert } from '../components/shared/ui/Alert';
@@ -138,8 +139,8 @@ export default function AppRouter() {
           <Route path="agents" element={<AgentsPage />} />
           <Route path="agents/:agentId" element={<AgentDetailPage />} />
           <Route path="tasks" element={<TasksPage />} />
-          <Route path="campaigns" element={<CampaignsPage />} />
-          <Route path="campaigns/runs/:runId" element={<CampaignRunPage />} />
+          <Route path="campaigns" element={<RequireCapability capability="campaigns"><CampaignsPage /></RequireCapability>} />
+          <Route path="campaigns/runs/:runId" element={<RequireCapability capability="campaigns"><CampaignRunPage /></RequireCapability>} />
         </Route>
 
         {/* Settings */}

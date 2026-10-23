@@ -73,14 +73,15 @@ export default function CampaignsPage() {
                   {c.framework_label && <Badge variant="outline">{c.framework_label}</Badge>}
                 </div>
                 <div className="mt-1 text-sm text-muted">
-                  {`${c.test_uuids.length} tests × ${c.agent_ids.length} hosts`}
+                  {`${c.test_uuids.length} ${c.test_uuids.length === 1 ? 'test' : 'tests'} × ${c.agent_ids.length} ${c.agent_ids.length === 1 ? 'host' : 'hosts'}`}
                 </div>
               </div>
               <div className="flex items-center gap-3 text-sm">
                 {c.last_run ? (
                   <Link to={`/campaigns/runs/${c.last_run.id}`} className="text-accent hover:underline">
-                    {c.last_run.percent_protected === null ? 'n/a' : `${c.last_run.percent_protected}%`}
-                    {' protected · '}
+                    {c.last_run.percent_protected === null
+                      ? 'No conclusive results · '
+                      : `${c.last_run.percent_protected}% protected · `}
                     {new Date(c.last_run.started_at).toLocaleDateString()}
                   </Link>
                 ) : (
