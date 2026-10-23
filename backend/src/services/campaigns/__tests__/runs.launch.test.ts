@@ -5,6 +5,7 @@ import type Database from 'better-sqlite3';
 import { createTestDatabase, insertTestAgent } from '../../../__tests__/helpers/db.js';
 
 let testDb: Database.Database;
+const { mockSendMail } = vi.hoisted(() => ({ mockSendMail: vi.fn() }));
 const state = vi.hoisted(() => ({ home: `${process.env.TMPDIR ?? '/tmp'}/pa-launch-${process.pid}`, afterPreflight: null as null | (() => void) }));
 
 vi.mock('../../agent/database.js', async (importOriginal) => ({
@@ -21,7 +22,7 @@ vi.mock('os', async () => {
 });
 vi.mock('../../alerts/email.service.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../alerts/email.service.js')>()),
-  sendMail: vi.fn().mockResolvedValue(undefined),
+  sendMail: mockSendMail,
 }));
 // Lets a test mutate the world between preflight and task creation.
 vi.mock('../preflight.js', async (importOriginal) => {
@@ -82,6 +83,8 @@ describe('launchRun', () => {
     fs.rmSync(state.home, { recursive: true, force: true });
     fs.mkdirSync(state.home, { recursive: true });
     state.afterPreflight = null;
+    mockSendMail.mockReset();
+    mockSendMail.mockResolvedValue(undefined);
     testDb = createTestDatabase();
     insertTestAgent(testDb, { id: 'a1', org_id: ORG, hostname: 'h1', os: 'windows' });
     insertTestAgent(testDb, { id: 'a2', org_id: ORG, hostname: 'h2', os: 'windows' });
@@ -197,14 +200,38 @@ describe('launchRun', () => {
     expect(count('run_notices')).toBe(0);
   });
 
-  it('atomic: createTasksBatch failing leaves no run, tasks or notice', () => {
+  const MISSING = 'Build metadata not found for test t2';
+  const flush = () => new Promise((r) => setTimeout(r, 0));
+
+  it('atomic (notices enabled): createTasksBatch failing leaves no run, tasks or notice, and no mail', async () => {
     enableNotices();
     const c = mk(['t1', 't2'], ['a1', 'a2']);
     // t1's tasks are created first; t2 then fails (build removed after preflight).
     state.afterPreflight = () => fs.rmSync(buildDir('t2'), { recursive: true, force: true });
-    expect(() => launchRun(c.id, OPTS)).toThrow();
+    expect(() => launchRun(c.id, OPTS)).toThrow(MISSING);
     expect(count('campaign_runs')).toBe(0);
     expect(count('tasks')).toBe(0);
     expect(count('run_notices')).toBe(0);
+    await flush();
+    expect(mockSendMail).not.toHaveBeenCalled();
+  });
+
+  it('atomic (notices disabled): no orphan run row or tasks', async () => {
+    const c = mk(['t1', 't2'], ['a1', 'a2']);
+    state.afterPreflight = () => fs.rmSync(buildDir('t2'), { recursive: true, force: true });
+    expect(() => launchRun(c.id, OPTS)).toThrow(MISSING);
+    expect(count('campaign_runs')).toBe(0);
+    expect(count('tasks')).toBe(0);
+    await flush();
+    expect(mockSendMail).not.toHaveBeenCalled();
+  });
+
+  it('opts.orgId differing from the campaign org: 403, nothing written', () => {
+    const c = mk(['t1'], ['a1']);
+    expect(() => launchRun(c.id, { ...OPTS, orgId: 'org-2' })).toThrow(
+      expect.objectContaining({ statusCode: 403, message: "org_id does not match the campaign's organization" }),
+    );
+    expect(count('campaign_runs')).toBe(0);
+    expect(count('tasks')).toBe(0);
   });
 });

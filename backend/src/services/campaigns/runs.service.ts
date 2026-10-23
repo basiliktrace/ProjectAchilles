@@ -40,6 +40,11 @@ export function launchRun(
   opts: LaunchOptions,
 ): { run_id: string; task_count: number; skipped: number } {
   const campaign = getCampaign(campaignId, opts.callerOrg);
+  // The campaign owns the org: the run, its notice and its tasks all use it.
+  if (opts.orgId && opts.orgId !== campaign.org_id) {
+    throw new AppError("org_id does not match the campaign's organization", 403);
+  }
+  const orgId = campaign.org_id;
   // Agents may have moved org since the campaign was saved.
   assertAgentsInOrg(campaign.agent_ids, opts.callerOrg);
 
@@ -70,22 +75,25 @@ export function launchRun(
   const runId = randomUUID();
   const db = getDatabase();
 
-  runWithNotice({ type: 'run_now', createdBy: opts.userId, orgId: opts.orgId }, (noticeId) => {
-    db.prepare(
-      `INSERT INTO campaign_runs (id, campaign_id, org_id, started_by, started_at, notice_id, snapshot, task_count)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-    ).run(
-      runId,
-      campaign.id,
-      campaign.org_id,
-      opts.userId,
-      new Date().toISOString(),
-      noticeId,
-      JSON.stringify(snapshot),
-      pre.task_count,
-    );
-    createTasksBatch(requests, opts.orgId, opts.userId, { noticeId, campaignRunId: runId });
-  });
+  runWithNotice({ type: 'run_now', createdBy: opts.userId, orgId }, (noticeId) =>
+    // Own transaction: runWithNotice opens none when notices are disabled.
+    db.transaction(() => {
+      db.prepare(
+        `INSERT INTO campaign_runs (id, campaign_id, org_id, started_by, started_at, notice_id, snapshot, task_count)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).run(
+        runId,
+        campaign.id,
+        campaign.org_id,
+        opts.userId,
+        new Date().toISOString(),
+        noticeId,
+        JSON.stringify(snapshot),
+        pre.task_count,
+      );
+      createTasksBatch(requests, orgId, opts.userId, { noticeId, campaignRunId: runId });
+    })(),
+  );
 
   return { run_id: runId, task_count: pre.task_count, skipped: pre.skipped.length };
 }
