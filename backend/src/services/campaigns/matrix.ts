@@ -1,8 +1,8 @@
 import { AppError } from '../../middleware/error.middleware.js';
 import { getDatabase } from '../agent/database.js';
-import { getNoticeSummaries } from '../notices/notices.repo.js';
+import { getNoticeRecord, getNoticeSummaries } from '../notices/notices.repo.js';
 import { classifyOutcome, csvCell } from '../notices/render.js';
-import type { NoticeScope, NoticeSummary } from '../notices/types.js';
+import type { NoticeRecord, NoticeScope, NoticeSummary } from '../notices/types.js';
 import type { TaskResult, TaskStatus } from '../../types/agent.js';
 import type { CampaignRunRow, CellState, RunSnapshot } from './types.js';
 
@@ -23,8 +23,11 @@ export interface RunMatrix {
     campaign_name: string;
     framework_label: string | null;
     started_by: string;
+    /** Display name from the run snapshot; started_by for runs without one. */
+    started_by_name: string;
     started_at: string;
-    notice: NoticeSummary | null;
+    /** The run's notice with its delivery record (sent at, recipients, override). */
+    notice: NoticeRecord | null;
   };
   tests: { uuid: string; name: string }[];
   agents: { id: string; hostname: string; os: string }[];
@@ -121,7 +124,8 @@ function cellFor(task: PairTask, notices: Record<string, NoticeSummary>, nowIso:
     default:
       state = 'not_run'; // expired
   }
-  if (state === 'not_run') base.reason = task.error;
+  // The reason a pair did not produce a verdict (expiry, cancel, agent error).
+  if (state === 'not_run' || state === 'error') base.reason = task.error;
   return { state, ...base };
 }
 
@@ -132,13 +136,16 @@ function totalsOf(cells: Record<string, Record<string, MatrixCell>>): RunMatrix[
   return { ...t, percent_protected: denom === 0 ? null : Math.round((t.protected / denom) * 100) };
 }
 
+function startedByName(row: CampaignRunRow, snap: RunSnapshot): string {
+  return snap.started_by_name || row.started_by;
+}
+
 function build(row: CampaignRunRow): RunMatrix {
   const snap = JSON.parse(row.snapshot) as RunSnapshot;
   const nowIso = new Date().toISOString();
   const byPair = latestTasksByPair(row.id);
   const skipped = new Map(snap.skipped.map((s) => [`${s.test_uuid}\u0000${s.agent_id}`, s.reason]));
   const noticeIds = [...byPair.values()].map((t) => t.notice_id).filter((id): id is string => !!id);
-  if (row.notice_id) noticeIds.push(row.notice_id);
   const scope: NoticeScope = { kind: 'org', orgId: row.org_id };
   const notices = getNoticeSummaries(noticeIds, scope);
 
@@ -163,8 +170,9 @@ function build(row: CampaignRunRow): RunMatrix {
       campaign_name: snap.campaign_name,
       framework_label: snap.framework_label,
       started_by: row.started_by,
+      started_by_name: startedByName(row, snap),
       started_at: row.started_at,
-      notice: row.notice_id ? notices[row.notice_id] ?? null : null,
+      notice: row.notice_id ? getNoticeRecord(row.notice_id, scope) : null,
     },
     tests: snap.tests,
     agents: snap.agents,
@@ -182,43 +190,87 @@ export function computeRunTotals(runId: string): RunMatrix['totals'] {
   return build(findRun(runId, undefined)).totals;
 }
 
-export function listRuns(campaignId: string, callerOrg: string | undefined) {
-  const db = getDatabase();
-  const rows = (callerOrg !== undefined
-    ? db.prepare('SELECT * FROM campaign_runs WHERE campaign_id = ? AND org_id = ? ORDER BY started_at DESC, rowid DESC').all(campaignId, callerOrg)
-    : db.prepare('SELECT * FROM campaign_runs WHERE campaign_id = ? ORDER BY started_at DESC, rowid DESC').all(campaignId)) as CampaignRunRow[];
-  return rows.map((r) => ({
+export interface Page<T> {
+  items: T[];
+  total: number;
+}
+
+export interface RunListItem {
+  id: string;
+  started_at: string;
+  started_by: string;
+  started_by_name: string;
+  task_count: number;
+  percent_protected: number | null;
+}
+
+export interface AllRunsItem extends RunListItem {
+  campaign_id: string;
+  campaign_name: string;
+  campaign_deleted: boolean;
+}
+
+function runListItem(r: CampaignRunRow, snap: RunSnapshot): RunListItem {
+  return {
     id: r.id,
     started_at: r.started_at,
     started_by: r.started_by,
+    started_by_name: startedByName(r, snap),
     task_count: r.task_count,
+    // Per-row totals are fine: the page is at most 100 rows.
     percent_protected: build(r).totals.percent_protected,
-  }));
+  };
+}
+
+/** Runs of one campaign, newest first, one page at a time. */
+export function listRuns(campaignId: string, callerOrg: string | undefined, limit: number, offset: number): Page<RunListItem> {
+  const db = getDatabase();
+  const where = callerOrg !== undefined ? 'campaign_id = ? AND org_id = ?' : 'campaign_id = ?';
+  const params = callerOrg !== undefined ? [campaignId, callerOrg] : [campaignId];
+  const total = (db.prepare(`SELECT COUNT(*) AS c FROM campaign_runs WHERE ${where}`).get(...params) as { c: number }).c;
+  const rows = db
+    .prepare(`SELECT * FROM campaign_runs WHERE ${where} ORDER BY started_at DESC, rowid DESC LIMIT ? OFFSET ?`)
+    .all(...params, limit, offset) as CampaignRunRow[];
+  return { items: rows.map((r) => runListItem(r, JSON.parse(r.snapshot) as RunSnapshot)), total };
 }
 
 /** All runs of the caller's org, newest first, including runs whose campaign was deleted. */
-export function listAllRuns(callerOrg: string | undefined) {
+export function listAllRuns(callerOrg: string | undefined, limit: number, offset: number): Page<AllRunsItem> {
   const db = getDatabase();
-  const rows = (callerOrg !== undefined
-    ? db.prepare('SELECT * FROM campaign_runs WHERE org_id = ? ORDER BY started_at DESC, rowid DESC').all(callerOrg)
-    : db.prepare('SELECT * FROM campaign_runs ORDER BY started_at DESC, rowid DESC').all()) as CampaignRunRow[];
+  const where = callerOrg !== undefined ? 'WHERE org_id = ?' : '';
+  const params = callerOrg !== undefined ? [callerOrg] : [];
+  const total = (db.prepare(`SELECT COUNT(*) AS c FROM campaign_runs ${where}`).get(...params) as { c: number }).c;
+  const rows = db
+    .prepare(`SELECT * FROM campaign_runs ${where} ORDER BY started_at DESC, rowid DESC LIMIT ? OFFSET ?`)
+    .all(...params, limit, offset) as CampaignRunRow[];
+  const ids = [...new Set(rows.map((r) => r.campaign_id))];
   const live = new Set(
-    (db.prepare('SELECT id FROM campaigns').all() as { id: string }[]).map((c) => c.id),
+    ids.length === 0
+      ? []
+      : (db.prepare(`SELECT id FROM campaigns WHERE id IN (${ids.map(() => '?').join(', ')})`).all(...ids) as { id: string }[])
+          .map((c) => c.id),
   );
-  return rows.map((r) => ({
-    id: r.id,
-    campaign_id: r.campaign_id,
-    campaign_name: (JSON.parse(r.snapshot) as RunSnapshot).campaign_name,
-    campaign_deleted: !live.has(r.campaign_id),
-    started_at: r.started_at,
-    started_by: r.started_by,
-    task_count: r.task_count,
-    percent_protected: computeRunTotals(r.id).percent_protected,
-  }));
+  const items = rows.map((r) => {
+    const snap = JSON.parse(r.snapshot) as RunSnapshot;
+    return {
+      ...runListItem(r, snap),
+      campaign_id: r.campaign_id,
+      campaign_name: snap.campaign_name,
+      campaign_deleted: !live.has(r.campaign_id),
+    };
+  });
+  return { items, total };
 }
 
+/**
+ * CSV header (Ruling C10). Every pair is a row: skipped pairs are `na`, and
+ * `reason` says why a pair is na / not_run / error. `exit_code` is blank for
+ * na and not_run (no verdict, so no exit code is evidence of anything).
+ */
+export const RUN_CSV_HEADER = 'test,techniques,host,os,outcome,exit_code,reason,completed_at,as_of';
+
 export function runMatrixCsv(m: RunMatrix): string {
-  const lines = ['test,techniques,host,os,outcome,exit_code,completed_at,as_of'];
+  const lines = [RUN_CSV_HEADER];
   for (const t of m.tests) {
     for (const a of m.agents) {
       const c = m.cells[t.uuid]?.[a.id];
@@ -229,8 +281,9 @@ export function runMatrixCsv(m: RunMatrix): string {
           csvCell(c.techniques.join('; ')),
           csvCell(a.hostname),
           csvCell(a.os),
-          c.state === 'na' ? '' : c.state,
-          c.exit_code === null ? '' : String(c.exit_code),
+          c.state,
+          c.exit_code === null || c.state === 'na' || c.state === 'not_run' ? '' : String(c.exit_code),
+          csvCell(c.reason ?? ''),
           csvCell(c.completed_at ?? ''),
           csvCell(m.as_of),
         ].join(','),

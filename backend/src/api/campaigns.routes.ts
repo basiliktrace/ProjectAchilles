@@ -4,6 +4,7 @@ import {
   requireClerkAuth,
   requirePermission,
   getUserId,
+  getUserDisplayName,
   getUserOrgId,
   validateRequestOrgId,
 } from '../middleware/clerk.middleware.js';
@@ -48,6 +49,16 @@ function requireUser(req: Request): string {
   return userId;
 }
 
+/** `limit` 1..100 (default 25) and `offset` >= 0, clamped like /api/notices. */
+function pageParams(req: Request): { limit: number; offset: number } {
+  const rawLimit = parseInt(String(req.query.limit ?? ''), 10);
+  const rawOffset = parseInt(String(req.query.offset ?? ''), 10);
+  // SQLite treats a negative LIMIT as unlimited, so clamp explicitly.
+  const limit = Number.isFinite(rawLimit) ? Math.min(100, Math.max(1, rawLimit)) : 25;
+  const offset = Number.isFinite(rawOffset) ? Math.max(0, rawOffset) : 0;
+  return { limit, offset };
+}
+
 // Isolation guard for every route (before validation), so a future route can't skip it.
 router.use((req, _res, next) => {
   callerOrg(req);
@@ -63,7 +74,8 @@ router.get('/', requirePermission(READ), asyncHandler(async (req, res) => {
 
 // Run routes first: `/runs/:runId` must not be captured by `/:id`.
 router.get('/runs', requirePermission(READ), asyncHandler(async (req, res) => {
-  res.json({ success: true, data: listAllRuns(callerOrg(req)) });
+  const { limit, offset } = pageParams(req);
+  res.json({ success: true, data: listAllRuns(callerOrg(req), limit, offset) });
 }));
 
 router.get('/runs/:runId', requirePermission(READ), asyncHandler(async (req, res) => {
@@ -110,7 +122,8 @@ router.get('/:id/preflight', requirePermission(READ), asyncHandler(async (req, r
 router.get('/:id/runs', requirePermission(READ), asyncHandler(async (req, res) => {
   const org = callerOrg(req);
   getCampaign(req.params.id, org); // 404 for unknown / cross-org, not an empty list
-  res.json({ success: true, data: listRuns(req.params.id, org) });
+  const { limit, offset } = pageParams(req);
+  res.json({ success: true, data: listRuns(req.params.id, org, limit, offset) });
 }));
 
 router.post('/:id/runs', requirePermission(WRITE), validate(RunCampaignSchema), asyncHandler(async (req, res) => {
@@ -123,6 +136,7 @@ router.post('/:id/runs', requirePermission(WRITE), validate(RunCampaignSchema), 
       callerOrg: org,
       orgId: org_id,
       userId,
+      userDisplay: getUserDisplayName(req.auth) ?? userId,
       confirmPartial: confirm_partial === true,
     });
     res.status(201).json({ success: true, data });

@@ -112,7 +112,21 @@ describe('launchRun', () => {
       tests: [{ uuid: 't1', name: 'Test t1' }, { uuid: 't2', name: 'Test t2' }],
       agents: [{ id: 'a1', hostname: 'h1', os: 'windows' }, { id: 'a2', hostname: 'h2', os: 'windows' }],
       skipped: [],
+      started_by_name: 'u1',
     });
+  });
+
+  it('snapshot stores the caller display name from opts.userDisplay', () => {
+    const c = mk(['t1'], ['a1']);
+    const r = launchRun(c.id, { ...OPTS, userDisplay: 'Jane Doe' });
+    expect(JSON.parse(run(r.run_id).snapshot).started_by_name).toBe('Jane Doe');
+    expect((testDb.prepare('SELECT started_by FROM campaign_runs WHERE id = ?').get(r.run_id) as { started_by: string }).started_by).toBe('u1');
+  });
+
+  it('snapshot falls back to the user id when no display name is given', () => {
+    const c = mk(['t1'], ['a1']);
+    const r = launchRun(c.id, { ...OPTS, userDisplay: '  ' });
+    expect(JSON.parse(run(r.run_id).snapshot).started_by_name).toBe('u1');
   });
 
   it('partial without confirm: PartialRunError 409 with skipped list; nothing written', () => {

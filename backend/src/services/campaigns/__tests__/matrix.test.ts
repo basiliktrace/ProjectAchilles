@@ -12,20 +12,20 @@ vi.mock('../../agent/test-catalog.service.js', () => ({
   getTestMetadata: (uuid: string) => ({ uuid, name: `Test ${uuid}`, techniques: [] }),
 }));
 
-const { getRunMatrix, computeRunTotals, listRuns, runMatrixCsv } = await import('../matrix.js');
+const { getRunMatrix, computeRunTotals, listRuns, listAllRuns, runMatrixCsv } = await import('../matrix.js');
 const { createCampaign, updateCampaign, listCampaigns } = await import('../campaigns.service.js');
 const { insertNotice } = await import('../../notices/notices.repo.js');
 
 const ORG = 'org-1';
 let seq = 0;
 
-function insertRun(id: string, campaignId: string, snapshot: object, noticeId: string | null = null, org = ORG) {
+function insertRun(id: string, campaignId: string, snapshot: object, noticeId: string | null = null, org = ORG, startedAt = new Date().toISOString()) {
   testDb
     .prepare(
       `INSERT INTO campaign_runs (id, campaign_id, org_id, started_by, started_at, notice_id, snapshot, task_count)
        VALUES (?, ?, ?, 'u1', ?, ?, ?, 1)`,
     )
-    .run(id, campaignId, org, new Date().toISOString(), noticeId, JSON.stringify(snapshot));
+    .run(id, campaignId, org, startedAt, noticeId, JSON.stringify(snapshot));
 }
 
 function insertTask(o: {
@@ -144,12 +144,12 @@ describe('campaign run matrix', () => {
     insertRun('r7', 'c1', snap(['t1'], ['a1']));
     expect(() => getRunMatrix('r7', 'other-org')).toThrow(/Campaign run not found/);
     expect(getRunMatrix('r7', undefined).run.id).toBe('r7');
-    expect(listRuns('c1', 'other-org')).toEqual([]);
-    expect(listRuns('c1', ORG)).toHaveLength(1);
-    expect(listRuns('c1', undefined)[0]).toMatchObject({ id: 'r7', task_count: 1, percent_protected: null });
+    expect(listRuns('c1', 'other-org', 25, 0)).toEqual({ items: [], total: 0 });
+    expect(listRuns('c1', ORG, 25, 0).items).toHaveLength(1);
+    expect(listRuns('c1', undefined, 25, 0).items[0]).toMatchObject({ id: 'r7', task_count: 1, percent_protected: null });
   });
 
-  it('CSV: header, formula guard, comma quoting, empty na outcome, techniques', () => {
+  it('CSV: header, formula guard, comma quoting, na outcome with reason, techniques', () => {
     const s = snap(['t1', 't2'], ['a1']);
     s.tests[0].name = "=cmd|' /C calc'!A0";
     s.agents[0].hostname = 'web,01';
@@ -159,11 +159,32 @@ describe('campaign run matrix', () => {
     const m8 = getRunMatrix('r8', ORG);
     const csv = runMatrixCsv(m8);
     const lines = csv.trimEnd().split('\r\n');
-    expect(lines[0]).toBe('test,techniques,host,os,outcome,exit_code,completed_at,as_of');
+    expect(lines[0]).toBe('test,techniques,host,os,outcome,exit_code,reason,completed_at,as_of');
     const asOf = m8.as_of;
-    expect(lines[1]).toMatch(/^'=cmd\|' \/C calc'!A0,T1059; T1105,"web,01",windows,unprotected,101,2026-10-23T10:05:00.000Z,/);
+    expect(lines[1]).toMatch(/^'=cmd\|' \/C calc'!A0,T1059; T1105,"web,01",windows,unprotected,101,,2026-10-23T10:05:00.000Z,/);
     expect(lines.slice(1).every((l) => l.endsWith(',' + asOf))).toBe(true);
-    expect(lines[2]).toMatch(/^Test t2,,"web,01",windows,,,,/);
+    expect(lines[2]).toBe(`Test t2,,"web,01",windows,na,,no windows binary,,${asOf}`);
+  });
+
+  it('CSV: not_run has a blank exit_code (no -1) and its reason; error carries result.error', () => {
+    insertRun('r11', 'c1', snap(['t1', 't2', 't3'], ['a1']));
+    insertTask({ runId: 'r11', agent: 'a1', test: 't1', status: 'expired', exit: -1, error: 'Not run: notice expired' });
+    insertTask({ runId: 'r11', agent: 'a1', test: 't2', status: 'failed', exit: 1, error: 'binary crashed' });
+    const m = getRunMatrix('r11', ORG);
+    const lines = runMatrixCsv(m).trimEnd().split('\r\n');
+    expect(lines[1]).toBe(`Test t1,,host-a1,windows,not_run,,Not run: notice expired,,${m.as_of}`);
+    expect(lines[2]).toBe(`Test t2,,host-a1,windows,error,1,binary crashed,,${m.as_of}`);
+    // No task at all: not_run, blank exit_code and reason.
+    expect(lines[3]).toBe(`Test t3,,host-a1,windows,not_run,,,,${m.as_of}`);
+  });
+
+  it('error cells carry reason from result.error', () => {
+    insertRun('r12', 'c1', snap(['t1', 't2'], ['a1']));
+    insertTask({ runId: 'r12', agent: 'a1', test: 't1', status: 'failed', error: 'download failed: 404' });
+    insertTask({ runId: 'r12', agent: 'a1', test: 't2', status: 'completed', exit: 999, error: 'agent error' });
+    const m = getRunMatrix('r12', ORG);
+    expect(m.cells.t1.a1).toMatchObject({ state: 'error', reason: 'download failed: 404' });
+    expect(m.cells.t2.a1).toMatchObject({ state: 'error', reason: 'agent error' });
   });
 
   it('large stdout does not affect the matrix; not_run surfaces result.error as reason', () => {
@@ -183,5 +204,68 @@ describe('campaign run matrix', () => {
     insertTask({ runId: 'r9', agent: 'a1', test: 't2', status: 'completed', exit: 101 });
     const item = listCampaigns(ORG).find((x) => x.id === c.id)!;
     expect(item.last_run?.percent_protected).toBe(50);
+  });
+  it('run.notice carries the sent record: sent_at and recipients', () => {
+    notice('n-sent', 'sent', '2026-10-23T10:10:00.000Z');
+    testDb.prepare('UPDATE run_notices SET sent_at = ?, recipients = ? WHERE id = ?')
+      .run('2026-10-23T10:00:00.000Z', JSON.stringify(['a@x.com', 'b@y.com']), 'n-sent');
+    insertRun('r13', 'c1', snap(['t1'], ['a1']), 'n-sent');
+    const n = getRunMatrix('r13', ORG).run.notice;
+    expect(n).toMatchObject({
+      id: 'n-sent', run_tag: expect.stringMatching(/^PA-RUN-/), state: 'sent',
+      sent_at: '2026-10-23T10:00:00.000Z', recipients: ['a@x.com', 'b@y.com'],
+      override_by: null, override_reason: null, override_at: null,
+    });
+  });
+
+  it('run.notice carries the override record', () => {
+    notice('n-ovr', 'overridden', '2026-10-23T10:00:00.000Z');
+    testDb.prepare('UPDATE run_notices SET override_by = ?, override_reason = ?, override_at = ? WHERE id = ?')
+      .run('user_admin', 'change window approved by CAB', '2026-10-23T09:59:00.000Z', 'n-ovr');
+    insertRun('r14', 'c1', snap(['t1'], ['a1']), 'n-ovr');
+    expect(getRunMatrix('r14', ORG).run.notice).toMatchObject({
+      state: 'overridden', sent_at: null, recipients: [],
+      override_by: 'user_admin', override_reason: 'change window approved by CAB', override_at: '2026-10-23T09:59:00.000Z',
+    });
+  });
+
+  it('run.notice is null with no notice, and a notice of another org is not read', () => {
+    insertRun('r15', 'c1', snap(['t1'], ['a1']));
+    expect(getRunMatrix('r15', ORG).run.notice).toBeNull();
+    insertNotice({
+      id: 'n-other', kind: 'run', state: 'sent', sourceType: 'run_now', scheduleIds: [], timezone: 'UTC',
+      createdBy: 'u9', createdAt: new Date().toISOString(), recipients: ['x@other.com'], orgId: 'org-2',
+    } as unknown as Parameters<typeof insertNotice>[0]);
+    insertRun('r16', 'c1', snap(['t1'], ['a1']), 'n-other');
+    expect(getRunMatrix('r16', ORG).run.notice).toBeNull();
+  });
+
+  it('started_by_name comes from the snapshot, falling back to started_by', () => {
+    insertRun('r17', 'c1', { ...snap(['t1'], ['a1']), started_by_name: 'Jane Doe' });
+    insertRun('r18', 'c1', snap(['t1'], ['a1']));
+    expect(getRunMatrix('r17', ORG).run).toMatchObject({ started_by: 'u1', started_by_name: 'Jane Doe' });
+    expect(getRunMatrix('r18', ORG).run).toMatchObject({ started_by: 'u1', started_by_name: 'u1' });
+    const items = listRuns('c1', ORG, 25, 0).items;
+    expect(items.find((r) => r.id === 'r17')?.started_by_name).toBe('Jane Doe');
+    expect(items.find((r) => r.id === 'r18')?.started_by_name).toBe('u1');
+    const all = listAllRuns(ORG, 25, 0).items;
+    expect(all.find((r) => r.id === 'r17')?.started_by_name).toBe('Jane Doe');
+    expect(all.find((r) => r.id === 'r18')?.started_by_name).toBe('u1');
+  });
+
+  it('listRuns / listAllRuns page newest first and report total', () => {
+    for (let i = 0; i < 5; i++) {
+      insertRun(`p${i}`, i < 3 ? 'cA' : 'cB', snap(['t1'], ['a1']), null, ORG, `2026-10-2${i}T10:00:00.000Z`);
+    }
+    insertRun('p-other', 'cA', snap(['t1'], ['a1']), null, 'org-2', '2026-10-29T10:00:00.000Z');
+    expect(listRuns('cA', ORG, 2, 0)).toMatchObject({ total: 3, items: [{ id: 'p2' }, { id: 'p1' }] });
+    expect(listRuns('cA', ORG, 2, 2)).toMatchObject({ total: 3, items: [{ id: 'p0' }] });
+    expect(listRuns('cA', ORG, 2, 2).items).toHaveLength(1);
+    expect(listRuns('cA', undefined, 25, 0).total).toBe(4);
+    const all = listAllRuns(ORG, 3, 1);
+    expect(all.total).toBe(5);
+    expect(all.items.map((r) => r.id)).toEqual(['p3', 'p2', 'p1']);
+    expect(listAllRuns(ORG, 25, 10)).toEqual({ items: [], total: 5 });
+    expect(listAllRuns(undefined, 25, 0).total).toBe(6);
   });
 });

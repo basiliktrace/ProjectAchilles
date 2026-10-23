@@ -43,6 +43,11 @@ export interface RunSnapshot {
   tests: { uuid: string; name: string }[];
   agents: { id: string; hostname: string; os: string }[];
   skipped: { test_uuid: string; agent_id: string; reason: string }[];
+  /**
+   * Display name of the user who started the run (Clerk session claims at
+   * launch, else the user id). Absent on runs started before it existed.
+   */
+  started_by_name?: string;
 }
 
 export interface CampaignRunRow {

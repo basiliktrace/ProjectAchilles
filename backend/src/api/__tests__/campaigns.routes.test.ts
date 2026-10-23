@@ -20,11 +20,13 @@ vi.mock('../../services/campaigns/runs.service.js', async (importOriginal) => {
   return { ...actual, launchRun: (...a: Parameters<typeof actual.launchRun>) => (launchSpy.getMockImplementation() ? launchSpy(...a) : actual.launchRun(...a)) };
 });
 
-let auth: { userId: string; orgId?: string } = { userId: 'u1', orgId: 'org-1' };
+let auth: { userId: string; orgId?: string; sessionClaims?: Record<string, unknown> } = { userId: 'u1', orgId: 'org-1' };
 const denied = new Set<string>();
 vi.mock('../../middleware/clerk.middleware.js', async () => {
   const { AppError } = await import('../../middleware/error.middleware.js');
+  const actual = await vi.importActual<typeof import('../../middleware/clerk.middleware.js')>('../../middleware/clerk.middleware.js');
   return {
+    getUserDisplayName: actual.getUserDisplayName,
     requireClerkAuth: () => (req: any, _res: any, next: any) => { req.auth = auth; next(); },
     requirePermission: (p: string) => (_req: any, res: any, next: any) =>
       denied.has(p) ? res.status(403).json({ success: false, error: 'Insufficient permissions' }) : next(),
@@ -57,11 +59,11 @@ async function create(over: Record<string, unknown> = {}) {
   return res;
 }
 
-function insertRun(id: string, campaignId: string, org: string) {
+function insertRun(id: string, campaignId: string, org: string, startedAt = '2026-10-23T19:07:00.000Z') {
   testDb.prepare(
     `INSERT INTO campaign_runs (id, campaign_id, org_id, started_by, started_at, notice_id, snapshot, task_count)
      VALUES (?, ?, ?, 'u1', ?, NULL, ?, 0)`,
-  ).run(id, campaignId, org, '2026-10-23T19:07:00.000Z', JSON.stringify({
+  ).run(id, campaignId, org, startedAt, JSON.stringify({
     campaign_name: 'Q4 plan', framework_label: null,
     tests: [{ uuid: 't1', name: 'Test t1' }],
     agents: [{ id: 'a1', hostname: 'h1', os: 'windows' }],
@@ -199,21 +201,61 @@ describe('GET /runs (all runs, incl. deleted campaigns)', () => {
     await request(app()).delete(`/api/campaigns/${id}`);
     const res = await request(app()).get('/api/campaigns/runs');
     expect(res.status).toBe(200);
-    expect(res.body.data).toEqual([
-      expect.objectContaining({
-        id: 'run-1', campaign_id: id, campaign_name: 'Q4 plan', campaign_deleted: true,
-        started_by: 'u1', task_count: 0, percent_protected: null,
-      }),
-    ]);
+    expect(res.body.data).toEqual({
+      total: 1,
+      items: [
+        expect.objectContaining({
+          id: 'run-1', campaign_id: id, campaign_name: 'Q4 plan', campaign_deleted: true,
+          started_by: 'u1', started_by_name: 'u1', task_count: 0, percent_protected: null,
+        }),
+      ],
+    });
     auth = { userId: 'u2', orgId: 'org-2' };
-    expect((await request(app()).get('/api/campaigns/runs')).body.data).toEqual([]);
+    expect((await request(app()).get('/api/campaigns/runs')).body.data).toEqual({ items: [], total: 0 });
   });
 
   it('marks a live campaign campaign_deleted false', async () => {
     const c = await create();
     insertRun('run-1', c.body.data.id, 'org-1');
     const res = await request(app()).get('/api/campaigns/runs');
-    expect(res.body.data[0].campaign_deleted).toBe(false);
+    expect(res.body.data.items[0].campaign_deleted).toBe(false);
+  });
+});
+
+describe('run list pagination', () => {
+  async function seed(n: number) {
+    const c = await create();
+    const id = c.body.data.id;
+    for (let i = 0; i < n; i++) insertRun(`run-${String(i).padStart(3, '0')}`, id, 'org-1', new Date(Date.UTC(2026, 0, 1, 0, i)).toISOString());
+    return id;
+  }
+
+  it('defaults to 25, honours limit/offset and reports total on both lists', async () => {
+    const id = await seed(30);
+    for (const url of ['/api/campaigns/runs', `/api/campaigns/${id}/runs`]) {
+      const def = await request(app()).get(url);
+      expect(def.body.data.total, url).toBe(30);
+      expect(def.body.data.items, url).toHaveLength(25);
+      expect(def.body.data.items[0].id, url).toBe('run-029');
+      const page = await request(app()).get(`${url}?limit=10&offset=25`);
+      expect(page.body.data.total, url).toBe(30);
+      expect(page.body.data.items.map((r: { id: string }) => r.id), url).toEqual(['run-004', 'run-003', 'run-002', 'run-001', 'run-000']);
+    }
+  });
+
+  it('clamps limit to 1..100 and offset to >= 0; junk falls back to defaults', async () => {
+    const id = await seed(120);
+    for (const url of ['/api/campaigns/runs', `/api/campaigns/${id}/runs`]) {
+      const q = async (qs: string) => (await request(app()).get(`${url}?${qs}`)).body.data;
+      expect((await q('limit=0')).items, url).toHaveLength(1);
+      expect((await q('limit=-5')).items, url).toHaveLength(1);
+      expect((await q('limit=500')).items, url).toHaveLength(100);
+      expect((await q('limit=abc')).items, url).toHaveLength(25);
+      expect((await q('offset=-3')).items[0].id, url).toBe('run-119');
+      expect((await q('offset=xyz')).items[0].id, url).toBe('run-119');
+      expect((await q('offset=119')).items.map((r: { id: string }) => r.id), url).toEqual(['run-000']);
+      expect((await q('limit=10')).total, url).toBe(120);
+    }
   });
 });
 
@@ -233,7 +275,15 @@ describe('run launch', () => {
     const res = await request(app()).post(`/api/campaigns/${c.body.data.id}/runs`).send({ org_id: 'org-1', confirm_partial: true });
     expect(res.status).toBe(201);
     expect(res.body.data.run_id).toBe('r9');
-    expect(launchSpy).toHaveBeenCalledWith(c.body.data.id, { callerOrg: 'org-1', orgId: 'org-1', userId: 'u1', confirmPartial: true });
+    expect(launchSpy).toHaveBeenCalledWith(c.body.data.id, { callerOrg: 'org-1', orgId: 'org-1', userId: 'u1', userDisplay: 'u1', confirmPartial: true });
+  });
+
+  it('passes the session display name as userDisplay', async () => {
+    const c = await create();
+    launchSpy.mockImplementation(() => ({ run_id: 'r9', task_count: 1, skipped: 0 }));
+    auth = { userId: 'u1', orgId: 'org-1', sessionClaims: { email: 'jane@example.com' } };
+    await request(app()).post(`/api/campaigns/${c.body.data.id}/runs`).send({ org_id: 'org-1' });
+    expect(launchSpy).toHaveBeenCalledWith(c.body.data.id, expect.objectContaining({ userId: 'u1', userDisplay: 'jane@example.com' }));
   });
 
   it('rejects a non-boolean confirm_partial with 400', async () => {
@@ -257,7 +307,8 @@ describe('run matrix and CSV', () => {
     expect(new Date(asOf).toISOString()).toBe(asOf);
     const compact = asOf.replace(/[-:]/g, '').replace(/\.\d+Z$/, 'Z').replace(/^(\d{8}T\d{4})\d{2}Z$/, '$1Z');
     expect(csv.headers['content-disposition']).toBe(`attachment; filename="campaign-run-run-1-${compact}.csv"`);
-    expect(csv.text.split('\r\n')[0]).toBe('test,techniques,host,os,outcome,exit_code,completed_at,as_of');
+    expect(csv.text.split('\r\n')[0]).toBe('test,techniques,host,os,outcome,exit_code,reason,completed_at,as_of');
+    expect(csv.text.split('\r\n')[1]).toBe(`Test t1,,h1,windows,na,,not built,,${asOf}`);
   });
 });
 

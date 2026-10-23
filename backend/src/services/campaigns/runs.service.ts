@@ -28,6 +28,8 @@ export interface LaunchOptions {
   callerOrg: string | undefined;
   orgId: string;
   userId: string;
+  /** Caller's display name from the session claims; the snapshot falls back to userId. */
+  userDisplay?: string;
   confirmPartial: boolean;
 }
 
@@ -65,6 +67,7 @@ export function launchRun(
     tests: pre.tests,
     agents: pre.agents,
     skipped: pre.skipped,
+    started_by_name: opts.userDisplay?.trim() || opts.userId,
   };
   const requests = pre.dispatch.map((d) => ({
     agent_ids: d.agent_ids,

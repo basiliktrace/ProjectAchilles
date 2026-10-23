@@ -11,7 +11,7 @@
  */
 import { getDatabase } from '../agent/database.js';
 import { runTag } from './window.js';
-import type { NoticeKind, NoticeRow, NoticeScope, NoticeSourceType, NoticeState, NoticeSummary } from './types.js';
+import type { NoticeKind, NoticeRecord, NoticeRow, NoticeScope, NoticeSourceType, NoticeState, NoticeSummary } from './types.js';
 
 export interface NewNotice {
   id: string;
@@ -575,4 +575,37 @@ export function getNoticeSummaries(ids: string[], scope: NoticeScope): Record<st
     }
   }
   return out;
+}
+
+/** One notice's summary and delivery record, or null if unknown or outside `scope`. */
+export function getNoticeRecord(id: string, scope: NoticeScope): NoticeRecord | null {
+  const f = scopeFilter(scope);
+  const r = getDatabase()
+    .prepare(
+      `SELECT id, state, last_error, release_at, pickup_deadline, sent_at, recipients,
+              override_by, override_reason, override_at
+       FROM run_notices WHERE id = ?${f.sql}`,
+    )
+    .get(id, ...f.params) as (Omit<NoticeRecord, 'run_tag' | 'recipients'> & { recipients: string | null }) | undefined;
+  if (!r) return null;
+  let recipients: string[] = [];
+  try {
+    const v = JSON.parse(r.recipients ?? '[]');
+    if (Array.isArray(v)) recipients = v.filter((x): x is string => typeof x === 'string');
+  } catch {
+    recipients = [];
+  }
+  return {
+    id: r.id,
+    run_tag: runTag(r.id),
+    state: r.state,
+    last_error: r.last_error,
+    release_at: r.release_at,
+    pickup_deadline: r.pickup_deadline,
+    sent_at: r.sent_at,
+    recipients,
+    override_by: r.override_by,
+    override_reason: r.override_reason,
+    override_at: r.override_at,
+  };
 }
