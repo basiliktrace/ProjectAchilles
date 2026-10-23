@@ -11,42 +11,50 @@ description: "REST API endpoints for configuring alert thresholds and notificati
 ### Get Alert Configuration
 
 ```
-GET /api/integrations/alerts/config
+GET /api/integrations/alerts
 ```
 
-Returns current alert thresholds and notification channel configuration.
+Returns current alert thresholds and notification channel configuration. Secrets are never returned: the Slack webhook is reported as `webhook_url_set`, the SMTP password is omitted, and `smtp_user` is masked as `****` plus its last four characters.
 
 ### Save Alert Configuration
 
 ```
-POST /api/integrations/alerts/config
+POST /api/integrations/alerts
 ```
+
+A partial update. Any field you leave out, or send blank, keeps its saved value. A masked `smtp_user` (starting with `****`) is treated as blank, so echoing back what `GET` returned never overwrites the real username.
 
 **Body:**
 ```json
 {
-  "thresholds": {
-    "relative_drop": 10,
-    "absolute_floor": 50
+  "thresholds": { "enabled": true, "defense_score_min": 70, "error_rate_max": 20 },
+  "cooldown_minutes": 30,
+  "slack": { "enabled": true, "webhook_url": "https://hooks.slack.com/services/..." },
+  "email": {
+    "enabled": true,
+    "smtp_host": "smtp.example.com",
+    "smtp_port": 465,
+    "smtp_secure": true,
+    "smtp_user": "alerts@example.com",
+    "smtp_pass": "<smtp-password>",
+    "from_address": "alerts@example.com",
+    "recipients": ["team@example.com"]
   },
-  "channels": {
-    "slack": {
-      "enabled": true,
-      "webhook_url": "https://hooks.slack.com/services/..."
-    },
-    "email": {
-      "enabled": true,
-      "smtp_host": "smtp.gmail.com",
-      "smtp_port": 587,
-      "smtp_user": "alerts@example.com",
-      "smtp_pass": "...",
-      "recipients": ["team@example.com"]
-    }
-  }
+  "agent_alerts": { "enabled": true, "offline_hours_threshold": 4 }
 }
 ```
 
 Credentials are encrypted at rest with AES-256-GCM.
+
+### Test Channels
+
+```
+POST /api/integrations/alerts/test
+```
+
+Takes the same `slack_webhook_url` and `email` fields as the form, and checks the channels without saving anything. Email fields are merged over the saved settings field by field. A blank password or a blank or masked username reuses the saved one, **but only when `smtp_host` matches the saved host**. That way a test can't send the stored password to a different server. Changing the host therefore means typing the credentials again.
+
+**Response:** `{ "success": true, "data": { "email": { "success": false, "message": "SMTP connection failed: Connection timeout" } } }`. A connection timeout usually means an outbound firewall is dropping traffic to the SMTP host.
 
 ## Pre-execution notices
 
