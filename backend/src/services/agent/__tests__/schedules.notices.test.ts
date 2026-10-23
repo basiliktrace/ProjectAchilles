@@ -479,14 +479,9 @@ describe('processSchedules: late per_machine runs and a closed day notice (R23)'
     const runNotices = () => notices().filter((n) => n.kind === 'run');
 
     beforeEach(() => {
-      // Re-rolls land at 09:00 local: today's is already past, so every advanced
-      // agent moves to tomorrow (keeps the advance deterministic).
-      vi.spyOn(Math, 'random').mockReturnValue(0);
+      // No Math.random pin: every advanced agent (due or swept tail) uses
+      // afterFire (R25), so it moves to tomorrow whatever the roll.
       for (const a of ['agent-4', 'agent-5']) insertTestAgent(testDb, { id: a, hostname: `host-${a}` });
-    });
-
-    afterEach(() => {
-      vi.mocked(Math.random).mockRestore();
     });
 
     it('agents due 16:51-16:59 share ONE run notice created on the first late tick; later ticks add nothing', () => {
@@ -520,6 +515,36 @@ describe('processSchedules: late per_machine runs and a closed day notice (R23)'
       const map = JSON.parse(scheduleRow('pm').agent_next_runs) as Record<string, string>;
       expect(Object.values(map).every((v) => v > DAY_DEADLINE.toISOString())).toBe(true);
       expect(noticeById('day-1').pickup_deadline).toBe(DAY_DEADLINE.toISOString());
+    });
+
+    it('a swept tail agent that fires is advanced with afterFire: a later-today roll still moves it to tomorrow', () => {
+      // Weekday window 09:00-17:00 (480 min): 479/480 rolls 16:59, later than
+      // both the tick (16:55:30) and the tail slot (16:58) it is advanced from.
+      const random = vi.spyOn(Math, 'random').mockReturnValue(479.5 / 480);
+      try {
+        insertDayNotice('day-1', 'pm', 'sent');
+        perMachine('pm', { 'agent-1': T('16:55:00'), 'agent-2': T('16:58:00') });
+        const now = T('16:55:30');
+        vi.setSystemTime(now);
+
+        expect(processSchedules(now).errors).toEqual([]);
+        expect(tasksOf().map((t) => t.agent_id)).toEqual(['agent-1', 'agent-2']); // agent-2 swept
+
+        // Tomorrow is Saturday 2026-10-24 (window 00:00-24:00): the same pin
+        // gives floor(1438.5) = 1438 min, i.e. 23:58.
+        const map = JSON.parse(scheduleRow('pm').agent_next_runs) as Record<string, string>;
+        expect(map['agent-2']).toBe('2026-10-24T23:58:00.000Z');
+        expect(map['agent-1']).toBe('2026-10-24T23:58:00.000Z');
+
+        // Nothing else fires today.
+        for (const at of [T('16:58:30'), T('16:59:30')]) {
+          vi.setSystemTime(at);
+          expect(processSchedules(at).errors).toEqual([]);
+        }
+        expect(tasksOf()).toHaveLength(2);
+      } finally {
+        random.mockRestore();
+      }
     });
 
     it('does not sweep an agent whose next run is tomorrow', () => {
