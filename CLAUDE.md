@@ -31,9 +31,9 @@ cd backend && npm run build      # tsc → dist/
 
 ```bash
 # All tests
-cd backend && npm test           # 2648 tests across 129 files
-cd frontend && npm test          # 1203 tests across 119 files
-cd backend-serverless && npm test  # 1698 tests across 69 files
+cd backend && npm test           # 2695 tests across 130 files
+cd frontend && npm test          # 1210 tests across 119 files
+cd backend-serverless && npm test  # 1719 tests across 69 files
 
 # Single file
 cd backend && npx vitest src/services/agent/__tests__/enrollment.service.test.ts
@@ -353,7 +353,7 @@ Uses `backend-serverless/` — a fork of the backend adapted for serverless. Rep
 # Key env vars: CLERK_*, TURSO_*, BLOB_READ_WRITE_TOKEN, ENCRYPTION_SECRET
 # Cron routes: /api/cron/schedules, /api/cron/auto-rotation
 # Capabilities endpoint: GET /api/capabilities (feature flags for frontend)
-cd backend-serverless && npm test    # 1698 tests across 69 files
+cd backend-serverless && npm test    # 1719 tests across 69 files
 ```
 
 ### Backend Serverless (`backend-serverless/`)
@@ -391,7 +391,7 @@ When writing custom `content` renderers for Recharts components (Treemap, etc.),
 
 ### Campaigns
 Saved test plans (tests x agents) with one-click runs and an evidence matrix (`services/campaigns/`, `api/campaigns.routes.ts`, `frontend/src/pages/campaigns/`). User docs: `wiki/docs/user-guide/agent-management/campaigns.md`, `wiki/docs/api-reference/campaigns.md`.
-- **Snapshot immutability**: `campaign_runs` has no FK to `campaigns`; a run stores a JSON snapshot (name, label, tests, agents, skipped pairs). Editing or deleting a campaign never changes a past run, and `GET /api/campaigns/runs` still lists runs of deleted campaigns.
+- **Snapshot immutability**: `campaign_runs` has no FK to `campaigns`; a run stores a JSON snapshot (name, label, tests, agents, skipped pairs, `started_by_name`). Editing or deleting a campaign never changes a past run, and `GET /api/campaigns/runs` still lists runs of deleted campaigns.
 - **`tasks.campaign_run_id`**: any new `tasks` column must also go in `migrateExecuteCommandType`'s `optionalCols` (and its index in the index recreation), or the next table-recreate migration silently drops it. `campaign_run_id` is there.
 - **Shared `resolveTestArtifact`** (`services/agent/testArtifacts.js`): preflight and `createTasks` must both resolve binaries through it so a dry run can never disagree with the real dispatch. Preflight calls it with `hash: false`.
 - **Launch is one transaction** (run row + all tasks + notice) whether or not pre-execution notices are on. Partial runs (skipped pairs) throw `PartialRunError` (409 with `skipped`) until `confirm_partial: true`. Limits: 100 tests, 5,000 tasks per run.

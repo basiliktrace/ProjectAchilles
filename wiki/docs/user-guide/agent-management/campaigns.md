@@ -43,7 +43,7 @@ Some test and host pairs cannot run. They are listed in the dialog with the reas
 | `not built` | The test has never been built |
 | `no <os> binary` | The test has no build for the host's operating system |
 | `binary missing on server` | The build is recorded but the file is gone from the server |
-| `agent <status>` | The agent is not `active` (for example `agent inactive`) |
+| `agent <status>` | The agent is not `active` (for example `agent disabled` or `agent decommissioned`) |
 | `removed from library` | The test is no longer in the test library |
 
 :::warning Deleted or moved agents block the run
@@ -73,13 +73,23 @@ After you confirm, you are taken to the run's evidence page. Retries of a task (
 
 The evidence page shows tests as rows, hosts as columns, and one cell per pair. It refreshes every 15 seconds while anything is still in flight, and shows the **As of** time it was computed.
 
+The header records who started the run (their name or email from the sign-in session at launch, or the user id when the session carried neither) and when, plus the pre-execution notice record:
+
+| Notice record | Shown as |
+|---------------|----------|
+| Notice sent | `Notice PA-RUN-xxxxxx sent <local time> to a@example.com, b@example.com` |
+| Released without notice | `Notice PA-RUN-xxxxxx released without notice by <user> at <time>: <reason>` |
+| Notices were off at launch | `No pre-execution notice (notices off)` |
+
+A notice that is still pending, not delivered, or skipped shows its run tag and state. The same header appears on the printed page.
+
 | State | Meaning |
 |-------|---------|
 | **Waiting for notice** | The task is queued and the pre-execution notice has not been released yet |
 | **Running** | Queued (no notice), assigned, downloading, or executing |
 | **Protected** | The test completed and the control blocked or detected it |
 | **Unprotected** | The test completed and the control did not stop it |
-| **Error** | The task failed, or it completed with an exit code that is neither Protected (105, 126, 127) nor Unprotected (101): for example 0, 1, 259, 999, or 260 (blocked before execution), or a completed task with no result |
+| **Error** | The task failed, or it completed with an exit code that is neither Protected (105, 126, 127) nor Unprotected (101): for example 0, 1, 259, 999, or 260 (blocked before execution), or a completed task with no result. The agent's error message, when there is one, is the cell's reason |
 | **Not run** | The task expired (the reason shows on hover), or there is no task for the pair |
 | **N/A** | Skipped at launch |
 
@@ -97,14 +107,25 @@ rounded to a whole number. Running, Error, Not run and N/A cells are **not** cou
 
 ## Exporting Evidence
 
-- **Download CSV** produces one row per test and host with the columns `test, techniques, host, os, outcome, exit_code, completed_at, as_of`. N/A cells have an empty outcome. The file name includes the as-of time, for example `campaign-run-<run-id>-20261023T1405Z.csv`, so two exports of the same run are distinguishable.
+- **Download CSV** produces one row for **every** test and host pair, including skipped and not-run pairs, with the columns `test, techniques, host, os, outcome, exit_code, reason, completed_at, as_of`.
+  - `outcome` is the cell state: `protected`, `unprotected`, `error`, `not_run`, `running`, `waiting_for_notice`, or `na` for a pair skipped at launch.
+  - `reason` says why a pair has no verdict: the skip reason for `na` (for example `no windows binary`), the expiry or cancel reason for `not_run`, and the agent's error message for `error`.
+  - `exit_code` is empty for `na` and `not_run` pairs.
+  - The file name includes the as-of time, for example `campaign-run-<run-id>-20261023T1405Z.csv`, so two exports of the same run are distinguishable.
 - **Print** opens the browser print dialog with a print-ready layout (navigation hidden, light theme), suitable for saving as PDF.
 
 Every export carries the **as-of** time: the moment the evidence was read. A run that is still in progress will change on the next export.
 
+## Run history
+
+- **Per campaign**: click **Runs** on a campaign to list its runs, newest first, with the start time, who started it, the task count and % protected. Each run links to its evidence page.
+- **All runs**: the **All runs** tab on the Campaigns page lists every run in your organization, newest first, including runs of campaigns that have since been deleted. Those carry a **deleted campaign** marker, and this tab is how you reach their evidence.
+
+Both lists show 25 runs at a time; **Show more** loads the next page.
+
 ## Evidence snapshots
 
-When a run starts, it stores a snapshot of the plan: the campaign name, framework label, the test and host lists, and the skipped pairs. Editing or **deleting** the campaign afterwards never changes a past run. Runs of a deleted campaign remain readable and are listed on the run history with a deleted marker.
+When a run starts, it stores a snapshot of the plan: the campaign name, framework label, the test and host lists, the skipped pairs, and the name of the user who started it. Editing or **deleting** the campaign afterwards never changes a past run. Runs of a deleted campaign remain readable from the **All runs** tab, where they carry a **deleted campaign** marker.
 
 ## Permissions and Organizations
 

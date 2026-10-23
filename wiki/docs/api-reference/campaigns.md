@@ -100,19 +100,38 @@ enabled; one per run) are written in a single transaction.
 
 ### List runs
 
-`GET /api/campaigns/:id/runs` lists the runs of one campaign.
-`GET /api/campaigns/runs` lists every run in the caller's org, newest first,
-including runs of deleted campaigns (`campaign_deleted: true`). Each item has
-`id`, `campaign_id`, `campaign_name`, `started_at`, `started_by`, `task_count`
-and `percent_protected`.
+`GET /api/campaigns/:id/runs` lists the runs of one campaign (`404` for an
+unknown or cross-org campaign). `GET /api/campaigns/runs` lists every run in the
+caller's org, including runs of deleted campaigns. Both are newest first and
+paged:
+
+| Query | Default | Range |
+|-------|---------|-------|
+| `limit` | `25` | clamped to `1`..`100` |
+| `offset` | `0` | clamped to `>= 0` |
+
+A value that is not a number falls back to the default. The response is
+`{ "success": true, "data": { "items": [...], "total": N } }`, where `total` is
+the number of runs before paging.
+
+Each item has `id`, `started_at`, `started_by` (Clerk user id),
+`started_by_name`, `task_count` and `percent_protected`. Items of
+`GET /api/campaigns/runs` also have `campaign_id`, `campaign_name` (from the run
+snapshot) and `campaign_deleted` (`true` when the campaign no longer exists).
+
+`started_by_name` is captured at launch from the Clerk session claims (`name`,
+`full_name`, `email` or `primary_email`, the first one present) and stored in
+the run snapshot. When the session carried none, it is the user id; runs
+started before the field existed also report the user id.
 
 ### Run matrix
 
 `GET /api/campaigns/runs/:runId` returns:
 
-- `run`: id, campaign id and name, framework label, `started_by`, `started_at`, and the notice summary (or `null`)
+- `run`: id, campaign id and name, framework label, `started_by`, `started_by_name`, `started_at`, and `notice` (or `null` when notices were off at launch)
+- `run.notice`: `id`, `run_tag`, `state`, `last_error`, `release_at`, `pickup_deadline`, plus the delivery record `sent_at`, `recipients` (array of addresses), `override_by`, `override_reason` and `override_at`
 - `tests`, `agents`: the snapshot taken at launch
-- `cells[test_uuid][agent_id]`: `{ state, exit_code, task_id, completed_at, reason, techniques }`
+- `cells[test_uuid][agent_id]`: `{ state, exit_code, task_id, completed_at, reason, techniques }`. `reason` is the skip reason for `na`, the task's error for `not_run` and `error`, otherwise `null`
 - `totals`: a count per state plus `percent_protected`
 - `as_of`: ISO time the evidence was read
 
@@ -124,8 +143,25 @@ in the run (retries inherit the run id).
 
 ### CSV export
 
-`GET /api/campaigns/runs/:runId/export.csv` returns `text/csv` with the columns
-`test,techniques,host,os,outcome,exit_code,completed_at,as_of`. The
+`GET /api/campaigns/runs/:runId/export.csv` returns `text/csv` with exactly this
+header:
+
+```
+test,techniques,host,os,outcome,exit_code,reason,completed_at,as_of
+```
+
+There is one row for every test and host pair in the snapshot; none are left out.
+
+| Column | Content |
+|--------|---------|
+| `outcome` | The cell state. A pair skipped at launch is `na` |
+| `exit_code` | The latest attempt's exit code; empty for `na` and `not_run` |
+| `reason` | Skip reason (`na`), expiry or cancel reason (`not_run`), agent error (`error`); otherwise empty |
+| `techniques` | ATT&CK techniques of the latest attempt, `; `-separated |
+| `as_of` | The time the evidence was read (the same on every row) |
+
+Rows are CRLF-terminated, and cells that start with `=`, `+`, `-`, `@`, a tab or a carriage return are
+prefixed with `'` so spreadsheets don't evaluate them. The
 `Content-Disposition` filename carries the as-of time
 (`campaign-run-<run-id>-20261023T1405Z.csv`) and the `X-Report-As-Of` header
 carries the full ISO time.
