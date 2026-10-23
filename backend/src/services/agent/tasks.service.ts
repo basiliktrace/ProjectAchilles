@@ -20,6 +20,7 @@ import type {
 import { getTestMetadata } from './test-catalog.service.js';
 import { IntegrationsSettingsService } from '../integrations/settings.js';
 import { recordEvent } from './events.service.js';
+import { getNoticeSummaries } from '../notices/notices.repo.js';
 
 // ============================================================================
 // HELPERS
@@ -974,7 +975,8 @@ export function listTasksGrouped(
       statusCounts[t.status] = (statusCounts[t.status] ?? 0) + 1;
     }
 
-    return {
+    const noticeIds = [...new Set(tasks.map((t) => t.notice_id).filter((id): id is string => !!id))];
+    const group: TaskGroup = {
       batch_id: batchRow.batch_id,
       type: first?.type ?? 'execute_test',
       payload: first?.payload ?? ({} as TaskPayload),
@@ -984,6 +986,11 @@ export function listTasksGrouped(
       status_counts: statusCounts,
       tasks,
     };
+    if (noticeIds.length > 0) {
+      const notices = getNoticeSummaries(noticeIds);
+      if (Object.keys(notices).length > 0) group.notices = notices;
+    }
+    return group;
   });
 
   return { groups, total: countRow.total };

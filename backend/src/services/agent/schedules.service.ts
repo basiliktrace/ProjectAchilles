@@ -1,6 +1,7 @@
 import crypto from 'crypto';
 import { getDatabase } from './database.js';
 import { createTasks } from './tasks.service.js';
+import { createSchedulerTick } from '../notices/notices.service.js';
 import { toUTCDate, todayInTimezone, dayOfWeekInTimezone, randomTimeForDate } from './scheduleTime.js';
 import { AppError } from '../../middleware/error.middleware.js';
 import type {
@@ -486,8 +487,14 @@ export function deleteSchedule(id: string): void {
 // SCHEDULER TICK
 // ============================================================================
 
-export function processSchedules(): { processed: number; errors: string[] } {
+/**
+ * `clock` is for tests: it drives both the due-row query and every time used
+ * below. Without it the query keeps using SQLite's own clock, as before.
+ */
+export function processSchedules(clock?: Date): { processed: number; errors: string[] } {
   const db = getDatabase();
+  const now = clock ?? new Date();
+  const tick = createSchedulerTick(now);
   const errors: string[] = [];
   let processed = 0;
 
@@ -504,12 +511,11 @@ export function processSchedules(): { processed: number; errors: string[] } {
     SELECT * FROM schedules
     WHERE status = 'active'
       AND next_run_at IS NOT NULL
-      AND datetime(next_run_at) <= datetime('now')
-  `).all() as ScheduleRow[];
+      AND datetime(next_run_at) <= datetime(${clock ? '?' : "'now'"})
+  `).all(...(clock ? [clock.toISOString()] : [])) as ScheduleRow[];
 
   for (const row of dueRows) {
     const schedule = parseScheduleRow(row);
-    const now = new Date();
 
     // Filter out decommissioned agents — they'll never pick up tasks
     const placeholders = schedule.agent_ids.map(() => '?').join(', ');
@@ -535,6 +541,7 @@ export function processSchedules(): { processed: number; errors: string[] } {
 
       if (dueAgentIds.length > 0) {
         try {
+          const noticeId = tick.dayNoticeFor({ ...schedule, agent_next_runs: map });
           createTasks(
             {
               agent_ids: dueAgentIds,
@@ -548,6 +555,7 @@ export function processSchedules(): { processed: number; errors: string[] } {
             },
             schedule.org_id,
             schedule.created_by,
+            { noticeId },
           );
           processed++;
         } catch (err) {
@@ -583,8 +591,16 @@ export function processSchedules(): { processed: number; errors: string[] } {
         `[Scheduler] Skipping schedule "${schedule.name ?? schedule.id}" — all agents are decommissioned`
       );
       processed++;
+    } else if (tick.hasPendingRunNotice(schedule.id)) {
+      // The previous occurrence's notice is still undelivered: don't stack a
+      // second batch behind it. Record the skip and advance as usual.
+      tick.recordSkippedOccurrence(schedule.id, schedule.created_by, schedule.timezone);
+      console.warn(
+        `[Scheduler] Skipping schedule "${schedule.name ?? schedule.id}" — previous run still waiting for notice delivery`
+      );
     } else {
       try {
+        const noticeId = tick.runNoticeFor(schedule.id, schedule.timezone, schedule.created_by);
         createTasks(
           {
             agent_ids: eligibleAgentIds,
@@ -598,6 +614,7 @@ export function processSchedules(): { processed: number; errors: string[] } {
           },
           schedule.org_id,
           schedule.created_by,
+          { noticeId },
         );
         processed++;
       } catch (err) {

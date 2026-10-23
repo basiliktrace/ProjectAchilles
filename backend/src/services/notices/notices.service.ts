@@ -65,7 +65,7 @@ function serverTimezone(): string {
 }
 
 /** Base UI link (Ruling R3): first CORS_ORIGIN entry, else the Vite dev origin. */
-function tasksUiUrl(): string {
+export function tasksUiUrl(): string {
   const first = (process.env.CORS_ORIGIN ?? '')
     .split(',')
     .map((s) => s.trim())
@@ -265,7 +265,8 @@ export function createSchedulerTick(now: Date): SchedulerTick {
     },
 
     hasPendingRunNotice(scheduleId) {
-      return repo.hasPendingRunNoticeForSchedule(scheduleId);
+      // With the gate off nothing is held, so a leftover pending notice must not skip runs.
+      return gateEnabled() && repo.hasPendingRunNoticeForSchedule(scheduleId);
     },
 
     recordSkippedOccurrence(scheduleId, createdBy, timezone) {

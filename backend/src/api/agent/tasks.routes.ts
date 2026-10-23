@@ -21,6 +21,7 @@ import {
   markIngestionFailed,
   TerminalStateRejection,
 } from '../../services/agent/tasks.service.js';
+import { runWithNotice } from '../../services/notices/notices.service.js';
 import { ingestResult } from '../../services/agent/results.service.js';
 import { retryPendingIngestions } from '../../services/agent/ingestionWorker.service.js';
 import { alertsService } from '../integrations.routes.js';
@@ -199,7 +200,10 @@ adminTasksRouter.post(
     const { org_id, ...taskRequest } = req.body as CreateTaskRequest & { org_id: string };
     validateRequestOrgId(org_id, req.auth);
 
-    const taskIds = createTasks(taskRequest, org_id, userId);
+    const taskIds = runWithNotice(
+      { type: 'run_now', createdBy: userId },
+      (noticeId) => createTasks(taskRequest, org_id, userId, { noticeId }),
+    );
 
     res.status(201).json({ success: true, data: { task_ids: taskIds } });
   })
@@ -377,7 +381,10 @@ adminTasksRouter.post(
       throw new AppError('Unable to determine user identity', 401);
     }
 
-    const task = retryTask(req.params.id, userId);
+    const task = runWithNotice(
+      { type: 'manual_retry', createdBy: userId },
+      (noticeId) => retryTask(req.params.id, userId, noticeId),
+    );
 
     res.status(201).json({ success: true, data: sanitizeTaskForAdmin(task) });
   })
