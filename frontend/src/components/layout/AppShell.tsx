@@ -19,6 +19,7 @@ import { useCanAccessModule, useHasPermission } from '@/hooks/useAppRole';
 import { useOutdatedAgentCount } from '@/hooks/useOutdatedAgentCount';
 import { useAppHotkeys } from '@/hooks/useAppHotkeys';
 import { GlobalSearch } from '@/components/layout/GlobalSearch';
+import { NoticeDeliveryBanner } from '@/components/layout/NoticeDeliveryBanner';
 import { NotificationBell } from '@/components/layout/NotificationBell';
 import { ShortcutsDialog } from '@/components/layout/ShortcutsDialog';
 import { Button } from '@/components/ui/button';
@@ -212,6 +213,8 @@ export function AppShell({ children }: { children: ReactNode }) {
         </Sheet>
         <Wordmark />
       </header>
+
+      <NoticeDeliveryBanner />
 
       {/* Main */}
       <main className="lg:pl-60">

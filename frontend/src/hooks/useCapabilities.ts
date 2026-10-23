@@ -8,6 +8,7 @@ export interface Capabilities {
   certUpload: boolean;
   gitSync: boolean;
   agentBuild: boolean;
+  preExecutionNotices: boolean;
   platform: string;
 }
 
@@ -19,6 +20,7 @@ const DEFAULT_CAPABILITIES: Capabilities = {
   certUpload: true,
   gitSync: true,
   agentBuild: true,
+  preExecutionNotices: false,
   platform: 'docker',
 };
 

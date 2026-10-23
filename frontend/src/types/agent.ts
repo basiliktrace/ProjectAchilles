@@ -89,6 +89,15 @@ export interface TaskNoteEntry {
   editedAt: string;
 }
 
+export interface NoticeSummary {
+  id: string;
+  run_tag: string;
+  state: 'pending' | 'sent' | 'not_delivered' | 'overridden' | 'skipped';
+  last_error: string | null;
+  release_at: string | null;
+  pickup_deadline: string | null;
+}
+
 export interface AgentTask {
   id: string;
   agent_id: string;
@@ -113,6 +122,8 @@ export interface AgentTask {
   retry_count?: number;
   max_retries?: number;
   original_task_id?: string | null;
+  /** Pre-execution notice gating this task, if any (null for legacy/ungated tasks). */
+  notice_id?: string | null;
 }
 
 export interface TaskGroup {
@@ -124,6 +135,8 @@ export interface TaskGroup {
   agent_count: number;
   status_counts: Partial<Record<TaskStatus, number>>;
   tasks: AgentTask[];
+  /** Notice summaries keyed by notice id. */
+  notices?: Record<string, NoticeSummary>;
 }
 
 export interface EnrollmentToken {
