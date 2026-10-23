@@ -37,9 +37,12 @@ export function NoticeDeliveryBanner() {
   }, [preExecutionNotices, dismissed]);
 
   if (!preExecutionNotices || dismissed || !status) return null;
-  const problem =
-    status.pendingOverdue > 0 || status.notDeliveredLast7d > 0 || status.smtpCheck?.ok === false;
-  if (!problem) return null;
+  const deliveryProblem = status.pendingOverdue > 0 || status.notDeliveredLast7d > 0;
+  const smtpCheckFailed = status.smtpCheck?.ok === false;
+  if (!deliveryProblem && !smtpCheckFailed) return null;
+  const message = deliveryProblem
+    ? 'Test runs are waiting on, or were skipped for, notice email delivery. Check Settings → Integrations → Pre-execution notices.'
+    : 'The daily notice email check failed. Check Settings → Integrations → Pre-execution notices.';
 
   const dismiss = () => {
     setDismissed(true);
@@ -56,10 +59,7 @@ export function NoticeDeliveryBanner() {
       className="flex items-start gap-2.5 border-b border-warning/30 bg-warning-dim px-4 py-2.5 text-sm text-warning lg:pl-[calc(15rem+1rem)]"
     >
       <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
-      <p className="flex-1">
-        Test runs are waiting on, or were skipped for, notice email delivery. Check Settings →
-        Integrations → Pre-execution notices.
-      </p>
+      <p className="flex-1">{message}</p>
       <button type="button" onClick={dismiss} aria-label="Dismiss" className="shrink-0 rounded p-0.5 hover:bg-warning/20">
         <X className="h-4 w-4" />
       </button>

@@ -14,6 +14,10 @@ interface PreExecutionNoticesConfigProps {
 const parseRecipients = (raw: string): string[] =>
   raw.split(/[,\n;]+/).map((r) => r.trim()).filter(Boolean);
 
+/** A cleared number input is left out of the save, so the server keeps its value (instead of 0). */
+const numberField = <K extends string>(key: K, raw: string): Partial<Record<K, number>> =>
+  raw.trim() === '' ? {} : ({ [key]: Number(raw) } as Record<K, number>);
+
 export function PreExecutionNoticesConfig({ onStatusChange }: PreExecutionNoticesConfigProps) {
   const [enabled, setEnabled] = useState(false);
   const [recipients, setRecipients] = useState('');
@@ -60,12 +64,16 @@ export function PreExecutionNoticesConfig({ onStatusChange }: PreExecutionNotice
       const saved = await noticesApi.saveSettings({
         enabled,
         recipients: parseRecipients(recipients),
-        lead_minutes: Number(leadMinutes),
-        max_wait_minutes: Number(maxWait),
-        pickup_window_minutes: Number(pickupWindow),
+        ...numberField('lead_minutes', leadMinutes),
+        ...numberField('max_wait_minutes', maxWait),
+        ...numberField('pickup_window_minutes', pickupWindow),
         send_finished: sendFinished,
       });
       setSmtpConfigured(saved.smtp_configured);
+      // Show what the server kept for any field that was left empty.
+      setLeadMinutes(String(saved.lead_minutes));
+      setMaxWait(String(saved.max_wait_minutes));
+      setPickupWindow(String(saved.pickup_window_minutes));
       setSuccessMessage('Pre-execution notice settings saved.');
       onStatusChange?.(saved.enabled);
     } catch (err) {

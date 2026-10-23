@@ -19,6 +19,9 @@ interface ExecutionDrawerProps {
   onTasksCreated?: () => void;
 }
 
+/** Server limit for POST /agent/admin/tasks/batch. */
+const MAX_BATCH = 50;
+
 const EMPTY_METADATA: TaskTestMetadata = {
   category: '',
   subcategory: '',
@@ -159,17 +162,20 @@ export default function ExecutionDrawer({ open, onClose, tests, onTasksCreated }
     try {
       const selectedAgent = agents.find((a) => targetAgentIds.includes(a.id));
       const orgId = selectedAgent?.org_id ?? 'default';
+      const execution_timeout = parseInt(config.timeout) || 300;
+      const priority = parseInt(config.priority) || 1;
+      const target_index = config.targetIndex || undefined;
 
-      // Execute for each test in the batch
+      // One entry per built test in the selection
+      const built = tests.flatMap((test) => {
+        const buildInfo = builds.get(test.uuid);
+        return buildInfo?.exists ? [{ test, binaryName: buildInfo.filename ?? '' }] : [];
+      });
+
       let totalCreated = 0;
 
-      for (const test of tests) {
-        const buildInfo = builds.get(test.uuid);
-        if (!buildInfo?.exists) continue;
-
-        const binaryName = buildInfo.filename ?? '';
-
-        if (config.activeTab === 'schedule') {
+      if (config.activeTab === 'schedule') {
+        for (const { test, binaryName } of built) {
           await agentApi.createSchedule({
             name: config.scheduleName || undefined,
             agent_ids: targetAgentIds,
@@ -177,34 +183,42 @@ export default function ExecutionDrawer({ open, onClose, tests, onTasksCreated }
             test_uuid: test.uuid,
             test_name: test.name,
             binary_name: binaryName,
-            execution_timeout: parseInt(config.timeout) || 300,
-            priority: parseInt(config.priority) || 1,
+            execution_timeout,
+            priority,
             metadata: EMPTY_METADATA,
             schedule_type: config.scheduleType,
             schedule_config: buildScheduleConfig(),
             timezone: config.scheduleTimezone,
-            target_index: config.targetIndex || undefined,
+            target_index,
           });
           totalCreated++;
-        } else {
-          const taskIds = await agentApi.createTasks({
-            agent_ids: targetAgentIds,
-            org_id: orgId,
-            test_uuid: test.uuid,
-            test_name: test.name,
-            binary_name: binaryName,
-            execution_timeout: parseInt(config.timeout) || 300,
-            priority: parseInt(config.priority) || 1,
-            metadata: EMPTY_METADATA,
-            target_index: config.targetIndex || undefined,
-          });
-          totalCreated += taskIds.length;
         }
-      }
-
-      if (config.activeTab === 'schedule') {
         setResult(`Created ${totalCreated} schedule(s) for ${targetAgentIds.length} agent(s)`);
       } else {
+        const requests = built.map(({ test, binaryName }) => ({
+          agent_ids: targetAgentIds,
+          test_uuid: test.uuid,
+          test_name: test.name,
+          binary_name: binaryName,
+          execution_timeout,
+          priority,
+          metadata: EMPTY_METADATA,
+          target_index,
+        }));
+        if (requests.length > 1) {
+          // Several tests in one Run: one batch request, so one pre-execution
+          // notice (one email) covers them all; all-or-nothing on the server.
+          // The server takes at most MAX_BATCH tests per request.
+          for (let i = 0; i < requests.length; i += MAX_BATCH) {
+            const taskIds = await agentApi.createTasksBatch({ org_id: orgId, requests: requests.slice(i, i + MAX_BATCH) });
+            totalCreated += taskIds.reduce((n, ids) => n + ids.length, 0);
+          }
+        } else {
+          for (const request of requests) {
+            const taskIds = await agentApi.createTasks({ ...request, org_id: orgId });
+            totalCreated += taskIds.length;
+          }
+        }
         setResult(`Created ${totalCreated} task(s) for ${targetAgentIds.length} agent(s)`);
       }
       onTasksCreated?.();

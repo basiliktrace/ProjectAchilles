@@ -43,10 +43,18 @@ describe('NoticeDeliveryBanner', () => {
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 
+  it('describes a failed daily SMTP check when that is the only problem', async () => {
+    getStatus.mockResolvedValue(status({ smtpCheck: { ok: false, at: 'x', message: 'bad' } }));
+    render(<NoticeDeliveryBanner />);
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'The daily notice email check failed. Check Settings → Integrations → Pre-execution notices.',
+    );
+  });
+
   it.each([
     ['pendingOverdue', { pendingOverdue: 2 }],
     ['notDeliveredLast7d', { notDeliveredLast7d: 1 }],
-    ['smtp failing', { smtpCheck: { ok: false, at: 'x', message: 'bad' } }],
+    ['notDelivered and smtp failing', { notDeliveredLast7d: 1, smtpCheck: { ok: false, at: 'x', message: 'bad' } }],
   ])('shows when %s', async (_n, over) => {
     getStatus.mockResolvedValue(status(over));
     render(<NoticeDeliveryBanner />);

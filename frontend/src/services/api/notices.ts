@@ -37,7 +37,8 @@ export const noticesApi = {
     return response.data.data;
   },
 
-  async saveSettings(settings: NoticeSettings): Promise<NoticeSettingsResponse> {
+  /** Partial update: omitted fields keep their saved value. */
+  async saveSettings(settings: Partial<NoticeSettings>): Promise<NoticeSettingsResponse> {
     const response = await apiClient.put('/notices/settings', settings);
     return response.data.data;
   },

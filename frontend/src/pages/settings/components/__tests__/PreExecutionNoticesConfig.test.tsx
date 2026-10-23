@@ -55,6 +55,20 @@ describe('PreExecutionNoticesConfig', () => {
     expect(await screen.findByText('At least one recipient is required')).toBeInTheDocument();
   });
 
+  it('omits a cleared numeric field from the save instead of sending 0', async () => {
+    vi.mocked(noticesApi.getSettings).mockResolvedValue({ ...base, recipients: ['a@x.io'] });
+    vi.mocked(noticesApi.saveSettings).mockResolvedValue({ ...base, recipients: ['a@x.io'] });
+    render(<PreExecutionNoticesConfig />);
+    await userEvent.clear(await screen.findByLabelText(/lead time/i));
+    await userEvent.clear(screen.getByLabelText(/pickup window/i));
+    await userEvent.click(screen.getByRole('button', { name: /save/i }));
+    await waitFor(() => expect(noticesApi.saveSettings).toHaveBeenCalled());
+    const body = vi.mocked(noticesApi.saveSettings).mock.calls[0][0];
+    expect(body).not.toHaveProperty('lead_minutes');
+    expect(body).not.toHaveProperty('pickup_window_minutes');
+    expect(body.max_wait_minutes).toBe(60);
+  });
+
   it('shows accepted/rejected after sending a test notice', async () => {
     vi.mocked(noticesApi.getSettings).mockResolvedValue({ ...base, recipients: ['a@x.io'] });
     vi.mocked(noticesApi.sendTest).mockResolvedValue({
