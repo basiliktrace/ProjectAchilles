@@ -31,9 +31,9 @@ cd backend && npm run build      # tsc → dist/
 
 ```bash
 # All tests
-cd backend && npm test           # 912 tests across 40 files (~12s)
-cd frontend && npm test          # 127 tests across 8 files (~2s)
-cd backend-serverless && npm test  # 626 tests across 25 files (~11s)
+cd backend && npm test           # 2497 tests across 117 files
+cd frontend && npm test          # 1171 tests across 112 files
+cd backend-serverless && npm test  # 1698 tests across 69 files
 
 # Single file
 cd backend && npx vitest src/services/agent/__tests__/enrollment.service.test.ts
@@ -128,6 +128,7 @@ SQLite has no `ALTER COLUMN`, so changing CHECK constraints requires recreating 
 | `/api/agent/*` | Agent key | Device endpoints (enroll, heartbeat, tasks) |
 | `/api/tests/*` | Clerk | Build system, certificates |
 | `/api/integrations/alerts/*` | Clerk | Alert thresholds, Slack/email config |
+| `/api/notices/*` | Clerk | Pre-execution notice settings, status, release |
 | `/api/reports/*` | Clerk | Report payloads: SB-PC-2026-001 JSON export, print-ready execution report (`/executions`) |
 
 ### API Key Scopes
@@ -351,7 +352,7 @@ Uses `backend-serverless/` — a fork of the backend adapted for serverless. Rep
 # Key env vars: CLERK_*, TURSO_*, BLOB_READ_WRITE_TOKEN, ENCRYPTION_SECRET
 # Cron routes: /api/cron/schedules, /api/cron/auto-rotation
 # Capabilities endpoint: GET /api/capabilities (feature flags for frontend)
-cd backend-serverless && npm test    # 552 tests across 23 files
+cd backend-serverless && npm test    # 1698 tests across 69 files
 ```
 
 ### Backend Serverless (`backend-serverless/`)
@@ -445,6 +446,15 @@ Programmatically resolves Achilles-correlated alerts in Microsoft Defender so co
 - **UI**: Collapsed `DefenderAutoResolveSection` inside the existing Defender settings card, shown only once Defender is configured
 - **Key files**: `services/defender/auto-resolve.service.ts`, `graph-client.ts` (`updateAlert` + `GraphPatchError`), `enrichment.service.ts` (alert-side writes), `sync.service.ts` (wiring)
 - **Customer setup guide**: `docs/defender-auto-resolve.md` (permission grant, dry-run audit, enable flow, troubleshooting)
+
+### Pre-execution notices
+Emails the security engineers before every `execute_test` run and holds the tests until the mail server accepts the notice for every recipient, plus a 0-5 minute lead. Off by default. User doc: `wiki/docs/user-guide/integrations/pre-execution-notices.md`.
+- **The hold lives in `getNextTask`** (`tasks.service.ts`): a pending task with a `notice_id` is only handed out when its `run_notices` row is `sent`/`overridden` and `release_at <= now < pickup_deadline`. Held tasks stay `status='pending'`; agents are unchanged. Compare JS-computed ISO strings, never `datetime('now')`.
+- **Backend-only.** `backend-serverless/` has no email stack and `GET /api/capabilities` reports `preExecutionNotices: false` there, which hides the Settings card, badges and banner.
+- **Per org, with legacy fallback (like alerts).** Settings live at `orgs[orgId].pre_execution_notices`, falling back to the legacy top-level `pre_execution_notices` when the org has no section (so `'default'` and unknown org ids use legacy). SMTP/Slack come from the same org's `alerts` (org section, else legacy). A notice's **owning org** is the `org_id` of the tasks it gates (`run_notices.org_id`; NULL on pre-R20 rows = legacy): Run Now/batch use the request's validated `org_id`, retry the original task's, the scheduler `schedule.org_id` (one shared run notice **per org** per tick). Every send, Finished email, bounded wait, Slack alert and release reads `new IntegrationsSettingsService(notice.org_id ?? undefined)`, never a global service. Routes are org-scoped: settings via the caller's org; `GET /`, `/status`, `/:id/release` see only the caller org's notices (another org's id is a 404), no-org callers see all (legacy mode) unless `REQUIRE_ORG_ISOLATION=true` (403). The daily SMTP check runs for the legacy section and each org with its own enabled section.
+- **Notice code ignores the alerts `configured` flag.** SMTP counts as usable when `smtp_host` + `from_address` are set and Slack when `webhook_url` + `enabled` are set (`services/notices/channels.ts`), because the Alerts UI never sends `configured` and `saveAlertSettings` keeps it false. The gate itself depends on `enabled` only, so a broken SMTP holds tests rather than letting them run unannounced.
+- **Trap: `migrateExecuteCommandType`** in `backend/src/services/agent/database.ts` recreates the `tasks` table and runs even on fresh DBs. Any new `tasks` column must be added to its `optionalCols`, and its index to the index recreation, or the column is silently dropped.
+- Code: `backend/src/services/notices/`, `backend/src/api/notices.routes.ts`. `services/notices/` must not import `tasks.service.ts` (import cycle); `tasks.service.ts` imports from `notices.repo.ts`.
 
 ### Alerting Service
 Threshold-based alerting dispatched when test results cross configured score thresholds. Hooked into the result ingestion pipeline.

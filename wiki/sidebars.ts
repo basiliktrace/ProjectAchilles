@@ -102,6 +102,7 @@ const sidebars: SidebarsConfig = {
             'user-guide/integrations/crowdstrike',
             'user-guide/integrations/crowdstrike-auto-resolve',
             'user-guide/integrations/alerting',
+            'user-guide/integrations/pre-execution-notices',
           ],
         },
         {

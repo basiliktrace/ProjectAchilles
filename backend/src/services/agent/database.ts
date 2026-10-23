@@ -174,7 +174,60 @@ export function initializeTables(database: Database.Database): void {
       FOREIGN KEY (agent_id) REFERENCES agents(id)
     );
     CREATE INDEX IF NOT EXISTS idx_agent_events_agent_ts ON agent_events(agent_id, created_at);
+
+    CREATE TABLE IF NOT EXISTS run_notices (
+      id TEXT PRIMARY KEY,
+      kind TEXT NOT NULL CHECK(kind IN ('run','day')),
+      state TEXT NOT NULL CHECK(state IN ('pending','sent','not_delivered','overridden','skipped')),
+      source_type TEXT NOT NULL,
+      schedule_ids TEXT NOT NULL DEFAULT '[]',
+      schedule_id TEXT,
+      window_date TEXT,
+      timezone TEXT NOT NULL,
+      announced_agent_ids TEXT NOT NULL DEFAULT '[]',
+      day_window_start TEXT,
+      day_window_end TEXT,
+      created_by TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      recipients TEXT NOT NULL DEFAULT '[]',
+      accepted TEXT NOT NULL DEFAULT '[]',
+      rejected TEXT NOT NULL DEFAULT '[]',
+      attempts INTEGER NOT NULL DEFAULT 0,
+      last_error TEXT,
+      claim_at TEXT,
+      sent_at TEXT,
+      release_at TEXT,
+      pickup_deadline TEXT,
+      window_end TEXT,
+      override_by TEXT,
+      override_reason TEXT,
+      override_at TEXT,
+      skip_reason TEXT,
+      finished_sent_at TEXT,
+      finished_attempts INTEGER NOT NULL DEFAULT 0,
+      slack_failure_alerted INTEGER NOT NULL DEFAULT 0,
+      slack_not_delivered_alerted INTEGER NOT NULL DEFAULT 0,
+      last_attempt_at TEXT,
+      org_id TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_run_notices_state ON run_notices(state);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_run_notices_day ON run_notices(schedule_id, window_date) WHERE kind = 'day';
   `);
+
+  // Migration: run_notices.last_attempt_at (send retry backoff). run_notices is
+  // never recreated by a later migration, so a plain ADD COLUMN is enough.
+  const noticeCols = new Set(
+    (database.prepare(`PRAGMA table_info(run_notices)`).all() as { name: string }[]).map((c) => c.name),
+  );
+  if (!noticeCols.has('last_attempt_at')) {
+    database.exec('ALTER TABLE run_notices ADD COLUMN last_attempt_at TEXT');
+  }
+  // Migration: run_notices.org_id, the org of the tasks a notice gates (Ruling
+  // R20: notices are per org). NULL for notices created before this column.
+  if (!noticeCols.has('org_id')) {
+    database.exec('ALTER TABLE run_notices ADD COLUMN org_id TEXT');
+  }
+  database.exec('CREATE INDEX IF NOT EXISTS idx_run_notices_org_state ON run_notices(org_id, state)');
 
   // Migration: add process metrics columns to heartbeat_history
   const hbCols = database.prepare(`PRAGMA table_info(heartbeat_history)`).all() as { name: string }[];
@@ -206,6 +259,10 @@ export function initializeTables(database: Database.Database): void {
     database.exec("UPDATE tasks SET batch_id = id WHERE batch_id IS NULL");
     database.exec("CREATE INDEX IF NOT EXISTS idx_tasks_batch ON tasks(batch_id)");
   }
+  if (!colNames.has('notice_id')) {
+    database.exec(`ALTER TABLE tasks ADD COLUMN notice_id TEXT DEFAULT NULL`);
+  }
+  database.exec('CREATE INDEX IF NOT EXISTS idx_tasks_notice ON tasks(notice_id)');
 
   // Migration: add api_key_rotated_at column to agents table
   const agentCols = database.prepare(`PRAGMA table_info(agents)`).all() as { name: string }[];
@@ -489,6 +546,7 @@ function migrateExecuteCommandType(database: Database.Database): void {
     colSet.has('es_ingested') ? 'es_ingested INTEGER NOT NULL DEFAULT 0' : null,
     colSet.has('ingest_attempts') ? 'ingest_attempts INTEGER NOT NULL DEFAULT 0' : null,
     colSet.has('last_ingest_attempt_at') ? 'last_ingest_attempt_at TEXT DEFAULT NULL' : null,
+    colSet.has('notice_id') ? 'notice_id TEXT DEFAULT NULL' : null,
   ].filter(Boolean);
 
   database.exec(`DROP TABLE IF EXISTS tasks_new`);
@@ -517,6 +575,7 @@ function migrateExecuteCommandType(database: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
     CREATE INDEX IF NOT EXISTS idx_tasks_org ON tasks(org_id);
     CREATE INDEX IF NOT EXISTS idx_tasks_batch ON tasks(batch_id);
+    ${colSet.has('notice_id') ? 'CREATE INDEX IF NOT EXISTS idx_tasks_notice ON tasks(notice_id);' : ''}
   `);
 
   database.pragma('foreign_keys = ON');
