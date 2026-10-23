@@ -60,7 +60,8 @@ Creates the tasks for 1 to 50 tests in one all-or-nothing request, under a
 single pre-execution notice. Body: `{ "org_id": "...", "requests": [ ... ] }`,
 where each request has the Create Task fields. See
 [Several tests under one notice](./alerting#several-tests-under-one-notice).
-Requires `endpoints:tasks:create`.
+Requires `endpoints:tasks:create`. Not available on Vercel deployments, which
+have no pre-execution notices; there the UI creates one task per test instead.
 
 ### Bulk Heartbeat Buckets
 

@@ -78,8 +78,9 @@ A task that does not run is marked **Expired** with one of these reasons. It is 
 
 - **Not run: notice not delivered.** The mail server did not accept the notice for every recipient within the max wait. A partial rejection counts as a failure, and the whole list is sent again on the next attempt. Attempts back off: the first retry comes 1 minute after a failure, then 2, 4 and 8 minutes, then every 15 minutes until it succeeds or the max wait runs out. Each attempt uses the recipient list currently saved in Settings, so fixing a mistyped address takes effect on the next attempt.
 
-If every task in a run is cancelled while its notice is still waiting, the notice is dropped and no email is sent.
 - **Not run: host offline during notice window.** The host did not pick up the task before the window ended. Automatic retries share the original window, so a retry created after it also expires.
+
+If every task in a one-off run is cancelled while its notice is still waiting, the notice is dropped and no email is sent. A schedule's day notice that holds no task simply keeps waiting: it is sent when a later machine's task joins it, and it never raises the banner.
 
 ## When delivery fails
 
