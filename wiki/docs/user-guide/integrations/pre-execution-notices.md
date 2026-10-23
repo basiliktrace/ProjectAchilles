@@ -37,7 +37,11 @@ The settings apply to your organization. Each organization has its own recipient
 
 ## What triggers a notice
 
-Every test run is covered: **Run Now**, a **manual retry**, and every **schedule**. Only test runs are covered. Agent updates, uninstalls and shell commands never wait for a notice.
+Every test run is covered: **Run Now**, a **manual retry**, every **schedule**, and every **campaign run**. Only test runs are covered. **Run Command**, agent updates and uninstalls never send a notice and never wait for one.
+
+:::caution Run Command is not announced
+A command runs immediately as root/SYSTEM on the host, and no email is sent. Commands such as PowerShell one-liners or `whoami /priv` can look like attacker activity to your EDR. If you run commands on monitored hosts, tell your SOC yourself.
+:::
 
 - **Run Now and manual retry:** one notice per click. Running several selected tests at once from the test browser is still one click and one notice, which lists every test. A manual retry sends a new notice, because a person decided to run it again.
 - **Fleet and fixed-time schedules:** all schedules that come due in the same minute share one notice that lists every test and host.
