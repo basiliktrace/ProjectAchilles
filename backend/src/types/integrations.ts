@@ -149,6 +149,7 @@ export interface OrgIntegrationSettings {
   defender?: DefenderIntegrationSettings;
   crowdstrike?: CrowdStrikeIntegrationSettings;
   alerts?: AlertSettings;
+  pre_execution_notices?: PreExecutionNoticeSettings;
 }
 
 /**
@@ -156,7 +157,10 @@ export interface OrgIntegrationSettings {
  * Legacy keys are kept for backward compat — they act as the fallback when no
  * org-specific settings exist.
  */
-/** Deployment-wide pre-execution notice settings (legacy top level of integrations.json). */
+/**
+ * Pre-execution notice settings. Per org (`orgs[orgId].pre_execution_notices`)
+ * with the legacy top level as the fallback, like alerts (Ruling R20).
+ */
 export interface PreExecutionNoticeSettings {
   enabled: boolean;
   recipients: string[];

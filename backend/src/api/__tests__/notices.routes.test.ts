@@ -32,6 +32,7 @@ vi.mock('../../middleware/clerk.middleware.js', () => ({
       ? res.status(403).json({ success: false, error: 'Insufficient permissions' })
       : next(),
   getUserId: (auth: any) => auth?.userId,
+  getUserOrgId: (auth: any) => auth?.orgId,
   validateRequestOrgId: () => undefined,
 }));
 

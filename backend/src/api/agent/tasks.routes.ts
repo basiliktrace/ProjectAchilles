@@ -202,8 +202,9 @@ adminTasksRouter.post(
     const { org_id, ...taskRequest } = req.body as CreateTaskRequest & { org_id: string };
     validateRequestOrgId(org_id, req.auth);
 
+    // The notice belongs to the tasks' (validated) org.
     const taskIds = runWithNotice(
-      { type: 'run_now', createdBy: userId },
+      { type: 'run_now', createdBy: userId, orgId: org_id },
       (noticeId) => createTasks(taskRequest, org_id, userId, { noticeId }),
     );
 
@@ -232,7 +233,7 @@ adminTasksRouter.post(
     validateRequestOrgId(org_id, req.auth);
 
     const taskIds = runWithNotice(
-      { type: 'run_now', createdBy: userId },
+      { type: 'run_now', createdBy: userId, orgId: org_id },
       (noticeId) => createTasksBatch(requests, org_id, userId, { noticeId }),
     );
 
@@ -412,8 +413,11 @@ adminTasksRouter.post(
       throw new AppError('Unable to determine user identity', 401);
     }
 
+    // The clone keeps the original task's org, so the notice belongs to it.
+    // getTask throws 404 for an unknown id before any notice is created.
+    const orgId = getTask(req.params.id).org_id;
     const task = runWithNotice(
-      { type: 'manual_retry', createdBy: userId },
+      { type: 'manual_retry', createdBy: userId, orgId },
       (noticeId) => retryTask(req.params.id, userId, noticeId),
     );
 

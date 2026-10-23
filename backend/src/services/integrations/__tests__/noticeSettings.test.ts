@@ -86,13 +86,67 @@ describe('pre-execution notice settings', () => {
     expect(next).toMatchObject({ enabled: true, recipients: ['a@x.io'], send_finished: false });
   });
 
-  it('writes to the legacy top level even when constructed with an org id', () => {
+  it('an org id reads and writes orgs[orgId] (Ruling R20); the legacy level is untouched', () => {
+    store = JSON.stringify({ pre_execution_notices: { enabled: false, recipients: ['legacy@x.io'] } });
     const svc = new IntegrationsSettingsService('org_1');
     svc.savePreExecutionNoticeSettings({ enabled: true, recipients: ['a@x.io'] });
     const written = JSON.parse(store!);
-    expect(written.pre_execution_notices.enabled).toBe(true);
-    expect(written.orgs?.org_1?.pre_execution_notices).toBeUndefined();
-    expect(new IntegrationsSettingsService().getPreExecutionNoticeSettings().enabled).toBe(true);
-    expect(svc.getPreExecutionNoticeSettings().enabled).toBe(true);
+    expect(written.orgs.org_1.pre_execution_notices).toMatchObject({ enabled: true, recipients: ['a@x.io'] });
+    expect(written.pre_execution_notices).toEqual({ enabled: false, recipients: ['legacy@x.io'] });
+    expect(svc.getPreExecutionNoticeSettings()).toMatchObject({ enabled: true, recipients: ['a@x.io'] });
+    expect(new IntegrationsSettingsService().getPreExecutionNoticeSettings()).toMatchObject({ enabled: false, recipients: ['legacy@x.io'] });
+    expect(new IntegrationsSettingsService('org_2').getPreExecutionNoticeSettings()).toMatchObject({ enabled: false, recipients: ['legacy@x.io'] });
+  });
+
+  it("an org without its own section falls back to the legacy settings, and 'default' is just such an org", () => {
+    store = JSON.stringify({
+      pre_execution_notices: { enabled: true, recipients: ['legacy@x.io'], lead_minutes: 2 },
+      orgs: { org_1: { alerts: { thresholds: { enabled: false }, cooldown_minutes: 15 } } },
+    });
+    for (const org of ['org_1', 'default', 'unknown']) {
+      expect(new IntegrationsSettingsService(org).getPreExecutionNoticeSettings()).toMatchObject({
+        enabled: true, recipients: ['legacy@x.io'], lead_minutes: 2,
+      });
+    }
+  });
+
+  it("an org's first save starts from the legacy values but not the legacy SMTP check result", () => {
+    store = JSON.stringify({
+      pre_execution_notices: {
+        enabled: true, recipients: ['legacy@x.io'], lead_minutes: 2,
+        last_smtp_check_at: '2026-10-23T00:00:00.000Z', last_smtp_check_ok: true, last_smtp_check_message: 'ok',
+      },
+    });
+    const saved = new IntegrationsSettingsService('org_1').savePreExecutionNoticeSettings({ recipients: ['a@x.io'] });
+    expect(saved).toMatchObject({ enabled: true, recipients: ['a@x.io'], lead_minutes: 2 });
+    expect(saved.last_smtp_check_at).toBeUndefined();
+    expect(saved.last_smtp_check_ok).toBeUndefined();
+    expect(saved.last_smtp_check_message).toBeUndefined();
+  });
+
+  it('listNoticeOrgIds lists orgs with their own notice section only', () => {
+    store = JSON.stringify({
+      pre_execution_notices: { enabled: true, recipients: [] },
+      orgs: { a: { pre_execution_notices: { enabled: false, recipients: [] } }, b: { alerts: { thresholds: { enabled: false }, cooldown_minutes: 15 } } },
+    });
+    expect(new IntegrationsSettingsService('b').listNoticeOrgIds()).toEqual(['a']);
+  });
+
+  it('decrypts the SMTP and Slack credentials of an org alerts section', () => {
+    const svc = new IntegrationsSettingsService('org_1');
+    svc.saveAlertSettings({
+      thresholds: { enabled: false },
+      slack: { webhook_url: 'https://hooks.slack.test/abc', enabled: true },
+      email: { smtp_host: 'h', smtp_user: 'user-1', smtp_pass: 'pass-1', from_address: 'f@x.io', enabled: true },
+    } as any);
+    const raw = JSON.parse(store!).orgs.org_1.alerts;
+    expect(raw.email.smtp_pass).toMatch(/^enc:/);
+    const read = svc.getAlertSettings()!;
+    expect(read.email).toMatchObject({ smtp_user: 'user-1', smtp_pass: 'pass-1' });
+    expect(read.slack?.webhook_url).toBe('https://hooks.slack.test/abc');
+
+    // A later partial save keeps the credentials single-encrypted.
+    svc.saveAlertSettings({ cooldown_minutes: 30 });
+    expect(svc.getAlertSettings()!.email).toMatchObject({ smtp_user: 'user-1', smtp_pass: 'pass-1' });
   });
 });

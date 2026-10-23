@@ -1,5 +1,6 @@
 import { Router } from 'express';
-import { requireClerkAuth, requirePermission, getUserId } from '../middleware/clerk.middleware.js';
+import type { Request } from 'express';
+import { requireClerkAuth, requirePermission, getUserId, getUserOrgId } from '../middleware/clerk.middleware.js';
 import { asyncHandler, AppError } from '../middleware/error.middleware.js';
 import { validate } from '../middleware/validation.js';
 import { IntegrationsSettingsService } from '../services/integrations/settings.js';
@@ -13,22 +14,46 @@ import {
   releaseWithoutNotice,
   tasksUiUrl,
 } from '../services/notices/notices.service.js';
+import type { NoticeScope } from '../services/notices/notices.service.js';
 import { UpdateNoticeSettingsSchema, ReleaseNoticeSchema } from '../schemas/notices.schemas.js';
 
 const router = Router();
 
 router.use(requireClerkAuth());
 
-// Notice settings are deployment-wide: never org-scoped.
-const settingsService = () => new IntegrationsSettingsService();
+/*
+ * Ruling R20: notices are per org, like alerts. Settings live under
+ * `orgs[callerOrg]` with the legacy top level as the fallback, and a caller
+ * sees and acts on only the notices of its own org (a notice's org is the
+ * org_id of the tasks it gates).
+ */
+
+/** The caller's org settings (the `getSettingsService(req)` pattern of integrations.routes). */
+const settingsService = (req: Request): IntegrationsSettingsService =>
+  new IntegrationsSettingsService(getUserOrgId(req.auth));
+
+/**
+ * Which notices the caller may see or act on. A caller with a Clerk org sees
+ * only that org's notices. A caller without one is in legacy single-org mode
+ * and sees all notices (the same as task listing without an org_id filter),
+ * unless REQUIRE_ORG_ISOLATION=true, which rejects org-less callers.
+ */
+function noticeScope(req: Request): NoticeScope {
+  const orgId = getUserOrgId(req.auth);
+  if (orgId) return { kind: 'org', orgId };
+  if (process.env.REQUIRE_ORG_ISOLATION === 'true') {
+    throw new AppError('Organization isolation required. Configure Clerk Organizations.', 403);
+  }
+  return { kind: 'all' };
+}
 
 // Usable SMTP (host + from address), not the alerts `configured` flag: the
 // Alerts UI never sends that flag, so it stays false after a UI save.
 const smtpConfigured = (svc: IntegrationsSettingsService): boolean =>
   isSmtpUsable(svc.getAlertSettings()?.email);
 
-router.get('/settings', requirePermission('integrations:read'), asyncHandler(async (_req, res) => {
-  const svc = settingsService();
+router.get('/settings', requirePermission('integrations:read'), asyncHandler(async (req, res) => {
+  const svc = settingsService(req);
   res.json({
     success: true,
     data: { ...svc.getPreExecutionNoticeSettings(), smtp_configured: smtpConfigured(svc) },
@@ -40,7 +65,7 @@ router.put(
   requirePermission('integrations:write'),
   validate(UpdateNoticeSettingsSchema),
   asyncHandler(async (req, res) => {
-    const svc = settingsService();
+    const svc = settingsService(req);
     const current = svc.getPreExecutionNoticeSettings();
     const enabled = req.body.enabled ?? current.enabled;
     const recipients: string[] = req.body.recipients ?? current.recipients;
@@ -59,8 +84,8 @@ router.put(
   }),
 );
 
-router.post('/settings/test', requirePermission('integrations:write'), asyncHandler(async (_req, res) => {
-  const svc = settingsService();
+router.post('/settings/test', requirePermission('integrations:write'), asyncHandler(async (req, res) => {
+  const svc = settingsService(req);
   const email = svc.getAlertSettings()?.email;
   if (!email || !isSmtpUsable(email)) {
     throw new AppError('SMTP email must be configured in Alerts before sending a test notice', 400);
@@ -96,17 +121,18 @@ router.post('/settings/test', requirePermission('integrations:write'), asyncHand
   });
 }));
 
-router.get('/status', requirePermission('endpoints:tasks:read'), asyncHandler(async (_req, res) => {
-  res.json({ success: true, data: getNoticeStatus() });
+router.get('/status', requirePermission('endpoints:tasks:read'), asyncHandler(async (req, res) => {
+  res.json({ success: true, data: getNoticeStatus(noticeScope(req)) });
 }));
 
 router.get('/', requirePermission('endpoints:tasks:read'), asyncHandler(async (req, res) => {
+  const scope = noticeScope(req);
   const rawLimit = parseInt(String(req.query.limit ?? ''), 10);
   const rawOffset = parseInt(String(req.query.offset ?? ''), 10);
   // SQLite treats a negative LIMIT as unlimited, so clamp explicitly.
   const limit = Number.isFinite(rawLimit) ? Math.min(100, Math.max(1, rawLimit)) : 25;
   const offset = Number.isFinite(rawOffset) ? Math.max(0, rawOffset) : 0;
-  res.json({ success: true, data: listNotices(limit, offset) });
+  res.json({ success: true, data: listNotices(limit, offset, scope) });
 }));
 
 router.post(
@@ -116,7 +142,8 @@ router.post(
   asyncHandler(async (req, res) => {
     const userId = getUserId(req.auth);
     if (!userId) throw new AppError('Unable to determine user identity', 401);
-    const notice = releaseWithoutNotice(req.params.id, userId, req.body.reason);
+    // A notice of another org is "not found" (existence not revealed).
+    const notice = releaseWithoutNotice(req.params.id, userId, req.body.reason, noticeScope(req));
     res.json({ success: true, data: notice });
   }),
 );

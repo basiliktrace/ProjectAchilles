@@ -195,22 +195,22 @@ describe('pre-execution notice creation and send pass', () => {
   describe('runWithNotice', () => {
     it('gate disabled: calls fn(null) and creates no notice', () => {
       writeSettings({ enabled: false });
-      expect(isNoticeGateEnabled()).toBe(false);
+      expect(isNoticeGateEnabled(null)).toBe(false);
       const fn = vi.fn((nid: string | null) => nid);
-      expect(runWithNotice({ type: 'run_now', createdBy: 'alice' }, fn)).toBeNull();
+      expect(runWithNotice({ type: 'run_now', createdBy: 'alice', orgId: null }, fn)).toBeNull();
       expect(fn).toHaveBeenCalledWith(null);
       expect(countNotices()).toBe(0);
     });
 
     it('the gate depends on `enabled` alone: the alerts `configured` flag is ignored', () => {
       writeSettings({ enabled: true, emailConfigured: false });
-      expect(isNoticeGateEnabled()).toBe(true);
+      expect(isNoticeGateEnabled(null)).toBe(true);
     });
 
     it('enabled with SMTP removed: Run Now still creates a held notice and the send fails loudly', async () => {
       writeSettings({ enabled: true, smtp: false });
-      expect(isNoticeGateEnabled()).toBe(true);
-      const id = runWithNotice({ type: 'run_now', createdBy: 'alice' }, (nid) => {
+      expect(isNoticeGateEnabled(null)).toBe(true);
+      const id = runWithNotice({ type: 'run_now', createdBy: 'alice', orgId: null }, (nid) => {
         linkTask('t1', nid!);
         return nid!;
       });
@@ -240,8 +240,8 @@ describe('pre-execution notice creation and send pass', () => {
     });
 
     it('gate enabled: the notice row exists in the same transaction as the tasks fn inserted', async () => {
-      expect(isNoticeGateEnabled()).toBe(true);
-      const result = runWithNotice({ type: 'run_now', createdBy: 'alice' }, (nid) => {
+      expect(isNoticeGateEnabled(null)).toBe(true);
+      const result = runWithNotice({ type: 'run_now', createdBy: 'alice', orgId: null }, (nid) => {
         expect(nid).toEqual(expect.any(String));
         // Visible inside the transaction.
         expect(notice(nid!)).toMatchObject({ state: 'pending', kind: 'run', source_type: 'run_now', created_by: 'alice' });
@@ -258,7 +258,7 @@ describe('pre-execution notice creation and send pass', () => {
 
     it('an exception in fn rolls back the notice row and propagates', async () => {
       expect(() =>
-        runWithNotice({ type: 'run_now', createdBy: 'alice' }, (nid) => {
+        runWithNotice({ type: 'run_now', createdBy: 'alice', orgId: null }, (nid) => {
           linkTask('t1', nid!);
           throw new Error('No binary was built for OS windows');
         }),
@@ -272,7 +272,7 @@ describe('pre-execution notice creation and send pass', () => {
     it('fires the send after commit and never throws a send error to the caller', async () => {
       const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
       mockSendMail.mockRejectedValue(new Error('Invalid login'));
-      const id = runWithNotice({ type: 'run_now', createdBy: 'alice' }, (nid) => {
+      const id = runWithNotice({ type: 'run_now', createdBy: 'alice', orgId: null }, (nid) => {
         linkTask('t1', nid!);
         return nid!;
       });
@@ -670,50 +670,50 @@ describe('pre-execution notice creation and send pass', () => {
   describe('scheduler tick', () => {
     it('two runNoticeFor calls in one tick share one notice listing both schedules', () => {
       const tick = createSchedulerTick(NOW);
-      const a = tick.runNoticeFor('s1', 'UTC', 'bob');
+      const a = tick.runNoticeFor('s1', 'UTC', 'bob', null);
       expect(JSON.parse(notice(a!).schedule_ids as string)).toEqual([]);
-      tick.confirmRunSchedule('s1');
-      const b = tick.runNoticeFor('s2', 'America/New_York', 'bob');
-      tick.confirmRunSchedule('s2');
+      tick.confirmRunSchedule('s1', null);
+      const b = tick.runNoticeFor('s2', 'America/New_York', 'bob', null);
+      tick.confirmRunSchedule('s2', null);
       expect(a).toEqual(expect.any(String));
       expect(b).toBe(a);
       const n = notice(a!);
       expect(JSON.parse(n.schedule_ids as string)).toEqual(['s1', 's2']);
       expect(n).toMatchObject({ kind: 'run', state: 'pending', source_type: 'schedule', timezone: 'UTC', created_at: NOW.toISOString() });
 
-      const other = createSchedulerTick(at(MIN)).runNoticeFor('s1', 'UTC', 'bob');
+      const other = createSchedulerTick(at(MIN)).runNoticeFor('s1', 'UTC', 'bob', null);
       expect(other).not.toBe(a);
     });
 
     it('runNoticeFor and dayNoticeFor return null when the gate is disabled', () => {
       writeSettings({ enabled: false });
       const tick = createSchedulerTick(NOW);
-      expect(tick.runNoticeFor('s1', 'UTC', 'bob')).toBeNull();
+      expect(tick.runNoticeFor('s1', 'UTC', 'bob', null)).toBeNull();
       expect(
-        tick.dayNoticeFor({ id: 's1', timezone: 'UTC', created_by: 'bob', agent_next_runs: {}, execution_timeout: 300 }),
+        tick.dayNoticeFor({ id: 's1', org_id: null, timezone: 'UTC', created_by: 'bob', agent_next_runs: {}, execution_timeout: 300 }),
       ).toBeNull();
       expect(countNotices()).toBe(0);
     });
 
     it('hasPendingRunNotice reflects pending run notices containing the schedule', () => {
       const tick = createSchedulerTick(NOW);
-      expect(tick.hasPendingRunNotice('s1')).toBe(false);
-      const id = tick.runNoticeFor('s1', 'UTC', 'bob')!;
+      expect(tick.hasPendingRunNotice('s1', null)).toBe(false);
+      const id = tick.runNoticeFor('s1', 'UTC', 'bob', null)!;
       // Not listed until confirmed.
-      expect(tick.hasPendingRunNotice('s1')).toBe(false);
-      tick.confirmRunSchedule('s1');
-      tick.runNoticeFor('s2', 'UTC', 'bob');
-      tick.confirmRunSchedule('s2');
-      expect(tick.hasPendingRunNotice('s1')).toBe(true);
-      expect(tick.hasPendingRunNotice('s2')).toBe(true);
-      expect(tick.hasPendingRunNotice('s3')).toBe(false);
+      expect(tick.hasPendingRunNotice('s1', null)).toBe(false);
+      tick.confirmRunSchedule('s1', null);
+      tick.runNoticeFor('s2', 'UTC', 'bob', null);
+      tick.confirmRunSchedule('s2', null);
+      expect(tick.hasPendingRunNotice('s1', null)).toBe(true);
+      expect(tick.hasPendingRunNotice('s2', null)).toBe(true);
+      expect(tick.hasPendingRunNotice('s3', null)).toBe(false);
       testDb.prepare(`UPDATE run_notices SET state = 'sent' WHERE id = ?`).run(id);
-      expect(tick.hasPendingRunNotice('s1')).toBe(false);
+      expect(tick.hasPendingRunNotice('s1', null)).toBe(false);
     });
 
     it('recordSkippedOccurrence inserts a skipped run notice', () => {
       const tick = createSchedulerTick(NOW);
-      tick.recordSkippedOccurrence('s1', 'bob', 'UTC');
+      tick.recordSkippedOccurrence('s1', 'bob', 'UTC', null);
       const rows = testDb.prepare('SELECT * FROM run_notices').all() as Array<Record<string, unknown>>;
       expect(rows).toHaveLength(1);
       expect(rows[0]).toMatchObject({
@@ -724,12 +724,13 @@ describe('pre-execution notice creation and send pass', () => {
         created_by: 'bob',
         created_at: NOW.toISOString(),
       });
-      expect(tick.hasPendingRunNotice('s1')).toBe(false);
+      expect(tick.hasPendingRunNotice('s1', null)).toBe(false);
     });
 
     it('dayNoticeFor: same schedule and day -> same id; different day -> different id', () => {
       const schedule = {
         id: 's1',
+        org_id: null,
         timezone: 'UTC',
         created_by: 'bob',
         agent_next_runs: {
@@ -764,7 +765,7 @@ describe('pre-execution notice creation and send pass', () => {
 
     it('dayNoticeFor with an invalid timezone falls back to UTC', () => {
       const id = createSchedulerTick(NOW).dayNoticeFor({
-        id: 's1', timezone: 'Not/AZone', created_by: 'bob', agent_next_runs: {}, execution_timeout: 300,
+        id: 's1', org_id: null, timezone: 'Not/AZone', created_by: 'bob', agent_next_runs: {}, execution_timeout: 300,
       });
       expect(notice(id!)).toMatchObject({ timezone: 'UTC', window_date: '2026-10-23' });
     });

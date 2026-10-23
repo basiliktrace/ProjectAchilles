@@ -22,11 +22,12 @@ import { MAX_INLINE_HOSTS, buildFinishedEmail, buildHostsCsv, buildNoticeEmail, 
 import type { FinishedEmailData, NoticeEmailData } from './render.js';
 import { computeDayRelease, computeRunRelease, runTag } from './window.js';
 import * as repo from './notices.repo.js';
-import type { NoticeRow, NoticeSourceType } from './types.js';
+import type { NoticeRow, NoticeScope, NoticeSourceType } from './types.js';
 import type { TaskPayload, TaskResult, TaskStatus } from '../../types/agent.js';
 import type { PreExecutionNoticeSettings } from '../../types/integrations.js';
 
 export { listNotices, getNoticeSummaries } from './notices.repo.js';
+export type { NoticeScope } from './types.js';
 
 const MIN = 60_000;
 /** A claim older than this belongs to a crashed or hung sender and may be taken over. */
@@ -46,9 +47,18 @@ export type SendOutcome = 'sent' | 'failed' | 'skipped' | 'not_claimed';
 // Helpers
 // ---------------------------------------------------------------------------
 
-function settingsService(): IntegrationsSettingsService {
-  // Deployment-wide settings: always the legacy top level (no org id).
-  return new IntegrationsSettingsService();
+/**
+ * Settings for an org (Ruling R20): `orgs[orgId]` sections with the legacy top
+ * level as the fallback. `null`/`undefined` (and org ids with no section, such
+ * as 'default') resolve to the legacy top level.
+ */
+function settingsFor(orgId: string | null | undefined): IntegrationsSettingsService {
+  return new IntegrationsSettingsService(orgId ?? undefined);
+}
+
+/** Settings of the org that owns a notice. */
+function noticeSettings(n: Pick<NoticeRow, 'org_id'>): IntegrationsSettingsService {
+  return settingsFor(n.org_id);
 }
 
 /** A valid IANA timezone, or 'UTC' when `tz` is missing or invalid. */
@@ -113,12 +123,12 @@ function errorMessage(err: unknown): string {
  * and fail to send (recorded on the notice, banner + Slack), so tests are held
  * and never run unannounced. Enabling requires usable SMTP (settings route).
  */
-export function isNoticeGateEnabled(): boolean {
-  return settingsService().getPreExecutionNoticeSettings().enabled;
+export function isNoticeGateEnabled(orgId: string | null): boolean {
+  return settingsFor(orgId).getPreExecutionNoticeSettings().enabled;
 }
 
-function recipientsSnapshot(): string[] {
-  return [...settingsService().getPreExecutionNoticeSettings().recipients];
+function recipientsSnapshot(orgId: string | null): string[] {
+  return [...settingsFor(orgId).getPreExecutionNoticeSettings().recipients];
 }
 
 /**
@@ -127,7 +137,7 @@ function recipientsSnapshot(): string[] {
  * have none (notices can be disabled with recipients cleared).
  */
 function attemptRecipients(n: NoticeRow): string[] {
-  const current = recipientsSnapshot();
+  const current = recipientsSnapshot(n.org_id);
   return current.length > 0 ? current : parseJsonArray(n.recipients);
 }
 
@@ -145,20 +155,22 @@ function fireSend(id: string): void {
 }
 
 /**
- * Run `fn` with a fresh pending run notice when the gate is enabled. The
- * notice insert and whatever `fn` writes share one transaction, so an error in
- * `fn` leaves no notice behind. After commit the first send attempt is fired
- * in the background; its errors are logged, never thrown to the caller.
+ * Run `fn` with a fresh pending run notice when `source.orgId`'s gate is
+ * enabled. `orgId` is the org of the tasks `fn` creates (the notice's owner).
+ * The notice insert and whatever `fn` writes share one transaction, so an
+ * error in `fn` leaves no notice behind. After commit the first send attempt
+ * is fired in the background; its errors are logged, never thrown to the
+ * caller.
  */
 export function runWithNotice<T>(
-  source: { type: NoticeSourceType; createdBy: string; timezone?: string },
+  source: { type: NoticeSourceType; createdBy: string; orgId: string | null; timezone?: string },
   fn: (noticeId: string | null) => T,
 ): T {
-  if (!isNoticeGateEnabled()) return fn(null);
+  if (!isNoticeGateEnabled(source.orgId)) return fn(null);
 
   const db = getDatabase();
   const id = crypto.randomUUID();
-  const recipients = recipientsSnapshot();
+  const recipients = recipientsSnapshot(source.orgId);
   const timezone = source.timezone ? safeTimezone(source.timezone) : serverTimezone();
 
   const result = db.transaction(() => {
@@ -172,6 +184,7 @@ export function runWithNotice<T>(
       createdBy: source.createdBy,
       createdAt: new Date().toISOString(),
       recipients,
+      orgId: source.orgId,
     });
     return fn(id);
   })();
@@ -182,6 +195,8 @@ export function runWithNotice<T>(
 
 export interface DayNoticeSchedule {
   id: string;
+  /** The schedule's org: owns the day notice. */
+  org_id: string | null;
   timezone: string;
   created_by: string;
   agent_next_runs: Record<string, string>;
@@ -190,15 +205,16 @@ export interface DayNoticeSchedule {
 
 export interface SchedulerTick {
   /**
-   * The tick's shared run notice (created on first use). Does not list the
-   * schedule on it: call confirmRunSchedule once its tasks were created.
+   * `orgId`'s shared run notice for this tick (created on first use; one per
+   * org per tick). Does not list the schedule on it: call confirmRunSchedule
+   * once its tasks were created.
    */
-  runNoticeFor(scheduleId: string, timezone: string, createdBy: string): string | null;
-  /** List a schedule on the tick's run notice, after its createTasks succeeded. */
-  confirmRunSchedule(scheduleId: string): void;
+  runNoticeFor(scheduleId: string, timezone: string, createdBy: string, orgId: string | null): string | null;
+  /** List a schedule on its org's run notice for this tick, after its createTasks succeeded. */
+  confirmRunSchedule(scheduleId: string, orgId: string | null): void;
   dayNoticeFor(schedule: DayNoticeSchedule): string | null;
-  hasPendingRunNotice(scheduleId: string): boolean;
-  recordSkippedOccurrence(scheduleId: string, createdBy: string, timezone: string): void;
+  hasPendingRunNotice(scheduleId: string, orgId: string | null): boolean;
+  recordSkippedOccurrence(scheduleId: string, createdBy: string, timezone: string, orgId: string | null): void;
 }
 
 function isUniqueViolation(err: unknown): boolean {
@@ -207,20 +223,33 @@ function isUniqueViolation(err: unknown): boolean {
 }
 
 /**
- * Per-tick notice factory for processSchedules. All non-per-machine batches
- * created in one tick share one run notice; per-machine schedules get one day
- * notice per schedule per calendar day (schedule timezone).
+ * Per-tick notice factory for processSchedules. All non-per-machine batches of
+ * one org created in one tick share that org's run notice; per-machine
+ * schedules get one day notice per schedule per calendar day (schedule
+ * timezone). Each schedule's gate and recipients are its org's (Ruling R20).
  */
 export function createSchedulerTick(now: Date): SchedulerTick {
   const nowIso = now.toISOString();
-  let gate: boolean | null = null;
-  const gateEnabled = (): boolean => (gate ??= isNoticeGateEnabled());
-  let runNoticeId: string | null = null;
+  // Keyed by org id ('' for null: legacy). Map keys can't collide with a real
+  // org id because Clerk org ids are never empty.
+  const key = (orgId: string | null): string => orgId ?? '';
+  const gates = new Map<string, boolean>();
+  const gateEnabled = (orgId: string | null): boolean => {
+    const k = key(orgId);
+    let g = gates.get(k);
+    if (g === undefined) {
+      g = isNoticeGateEnabled(orgId);
+      gates.set(k, g);
+    }
+    return g;
+  };
+  const runNoticeIds = new Map<string, string>();
 
   return {
-    runNoticeFor(_scheduleId, timezone, createdBy) {
-      if (!gateEnabled()) return null;
-      if (runNoticeId) return runNoticeId;
+    runNoticeFor(_scheduleId, timezone, createdBy, orgId) {
+      if (!gateEnabled(orgId)) return null;
+      const cached = runNoticeIds.get(key(orgId));
+      if (cached) return cached;
       // Not wrapped in a transaction with createTasks: the id is cached for the
       // whole tick, so a rollback would leave the cache pointing at nothing.
       // A notice whose createTasks all failed is an orphan the send pass skips.
@@ -234,18 +263,20 @@ export function createSchedulerTick(now: Date): SchedulerTick {
         timezone: safeTimezone(timezone),
         createdBy,
         createdAt: nowIso,
-        recipients: recipientsSnapshot(),
+        recipients: recipientsSnapshot(orgId),
+        orgId,
       });
-      runNoticeId = id;
+      runNoticeIds.set(key(orgId), id);
       return id;
     },
 
-    confirmRunSchedule(scheduleId) {
-      if (runNoticeId) repo.appendScheduleId(runNoticeId, scheduleId);
+    confirmRunSchedule(scheduleId, orgId) {
+      const id = runNoticeIds.get(key(orgId));
+      if (id) repo.appendScheduleId(id, scheduleId);
     },
 
     dayNoticeFor(schedule) {
-      if (!gateEnabled()) return null;
+      if (!gateEnabled(schedule.org_id)) return null;
       const tz = safeTimezone(schedule.timezone);
       const windowDate = todayInTimezone(tz, now);
       const existing = repo.getDayNotice(schedule.id, windowDate);
@@ -277,7 +308,8 @@ export function createSchedulerTick(now: Date): SchedulerTick {
           dayWindowEnd: window.end.toISOString(),
           createdBy: schedule.created_by,
           createdAt: nowIso,
-          recipients: recipientsSnapshot(),
+          recipients: recipientsSnapshot(schedule.org_id),
+          orgId: schedule.org_id,
         });
         return id;
       } catch (err) {
@@ -289,12 +321,12 @@ export function createSchedulerTick(now: Date): SchedulerTick {
       }
     },
 
-    hasPendingRunNotice(scheduleId) {
+    hasPendingRunNotice(scheduleId, orgId) {
       // With the gate off nothing is held, so a leftover pending notice must not skip runs.
-      return gateEnabled() && repo.hasPendingRunNoticeForSchedule(scheduleId);
+      return gateEnabled(orgId) && repo.hasPendingRunNoticeForSchedule(scheduleId);
     },
 
-    recordSkippedOccurrence(scheduleId, createdBy, timezone) {
+    recordSkippedOccurrence(scheduleId, createdBy, timezone, orgId) {
       repo.insertNotice({
         id: crypto.randomUUID(),
         kind: 'run',
@@ -304,8 +336,9 @@ export function createSchedulerTick(now: Date): SchedulerTick {
         timezone: safeTimezone(timezone),
         createdBy,
         createdAt: nowIso,
-        recipients: recipientsSnapshot(),
+        recipients: recipientsSnapshot(orgId),
         skipReason: SKIP_COLLISION,
+        orgId,
       });
     },
   };
@@ -371,7 +404,7 @@ function buildNoticeMail(
   recipients: string[],
   now: Date,
 ): OutgoingMail {
-  const svc = settingsService();
+  const svc = noticeSettings(n);
   const settings = svc.getPreExecutionNoticeSettings();
   const timezone = safeTimezone(n.timezone);
   const tag = runTag(n.id);
@@ -465,7 +498,7 @@ function buildNoticeMail(
 
 async function alertSlackOnFailure(n: NoticeRow, error: string): Promise<void> {
   if (n.slack_failure_alerted) return;
-  const slack = settingsService().getAlertSettings()?.slack;
+  const slack = noticeSettings(n).getAlertSettings()?.slack;
   if (!slack || !isSlackUsable(slack)) return;
   // Take the once-per-notice flag atomically before sending, so two failing
   // senders can't both alert.
@@ -524,7 +557,7 @@ export async function sendNotice(id: string, now?: Date): Promise<SendOutcome> {
   let rejected: string[] = [];
   let error: string;
   try {
-    const email = settingsService().getAlertSettings()?.email;
+    const email = noticeSettings(n).getAlertSettings()?.email;
     if (!email || !isSmtpUsable(email)) throw new Error('SMTP email is not configured');
 
     // The email is rendered before sending, from the attempt start: it
@@ -538,7 +571,7 @@ export async function sendNotice(id: string, now?: Date): Promise<SendOutcome> {
       // The countdown starts at acceptance (after SMTP returned), so the
       // stored release is never earlier than the email's "not before".
       const sentAt = laterOfNow(now);
-      const settings = settingsService().getPreExecutionNoticeSettings();
+      const settings = noticeSettings(n).getPreExecutionNoticeSettings();
       const times = releaseTimesFor(n, sentAt, settings, maxExecutionTimeoutSec(linked));
       const applied = repo.markSent(id, claimAt, {
         sentAt: sentAt.toISOString(),
@@ -603,9 +636,9 @@ function notRunResult(reason: string): string {
   return JSON.stringify({ error: reason, exit_code: -1, stdout: '', stderr: '', execution_duration_ms: 0 });
 }
 
-/** Post to Slack if it is configured. Returns false if not configured or the post failed. */
-async function postSlack(text: string): Promise<boolean> {
-  const slack = settingsService().getAlertSettings()?.slack;
+/** Post to `orgId`'s Slack if it is configured. Returns false if not configured or the post failed. */
+async function postSlack(orgId: string | null, text: string): Promise<boolean> {
+  const slack = settingsFor(orgId).getAlertSettings()?.slack;
   if (!slack || !isSlackUsable(slack)) return false;
   try {
     await sendSlackText(slack.webhook_url, text);
@@ -616,9 +649,6 @@ async function postSlack(text: string): Promise<boolean> {
   }
 }
 
-function slackConfigured(): boolean {
-  return isSlackUsable(settingsService().getAlertSettings()?.slack);
-}
 
 export interface ProcessNoticesResult {
   sent: number;
@@ -666,34 +696,41 @@ async function sendPass(now: Date): Promise<number> {
 }
 
 async function boundedWaitPass(now: Date): Promise<{ notDelivered: number; expired: number }> {
-  const settings = settingsService().getPreExecutionNoticeSettings();
   const nowIso = now.toISOString();
-  const createdCutoff = new Date(now.getTime() - settings.max_wait_minutes * MIN).toISOString();
   const staleClaimCutoff = new Date(now.getTime() - STALE_CLAIM_MS).toISOString();
+  const maxWait = (orgId: string | null): number => settingsFor(orgId).getPreExecutionNoticeSettings().max_wait_minutes;
 
-  const moved = repo.markNotDelivered(createdCutoff, staleClaimCutoff, {
-    noTasks: SKIP_NO_TASKS,
-    noneHeld: SKIP_NONE_HELD,
-  });
-  for (const id of moved) console.warn(`[Notices] ${runTag(id)} not delivered within ${settings.max_wait_minutes} min`);
+  // Each org's pending notices wait for that org's max_wait_minutes.
+  let notDelivered = 0;
+  for (const orgId of repo.listPendingNoticeOrgIds()) {
+    const minutes = maxWait(orgId);
+    const createdCutoff = new Date(now.getTime() - minutes * MIN).toISOString();
+    const moved = repo.markNotDelivered(orgId, createdCutoff, staleClaimCutoff, {
+      noTasks: SKIP_NO_TASKS,
+      noneHeld: SKIP_NONE_HELD,
+    });
+    for (const id of moved) console.warn(`[Notices] ${runTag(id)} not delivered within ${minutes} min`);
+    notDelivered += moved.length;
+  }
 
   // Every pass, not only at the transition (Ruling R5).
   const expired = repo.expireTasksOfNotDelivered(nowIso, notRunResult(REASON_NOT_DELIVERED));
 
-  // Once per notice. Without Slack configured, nothing is claimed.
-  if (slackConfigured()) {
-    const since = new Date(now.getTime() - NOT_DELIVERED_LOOKBACK_MS).toISOString();
-    for (const n of repo.listNotDeliveredToAlert(since)) {
-      if (!repo.claimSlackNotDeliveredAlert(n.id)) continue;
-      const why = n.last_error ? ` Last error: ${n.last_error}.` : '';
-      const ok = await postSlack(
-        `Notice ${runTag(n.id)} was not delivered within ${settings.max_wait_minutes} minutes; its tests were not run.${why}`,
-      );
-      // Unflag, so the next pass tries Slack again.
-      if (!ok) repo.resetSlackNotDeliveredAlert(n.id);
-    }
+  // Once per notice, to the owning org's Slack. Without Slack configured for
+  // that org, nothing is claimed.
+  const since = new Date(now.getTime() - NOT_DELIVERED_LOOKBACK_MS).toISOString();
+  for (const n of repo.listNotDeliveredToAlert(since)) {
+    if (!isSlackUsable(noticeSettings(n).getAlertSettings()?.slack)) continue;
+    if (!repo.claimSlackNotDeliveredAlert(n.id)) continue;
+    const why = n.last_error ? ` Last error: ${n.last_error}.` : '';
+    const ok = await postSlack(
+      n.org_id,
+      `Notice ${runTag(n.id)} was not delivered within ${maxWait(n.org_id)} minutes; its tests were not run.${why}`,
+    );
+    // Unflag, so the next pass tries Slack again.
+    if (!ok) repo.resetSlackNotDeliveredAlert(n.id);
   }
-  return { notDelivered: moved.length, expired };
+  return { notDelivered, expired };
 }
 
 /** Latest attempt per target: a failed task and its automatic retries count once. */
@@ -762,7 +799,7 @@ async function sendFinished(n: NoticeRow, now: Date): Promise<boolean> {
 
   const recipients = parseJsonArray(n.recipients);
   try {
-    const email = settingsService().getAlertSettings()?.email;
+    const email = noticeSettings(n).getAlertSettings()?.email;
     if (!email || !isSmtpUsable(email)) throw new Error('SMTP email is not configured');
     const result = await sendMail(email, {
       to: recipients,
@@ -780,17 +817,22 @@ async function sendFinished(n: NoticeRow, now: Date): Promise<boolean> {
 }
 
 async function finishedPass(now: Date): Promise<number> {
-  if (!settingsService().getPreExecutionNoticeSettings().send_finished) return 0;
   let finished = 0;
   const since = new Date(now.getTime() - FINISHED_LOOKBACK_MS).toISOString();
   for (const n of repo.listFinishedCandidates(now.toISOString(), since, MAX_FINISHED_ATTEMPTS)) {
+    // send_finished is the owning org's setting.
+    if (!noticeSettings(n).getPreExecutionNoticeSettings().send_finished) continue;
     if (await sendFinished(n, now)) finished++;
   }
   return finished;
 }
 
-async function dailySmtpCheck(now: Date): Promise<void> {
-  const svc = settingsService();
+/**
+ * Daily SMTP check for one settings section: the legacy top level (`orgId`
+ * undefined) or an org's own section. Result stored in that section.
+ */
+async function smtpCheckFor(orgId: string | undefined, now: Date): Promise<void> {
+  const svc = new IntegrationsSettingsService(orgId);
   const settings = svc.getPreExecutionNoticeSettings();
   if (!settings.enabled) return;
   const last = parseTimestamp(settings.last_smtp_check_at);
@@ -815,8 +857,25 @@ async function dailySmtpCheck(now: Date): Promise<void> {
   });
   if (!r.success) {
     await postSlack(
+      orgId ?? null,
       `Daily SMTP check for pre-execution notices failed: ${r.message}. Test runs will wait for notice delivery until this is fixed.`,
     );
+  }
+}
+
+/**
+ * The legacy section, then every org with its own notice section. An org that
+ * has no notice section of its own uses the legacy settings and the legacy
+ * check result.
+ */
+async function dailySmtpCheck(now: Date): Promise<void> {
+  const sections: Array<string | undefined> = [undefined, ...new IntegrationsSettingsService().listNoticeOrgIds()];
+  for (const orgId of sections) {
+    try {
+      await smtpCheckFor(orgId, now);
+    } catch (err) {
+      console.error(`[Notices] SMTP check for ${orgId ?? 'legacy settings'} failed:`, err);
+    }
   }
 }
 
@@ -864,19 +923,35 @@ export function processNotices(now?: Date): Promise<ProcessNoticesResult> {
 // ---------------------------------------------------------------------------
 
 /**
+ * Whether `scope` may see `n`. Org callers see only their org's notices; a
+ * notice with no org (created before notices were per org) belongs to no org
+ * and is visible only in legacy single-org mode.
+ */
+function inScope(n: Pick<NoticeRow, 'org_id'>, scope: NoticeScope): boolean {
+  return scope.kind === 'all' || n.org_id === scope.orgId;
+}
+
+/**
  * Release a pending notice without email: records who/why/when and releases
  * its tasks now (lead 0), with the pickup deadline and window end computed as
- * if it had been sent now.
+ * if it had been sent now. A notice outside `scope` is "not found" (its
+ * existence is not revealed).
  */
-export function releaseWithoutNotice(id: string, userId: string, reason: string, now: Date = new Date()): NoticeRow {
+export function releaseWithoutNotice(
+  id: string,
+  userId: string,
+  reason: string,
+  scope: NoticeScope,
+  now: Date = new Date(),
+): NoticeRow {
   const why = typeof reason === 'string' ? reason.trim() : '';
   if (!why) throw new AppError('A reason is required to release without notice', 400);
 
   const n = repo.getNotice(id);
-  if (!n) throw new AppError('Notice not found', 404);
+  if (!n || !inScope(n, scope)) throw new AppError('Notice not found', 404);
   if (n.state !== 'pending') throw new AppError(`Notice is ${n.state}, not pending`, 400);
 
-  const settings = settingsService().getPreExecutionNoticeSettings();
+  const settings = noticeSettings(n).getPreExecutionNoticeSettings();
   const times = releaseTimesFor(n, now, { ...settings, lead_minutes: 0 }, maxExecutionTimeoutSec(repo.getLinkedTasks(id)));
   const nowIso = now.toISOString();
   const applied = repo.overrideNotice(id, {
@@ -898,12 +973,16 @@ export interface NoticeStatus {
   smtpCheck: { ok: boolean | null; at: string | null; message: string | null };
 }
 
-export function getNoticeStatus(now: Date = new Date()): NoticeStatus {
-  const s = settingsService().getPreExecutionNoticeSettings();
+/**
+ * Banner counts for the notices in `scope`, and the SMTP check of the
+ * scope's settings (the org's own section, else legacy).
+ */
+export function getNoticeStatus(scope: NoticeScope, now: Date = new Date()): NoticeStatus {
+  const s = settingsFor(scope.kind === 'org' ? scope.orgId : null).getPreExecutionNoticeSettings();
   return {
     // Existing notices still matter after notices are turned off.
-    pendingOverdue: repo.countPendingCreatedBefore(new Date(now.getTime() - PENDING_OVERDUE_MS).toISOString()),
-    notDeliveredLast7d: repo.countNotDeliveredSince(new Date(now.getTime() - NOT_DELIVERED_LOOKBACK_MS).toISOString()),
+    pendingOverdue: repo.countPendingCreatedBefore(new Date(now.getTime() - PENDING_OVERDUE_MS).toISOString(), scope),
+    notDeliveredLast7d: repo.countNotDeliveredSince(new Date(now.getTime() - NOT_DELIVERED_LOOKBACK_MS).toISOString(), scope),
     // The daily check only runs while enabled, so a stale failure would
     // otherwise keep the banner up forever after disabling.
     smtpCheck: s.enabled

@@ -56,7 +56,22 @@ describe('run_notices schema', () => {
   it('creates the expected indexes', () => {
     const db = createTestDatabase();
     const idx = (db.prepare(`SELECT name FROM sqlite_master WHERE type='index'`).all() as { name: string }[]).map((i) => i.name);
-    expect(idx).toEqual(expect.arrayContaining(['idx_run_notices_state', 'idx_run_notices_day', 'idx_tasks_notice']));
+    expect(idx).toEqual(expect.arrayContaining(['idx_run_notices_state', 'idx_run_notices_day', 'idx_run_notices_org_state', 'idx_tasks_notice']));
+  });
+
+  it('adds org_id (nullable) and idx_run_notices_org_state to a run_notices table created without them', () => {
+    const db = createTestDatabase();
+    // Simulate a database from before the org_id migration.
+    db.exec('DROP INDEX idx_run_notices_org_state');
+    db.exec('ALTER TABLE run_notices DROP COLUMN org_id');
+    insertNotice(db, 'old', 'run', null, null);
+    initializeTables(db);
+    const cols = db.prepare('PRAGMA table_info(run_notices)').all() as { name: string; notnull: number }[];
+    expect(cols.find((c) => c.name === 'org_id')).toMatchObject({ notnull: 0 });
+    const row = db.prepare("SELECT org_id FROM run_notices WHERE id = 'old'").get() as { org_id: string | null };
+    expect(row.org_id).toBeNull();
+    const idx = (db.prepare(`SELECT name FROM sqlite_master WHERE type='index'`).all() as { name: string }[]).map((i) => i.name);
+    expect(idx).toContain('idx_run_notices_org_state');
   });
 
   it('is idempotent', () => {

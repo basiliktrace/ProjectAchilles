@@ -54,6 +54,8 @@ const { IntegrationsSettingsService } = await import('../../integrations/setting
 
 // Friday, inside the 09:00-17:00 weekday window in UTC.
 const NOW = new Date('2026-10-23T12:00:00.000Z');
+/** Legacy single-org mode: every notice. */
+const ALL = { kind: 'all' } as const;
 const MIN = 60_000;
 const HOUR = 60 * MIN;
 const at = (offsetMs: number) => new Date(NOW.getTime() + offsetMs);
@@ -374,7 +376,7 @@ describe('pre-execution notice sweeps', () => {
       const r = await processNotices(NOW);
       expect(r.notDelivered).toBe(0);
       expect(notice('n-empty').state).toBe('pending');
-      expect(getNoticeStatus(NOW)).toMatchObject({ pendingOverdue: 0, notDeliveredLast7d: 0 });
+      expect(getNoticeStatus(ALL, NOW)).toMatchObject({ pendingOverdue: 0, notDeliveredLast7d: 0 });
       expect(slackTexts('not delivered')).toHaveLength(0);
     });
 
@@ -384,7 +386,7 @@ describe('pre-execution notice sweeps', () => {
       const r = await processNotices(NOW);
       expect(r.notDelivered).toBe(0);
       expect(notice('n-cancelled').state).toBe('pending');
-      expect(getNoticeStatus(NOW)).toMatchObject({ pendingOverdue: 0, notDeliveredLast7d: 0 });
+      expect(getNoticeStatus(ALL, NOW)).toMatchObject({ pendingOverdue: 0, notDeliveredLast7d: 0 });
       expect(slackTexts('not delivered')).toHaveLength(0);
 
       // A later per-machine agent links a held task; SMTP works again.
@@ -408,7 +410,7 @@ describe('pre-execution notice sweeps', () => {
       expect(r.notDelivered).toBe(1);
       expect(notice('n-held').state).toBe('not_delivered');
       expect(task('t1').status).toBe('expired');
-      expect(getNoticeStatus(NOW).notDeliveredLast7d).toBe(1);
+      expect(getNoticeStatus(ALL, NOW).notDeliveredLast7d).toBe(1);
     });
 
     it('day notice: max_wait counts from the oldest held task, not the notice (R19)', async () => {
@@ -421,7 +423,7 @@ describe('pre-execution notice sweeps', () => {
       expect(r1.notDelivered).toBe(0);
       expect(notice('n-late').state).toBe('pending');
       expect(task('t1').status).toBe('pending');
-      expect(getNoticeStatus(linked).pendingOverdue).toBe(0);
+      expect(getNoticeStatus(ALL, linked).pendingOverdue).toBe(0);
 
       // Still inside max_wait (60 min) of the task.
       await processNotices(at(2 * HOUR + 59 * MIN));
@@ -429,7 +431,7 @@ describe('pre-execution notice sweeps', () => {
       expect(task('t1').status).toBe('pending');
 
       // Banner clock: task older than 5 min counts as overdue.
-      expect(getNoticeStatus(at(2 * HOUR + 6 * MIN)).pendingOverdue).toBe(1);
+      expect(getNoticeStatus(ALL, at(2 * HOUR + 6 * MIN)).pendingOverdue).toBe(1);
 
       const r2 = await processNotices(at(2 * HOUR + 61 * MIN));
       expect(r2.notDelivered).toBe(1);
@@ -446,7 +448,7 @@ describe('pre-execution notice sweeps', () => {
         state: 'skipped',
         skip_reason: 'all linked tasks were cancelled or completed',
       });
-      expect(getNoticeStatus(NOW).notDeliveredLast7d).toBe(0);
+      expect(getNoticeStatus(ALL, NOW).notDeliveredLast7d).toBe(0);
       expect(slackTexts('not delivered')).toHaveLength(0);
     });
 
@@ -460,7 +462,7 @@ describe('pre-execution notice sweeps', () => {
       }
       expect(notice('n-yesterday').state).toBe('pending');
       expect(mockSendMail).not.toHaveBeenCalled();
-      expect(getNoticeStatus(NOW)).toMatchObject({ pendingOverdue: 0, notDeliveredLast7d: 0 });
+      expect(getNoticeStatus(ALL, NOW)).toMatchObject({ pendingOverdue: 0, notDeliveredLast7d: 0 });
     });
 
     it('still sweeps existing notices when the gate is disabled', async () => {
@@ -652,7 +654,7 @@ describe('pre-execution notice sweeps', () => {
     it('rejects an empty reason with 400', () => {
       insertNotice('n-p');
       linkTask('t1', 'n-p');
-      expect(() => releaseWithoutNotice('n-p', 'admin', '   ', NOW)).toThrow(expect.objectContaining({ statusCode: 400 }));
+      expect(() => releaseWithoutNotice('n-p', 'admin', '   ', ALL, NOW)).toThrow(expect.objectContaining({ statusCode: 400 }));
       expect(notice('n-p').state).toBe('pending');
     });
 
@@ -661,7 +663,7 @@ describe('pre-execution notice sweeps', () => {
       linkTask('t1', 'n-p');
       expect(getNextTask('agent-001', NOW)).toBeNull();
 
-      const row = releaseWithoutNotice('n-p', 'admin', '  SMTP outage, SOC informed by phone  ', NOW);
+      const row = releaseWithoutNotice('n-p', 'admin', '  SMTP outage, SOC informed by phone  ', ALL, NOW);
       expect(row).toMatchObject({
         state: 'overridden',
         override_by: 'admin',
@@ -676,12 +678,12 @@ describe('pre-execution notice sweeps', () => {
 
     it('rejects a notice that is not pending with 400', () => {
       insertSentNotice('n-sent', 10 * MIN);
-      expect(() => releaseWithoutNotice('n-sent', 'admin', 'because', NOW)).toThrow(expect.objectContaining({ statusCode: 400 }));
+      expect(() => releaseWithoutNotice('n-sent', 'admin', 'because', ALL, NOW)).toThrow(expect.objectContaining({ statusCode: 400 }));
       expect(notice('n-sent').state).toBe('sent');
     });
 
     it('returns 404 for an unknown notice', () => {
-      expect(() => releaseWithoutNotice('nope', 'admin', 'because', NOW)).toThrow(expect.objectContaining({ statusCode: 404 }));
+      expect(() => releaseWithoutNotice('nope', 'admin', 'because', ALL, NOW)).toThrow(expect.objectContaining({ statusCode: 404 }));
     });
   });
 
@@ -693,7 +695,7 @@ describe('pre-execution notice sweeps', () => {
       insertNotice('nd-old', { state: 'not_delivered', created_at: at(-8 * 24 * HOUR).toISOString() });
       insertSentNotice('s-1', 10 * MIN);
 
-      expect(getNoticeStatus(NOW)).toEqual({
+      expect(getNoticeStatus(ALL, NOW)).toEqual({
         pendingOverdue: 1,
         notDeliveredLast7d: 1,
         smtpCheck: { ok: true, at: NOW.toISOString(), message: 'ok' },
@@ -707,7 +709,7 @@ describe('pre-execution notice sweeps', () => {
       });
       insertNotice('p-overdue', { created_at: at(-6 * MIN).toISOString() });
       insertNotice('nd-recent', { state: 'not_delivered', created_at: at(-2 * HOUR).toISOString() });
-      expect(getNoticeStatus(NOW)).toEqual({
+      expect(getNoticeStatus(ALL, NOW)).toEqual({
         pendingOverdue: 1,
         notDeliveredLast7d: 1,
         smtpCheck: { ok: null, at: null, message: null },
@@ -716,15 +718,15 @@ describe('pre-execution notice sweeps', () => {
 
     it('getNoticeStatus reports a never-run SMTP check as null', () => {
       writeSettings({ notices: { last_smtp_check_at: undefined, last_smtp_check_ok: undefined, last_smtp_check_message: undefined } });
-      expect(getNoticeStatus(NOW).smtpCheck).toEqual({ ok: null, at: null, message: null });
+      expect(getNoticeStatus(ALL, NOW).smtpCheck).toEqual({ ok: null, at: null, message: null });
     });
 
     it('listNotices returns newest first with paging', () => {
       insertNotice('n-a', { created_at: at(-3 * MIN).toISOString() });
       insertNotice('n-b', { created_at: at(-2 * MIN).toISOString() });
       insertNotice('n-c', { created_at: at(-1 * MIN).toISOString() });
-      expect(listNotices(2, 0).map((n) => n.id)).toEqual(['n-c', 'n-b']);
-      expect(listNotices(2, 2).map((n) => n.id)).toEqual(['n-a']);
+      expect(listNotices(2, 0, ALL).map((n) => n.id)).toEqual(['n-c', 'n-b']);
+      expect(listNotices(2, 2, ALL).map((n) => n.id)).toEqual(['n-a']);
     });
 
     it('getNoticeSummaries maps ids to summaries', () => {

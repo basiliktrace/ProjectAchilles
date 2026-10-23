@@ -11,7 +11,7 @@
  */
 import { getDatabase } from '../agent/database.js';
 import { runTag } from './window.js';
-import type { NoticeKind, NoticeRow, NoticeSourceType, NoticeState, NoticeSummary } from './types.js';
+import type { NoticeKind, NoticeRow, NoticeScope, NoticeSourceType, NoticeState, NoticeSummary } from './types.js';
 
 export interface NewNotice {
   id: string;
@@ -29,14 +29,22 @@ export interface NewNotice {
   createdAt: string;
   recipients: string[];
   skipReason?: string | null;
+  /** Org of the tasks the notice gates (null: legacy, no org). */
+  orgId: string | null;
+}
+
+/** SQL filter + params for a NoticeScope over run_notices (optionally aliased). */
+function scopeFilter(scope: NoticeScope, alias = ''): { sql: string; params: string[] } {
+  const col = alias ? `${alias}.org_id` : 'org_id';
+  return scope.kind === 'org' ? { sql: ` AND ${col} = ?`, params: [scope.orgId] } : { sql: '', params: [] };
 }
 
 export function insertNotice(n: NewNotice): void {
   getDatabase()
     .prepare(`
       INSERT INTO run_notices (id, kind, state, source_type, schedule_ids, schedule_id, window_date, timezone,
-        announced_agent_ids, day_window_start, day_window_end, created_by, created_at, recipients, skip_reason)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        announced_agent_ids, day_window_start, day_window_end, created_by, created_at, recipients, skip_reason, org_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `)
     .run(
       n.id,
@@ -54,6 +62,7 @@ export function insertNotice(n: NewNotice): void {
       n.createdAt,
       JSON.stringify(n.recipients),
       n.skipReason ?? null,
+      n.orgId,
     );
 }
 
@@ -263,6 +272,15 @@ export interface PendingNoticeRow {
   last_attempt_at: string | null;
 }
 
+/** Distinct org ids (null included) that have a pending notice. */
+export function listPendingNoticeOrgIds(): Array<string | null> {
+  return (
+    getDatabase().prepare(`SELECT DISTINCT org_id FROM run_notices WHERE state = 'pending'`).all() as Array<{
+      org_id: string | null;
+    }>
+  ).map((r) => r.org_id);
+}
+
 /** Pending notices, oldest first, with what the send pass needs for its backoff. */
 export function listPendingNotices(): PendingNoticeRow[] {
   return getDatabase()
@@ -303,7 +321,8 @@ function oldestHeldTaskByDayNotice(where: string, params: unknown[]): Array<{ id
 }
 
 /**
- * Bounded wait: pending notices created at or before `createdCutoffIso` become
+ * Bounded wait for the notices of one org (`orgId`; null matches notices with
+ * no org): pending notices created at or before `createdCutoffIso` become
  * `not_delivered`. A run notice that holds no pending task (none were created,
  * or all were cancelled) is `skipped` instead: no test was held, so there is
  * nothing to alarm about. A day notice that holds no pending task is left
@@ -313,12 +332,14 @@ function oldestHeldTaskByDayNotice(where: string, params: unknown[]): Array<{ id
  * to `not_delivered`.
  */
 export function markNotDelivered(
+  orgId: string | null,
   createdCutoffIso: string,
   staleClaimCutoffIso: string,
   reasons: { noTasks: string; noneHeld: string },
 ): string[] {
   const db = getDatabase();
-  const due = `state = 'pending' AND created_at <= ? AND (claim_at IS NULL OR claim_at < ?)`;
+  // `IS ?`: also matches NULL when orgId is null.
+  const due = `state = 'pending' AND org_id IS ? AND created_at <= ? AND (claim_at IS NULL OR claim_at < ?)`;
   return db.transaction(() => {
     db.prepare(`
       UPDATE run_notices
@@ -327,7 +348,7 @@ export function markNotDelivered(
                              THEN ? ELSE ? END
       WHERE ${due} AND kind = 'run'
         AND NOT EXISTS (SELECT 1 FROM tasks t WHERE t.notice_id = run_notices.id AND t.status = 'pending')
-    `).run(reasons.noneHeld, reasons.noTasks, createdCutoffIso, staleClaimCutoffIso);
+    `).run(reasons.noneHeld, reasons.noTasks, orgId, createdCutoffIso, staleClaimCutoffIso);
     // Run notices wait from their own creation; day notices from the oldest
     // task they hold (they are created at the first agent of the day and may
     // sit empty for hours). Day comparison is in JS: tasks.created_at is
@@ -339,9 +360,12 @@ export function markNotDelivered(
           AND EXISTS (SELECT 1 FROM tasks t WHERE t.notice_id = run_notices.id AND t.status = 'pending')
         RETURNING id
       `)
-      .all(createdCutoffIso, staleClaimCutoffIso) as Array<{ id: string }>;
+      .all(orgId, createdCutoffIso, staleClaimCutoffIso) as Array<{ id: string }>;
     const cutoffMs = Date.parse(createdCutoffIso);
-    for (const d of oldestHeldTaskByDayNotice(`state = 'pending' AND (claim_at IS NULL OR claim_at < ?)`, [staleClaimCutoffIso])) {
+    for (const d of oldestHeldTaskByDayNotice(
+      `n.state = 'pending' AND n.org_id IS ? AND (n.claim_at IS NULL OR n.claim_at < ?)`,
+      [orgId, staleClaimCutoffIso],
+    )) {
       const ms = parseSqlTime(d.oldest);
       if (ms === null || ms > cutoffMs) continue;
       const moved = db
@@ -488,34 +512,38 @@ export function overrideNotice(
 // ---------------------------------------------------------------------------
 
 /**
- * Pending notices past the cutoff. A run notice counts from its own creation;
- * a day notice from its oldest still-pending task, and not at all while it
- * holds none (it is inert, not overdue).
+ * Pending notices in `scope` past the cutoff. A run notice counts from its own
+ * creation; a day notice from its oldest still-pending task, and not at all
+ * while it holds none (it is inert, not overdue).
  */
-export function countPendingCreatedBefore(cutoffIso: string): number {
+export function countPendingCreatedBefore(cutoffIso: string, scope: NoticeScope): number {
+  const f = scopeFilter(scope);
   const runs = getDatabase()
-    .prepare(`SELECT COUNT(*) AS c FROM run_notices WHERE state = 'pending' AND kind = 'run' AND created_at <= ?`)
-    .get(cutoffIso) as { c: number };
+    .prepare(`SELECT COUNT(*) AS c FROM run_notices WHERE state = 'pending' AND kind = 'run' AND created_at <= ?${f.sql}`)
+    .get(cutoffIso, ...f.params) as { c: number };
   const cutoffMs = Date.parse(cutoffIso);
-  const days = oldestHeldTaskByDayNotice(`state = 'pending'`, []).filter((d) => {
+  const nf = scopeFilter(scope, 'n');
+  const days = oldestHeldTaskByDayNotice(`n.state = 'pending'${nf.sql}`, nf.params).filter((d) => {
     const ms = parseSqlTime(d.oldest);
     return ms !== null && ms <= cutoffMs;
   });
   return runs.c + days.length;
 }
 
-export function countNotDeliveredSince(sinceIso: string): number {
+export function countNotDeliveredSince(sinceIso: string, scope: NoticeScope): number {
+  const f = scopeFilter(scope);
   const row = getDatabase()
-    .prepare(`SELECT COUNT(*) AS c FROM run_notices WHERE state = 'not_delivered' AND created_at >= ?`)
-    .get(sinceIso) as { c: number };
+    .prepare(`SELECT COUNT(*) AS c FROM run_notices WHERE state = 'not_delivered' AND created_at >= ?${f.sql}`)
+    .get(sinceIso, ...f.params) as { c: number };
   return row.c;
 }
 
-/** Newest first. */
-export function listNotices(limit: number, offset: number): NoticeRow[] {
+/** Notices in `scope`, newest first. */
+export function listNotices(limit: number, offset: number, scope: NoticeScope): NoticeRow[] {
+  const f = scopeFilter(scope);
   return getDatabase()
-    .prepare('SELECT * FROM run_notices ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?')
-    .all(limit, offset) as NoticeRow[];
+    .prepare(`SELECT * FROM run_notices WHERE 1 = 1${f.sql} ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?`)
+    .all(...f.params, limit, offset) as NoticeRow[];
 }
 
 const SUMMARY_CHUNK = 500;

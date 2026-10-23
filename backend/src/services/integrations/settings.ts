@@ -173,18 +173,20 @@ export class IntegrationsSettingsService {
         }
       }
 
-      // Decrypt sensitive Alert channel fields
-      if (settings.alerts) {
-        if (settings.alerts.slack?.webhook_url?.startsWith('enc:')) {
-          settings.alerts.slack.webhook_url = this.decrypt(settings.alerts.slack.webhook_url.slice(4));
+      // Decrypt sensitive Alert channel fields (top-level or per-org).
+      const decryptAlerts = (alerts: AlertSettings | undefined) => {
+        if (!alerts) return;
+        if (alerts.slack?.webhook_url?.startsWith('enc:')) {
+          alerts.slack.webhook_url = this.decrypt(alerts.slack.webhook_url.slice(4));
         }
-        if (settings.alerts.email?.smtp_user?.startsWith('enc:')) {
-          settings.alerts.email.smtp_user = this.decrypt(settings.alerts.email.smtp_user.slice(4));
+        if (alerts.email?.smtp_user?.startsWith('enc:')) {
+          alerts.email.smtp_user = this.decrypt(alerts.email.smtp_user.slice(4));
         }
-        if (settings.alerts.email?.smtp_pass?.startsWith('enc:')) {
-          settings.alerts.email.smtp_pass = this.decrypt(settings.alerts.email.smtp_pass.slice(4));
+        if (alerts.email?.smtp_pass?.startsWith('enc:')) {
+          alerts.email.smtp_pass = this.decrypt(alerts.email.smtp_pass.slice(4));
         }
-      }
+      };
+      decryptAlerts(settings.alerts);
 
       // Decrypt a single CrowdStrike section in place (top-level or per-org).
       const decryptCrowdStrike = (cs: CrowdStrikeIntegrationSettings | undefined) => {
@@ -203,6 +205,10 @@ export class IntegrationsSettingsService {
       // keeps the CrowdStrike per-org round-trip correct).
       for (const org of Object.values(settings.orgs ?? {})) {
         decryptCrowdStrike(org.crowdstrike);
+        // Org alert sections are written encrypted by saveAlertSettings; without
+        // this, org-scoped SMTP/Slack would be used with ciphertext credentials
+        // and re-encrypted on the next partial save.
+        decryptAlerts(org.alerts);
       }
 
       return settings;
@@ -1021,22 +1027,51 @@ export class IntegrationsSettingsService {
   }
 
   // ---------------------------------------------------------------------------
-  // Pre-execution notices (deployment-wide: always the legacy top level)
+  // Pre-execution notices (Ruling R20: per org, legacy top level as fallback)
   // ---------------------------------------------------------------------------
 
-  /** Always returns a full settings object (defaults filled, numbers clamped). */
+  /**
+   * Always returns a full settings object (defaults filled, numbers clamped).
+   * Org-specific > legacy, like getAlertSettings().
+   */
   getPreExecutionNoticeSettings(): PreExecutionNoticeSettings {
-    return clampNoticeSettings(this.getFileSettings()?.pre_execution_notices ?? {});
+    const file = this.getFileSettings();
+    const own = this.getOrgSection(file)?.pre_execution_notices;
+    return clampNoticeSettings(own ?? file?.pre_execution_notices ?? {});
   }
 
-  /** Merge a patch into the stored settings, clamp, and persist at the top level regardless of orgId. */
+  /**
+   * Merge a patch into the stored settings, clamp, and persist: under
+   * `orgs[orgId]` when an org id is set, at the top level otherwise. An org's
+   * first save starts from the legacy values (like saveAlertSettings) but not
+   * the legacy daily SMTP check result, which was for the legacy SMTP.
+   */
   savePreExecutionNoticeSettings(patch: Partial<PreExecutionNoticeSettings>): PreExecutionNoticeSettings {
     this.ensureSettingsDir();
-    const merged = clampNoticeSettings({ ...this.getPreExecutionNoticeSettings(), ...patch });
+    const file = this.getFileSettings();
+    const own = this.getOrgSection(file)?.pre_execution_notices;
+    let base: Partial<PreExecutionNoticeSettings> = own ?? file?.pre_execution_notices ?? {};
+    if (this.orgId && !own) {
+      const { last_smtp_check_at: _at, last_smtp_check_ok: _ok, last_smtp_check_message: _msg, ...rest } = base;
+      base = rest;
+    }
+    const merged = clampNoticeSettings({ ...base, ...patch });
     const raw = this.getRawFileSettings() ?? {};
-    raw.pre_execution_notices = merged;
+    if (this.orgId) {
+      raw.orgs ??= {};
+      raw.orgs[this.orgId] ??= {};
+      raw.orgs[this.orgId].pre_execution_notices = merged;
+    } else {
+      raw.pre_execution_notices = merged;
+    }
     fs.writeFileSync(SETTINGS_FILE, JSON.stringify(raw, null, 2), { mode: 0o600 });
     return merged;
+  }
+
+  /** Org ids that have their own pre-execution notice section (ignores this service's org id). */
+  listNoticeOrgIds(): string[] {
+    const orgs = this.getRawFileSettings()?.orgs ?? {};
+    return Object.keys(orgs).filter((id) => orgs[id]?.pre_execution_notices !== undefined);
   }
 
   /** Check if alerting is configured: thresholds enabled + at least one channel configured & enabled. */

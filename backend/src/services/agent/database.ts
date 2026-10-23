@@ -207,7 +207,8 @@ export function initializeTables(database: Database.Database): void {
       finished_attempts INTEGER NOT NULL DEFAULT 0,
       slack_failure_alerted INTEGER NOT NULL DEFAULT 0,
       slack_not_delivered_alerted INTEGER NOT NULL DEFAULT 0,
-      last_attempt_at TEXT
+      last_attempt_at TEXT,
+      org_id TEXT
     );
     CREATE INDEX IF NOT EXISTS idx_run_notices_state ON run_notices(state);
     CREATE UNIQUE INDEX IF NOT EXISTS idx_run_notices_day ON run_notices(schedule_id, window_date) WHERE kind = 'day';
@@ -221,6 +222,12 @@ export function initializeTables(database: Database.Database): void {
   if (!noticeCols.has('last_attempt_at')) {
     database.exec('ALTER TABLE run_notices ADD COLUMN last_attempt_at TEXT');
   }
+  // Migration: run_notices.org_id, the org of the tasks a notice gates (Ruling
+  // R20: notices are per org). NULL for notices created before this column.
+  if (!noticeCols.has('org_id')) {
+    database.exec('ALTER TABLE run_notices ADD COLUMN org_id TEXT');
+  }
+  database.exec('CREATE INDEX IF NOT EXISTS idx_run_notices_org_state ON run_notices(org_id, state)');
 
   // Migration: add process metrics columns to heartbeat_history
   const hbCols = database.prepare(`PRAGMA table_info(heartbeat_history)`).all() as { name: string }[];

@@ -595,16 +595,16 @@ export function processSchedules(clock?: Date): { processed: number; errors: str
         `[Scheduler] Skipping schedule "${schedule.name ?? schedule.id}" — all agents are decommissioned`
       );
       processed++;
-    } else if (tick.hasPendingRunNotice(schedule.id)) {
+    } else if (tick.hasPendingRunNotice(schedule.id, schedule.org_id)) {
       // The previous occurrence's notice is still undelivered: don't stack a
       // second batch behind it. Record the skip and advance as usual.
-      tick.recordSkippedOccurrence(schedule.id, schedule.created_by, schedule.timezone);
+      tick.recordSkippedOccurrence(schedule.id, schedule.created_by, schedule.timezone, schedule.org_id);
       console.warn(
         `[Scheduler] Skipping schedule "${schedule.name ?? schedule.id}" — previous run still waiting for notice delivery`
       );
     } else {
       try {
-        const noticeId = tick.runNoticeFor(schedule.id, schedule.timezone, schedule.created_by);
+        const noticeId = tick.runNoticeFor(schedule.id, schedule.timezone, schedule.created_by, schedule.org_id);
         createTasks(
           {
             agent_ids: eligibleAgentIds,
@@ -622,7 +622,7 @@ export function processSchedules(clock?: Date): { processed: number; errors: str
         );
         // Listed on the shared notice only once its tasks exist, so a failed
         // schedule never appears in the trigger text or blocks its next run.
-        tick.confirmRunSchedule(schedule.id);
+        tick.confirmRunSchedule(schedule.id, schedule.org_id);
         processed++;
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);

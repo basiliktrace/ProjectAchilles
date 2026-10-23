@@ -42,7 +42,19 @@ export interface NoticeRow {
   slack_not_delivered_alerted: number;
   /** When the latest send attempt finished (retry backoff). */
   last_attempt_at: string | null;
+  /**
+   * Org of the tasks this notice gates (Ruling R20). Its settings, SMTP,
+   * recipients and Slack are used for the notice. NULL for notices created
+   * before notices were per org (legacy settings, legacy-mode visibility only).
+   */
+  org_id: string | null;
 }
+
+/**
+ * Which notices a caller may see: one org's, or all of them (legacy
+ * single-org mode: a caller without a Clerk org).
+ */
+export type NoticeScope = { kind: 'org'; orgId: string } | { kind: 'all' };
 
 export interface NoticeSummary {
   id: string;
