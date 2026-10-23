@@ -1,6 +1,8 @@
 /**
- * Pre-execution notices: creation (Run Now / retry / scheduler tick) and the
- * send pass. All SQL is in notices.repo.ts.
+ * Pre-execution notices: creation (Run Now / retry / scheduler tick), the send
+ * pass, the per-tick sweeps (processNotices: bounded wait, pickup deadline,
+ * Finished email, daily SMTP check), admin release and the status read model.
+ * All SQL is in notices.repo.ts.
  *
  * Import rule (Ruling R2): this module must not import
  * services/agent/tasks.service.ts.
@@ -9,17 +11,21 @@ import crypto from 'crypto';
 import { getDatabase } from '../agent/database.js';
 import { randomWindowForDate, todayInTimezone } from '../agent/scheduleTime.js';
 import { IntegrationsSettingsService } from '../integrations/settings.js';
-import { sendMail } from '../alerts/email.service.js';
+import { sendMail, testEmailConnection } from '../alerts/email.service.js';
 import type { OutgoingMail } from '../alerts/email.service.js';
 import { sendSlackText } from '../alerts/slack.service.js';
+import { AppError } from '../../middleware/error.middleware.js';
 import { isFullyAccepted } from './acceptance.js';
 import { buildIcs } from './ics.js';
-import { MAX_INLINE_HOSTS, buildHostsCsv, buildNoticeEmail } from './render.js';
-import type { NoticeEmailData } from './render.js';
+import { MAX_INLINE_HOSTS, buildFinishedEmail, buildHostsCsv, buildNoticeEmail, classifyOutcome } from './render.js';
+import type { FinishedEmailData, NoticeEmailData } from './render.js';
 import { computeDayRelease, computeRunRelease, runTag } from './window.js';
 import * as repo from './notices.repo.js';
 import type { NoticeRow, NoticeSourceType } from './types.js';
-import type { TaskPayload } from '../../types/agent.js';
+import type { TaskPayload, TaskResult, TaskStatus } from '../../types/agent.js';
+import type { PreExecutionNoticeSettings } from '../../types/integrations.js';
+
+export { listNotices, getNoticeSummaries } from './notices.repo.js';
 
 const MIN = 60_000;
 /** A claim older than this belongs to a crashed or hung sender and may be taken over. */
@@ -314,6 +320,31 @@ interface BuiltNotice {
   windowEnd: Date;
 }
 
+type ReleaseTimes = { releaseAt: Date; pickupDeadline: Date; windowEnd: Date };
+
+/** Longest `execution_timeout` across the linked tasks' payloads (default 300s). */
+function maxExecutionTimeoutSec(linked: Array<{ payload: string }>): number {
+  let max = 0;
+  for (const t of linked) {
+    const p = parsePayload(t.payload);
+    if (p && typeof p.execution_timeout === 'number' && p.execution_timeout > max) max = p.execution_timeout;
+  }
+  return max > 0 ? max : DEFAULT_EXECUTION_TIMEOUT_SEC;
+}
+
+/** The window `n` gets if accepted at `at`: day rules for day notices, run rules otherwise. */
+function releaseTimesFor(
+  n: NoticeRow,
+  at: Date,
+  settings: PreExecutionNoticeSettings,
+  maxTimeoutSec: number,
+): ReleaseTimes {
+  if (n.kind === 'day' && n.day_window_start && n.day_window_end) {
+    return computeDayRelease(at, settings, new Date(n.day_window_end), maxTimeoutSec);
+  }
+  return computeRunRelease(at, settings, maxTimeoutSec);
+}
+
 function buildNoticeMail(
   n: NoticeRow,
   linked: repo.LinkedTaskRow[],
@@ -327,13 +358,9 @@ function buildNoticeMail(
 
   // Tests: one entry per test_uuid, from the task payload metadata.
   const tests = new Map<string, NoticeEmailData['tests'][number]>();
-  let maxTimeoutSec = 0;
   for (const t of linked) {
     const p = parsePayload(t.payload);
     if (!p) continue;
-    if (typeof p.execution_timeout === 'number' && p.execution_timeout > maxTimeoutSec) {
-      maxTimeoutSec = p.execution_timeout;
-    }
     const key = p.test_uuid || p.test_name;
     if (tests.has(key)) continue;
     tests.set(key, {
@@ -344,7 +371,7 @@ function buildNoticeMail(
       tactics: p.metadata?.tactics ?? [],
     });
   }
-  if (maxTimeoutSec === 0) maxTimeoutSec = DEFAULT_EXECUTION_TIMEOUT_SEC;
+  const maxTimeoutSec = maxExecutionTimeoutSec(linked);
 
   // Hosts: agents with a linked task, plus (day notices) every announced agent.
   const hosts = new Map<string, NoticeEmailData['hosts'][number]>();
@@ -365,14 +392,11 @@ function buildNoticeMail(
   const hostList = [...hosts.values()];
 
   // Window as announced if accepted now.
-  let release: { releaseAt: Date; pickupDeadline: Date; windowEnd: Date };
-  let dayWindow: { start: Date; end: Date } | undefined;
-  if (n.kind === 'day' && n.day_window_start && n.day_window_end) {
-    dayWindow = { start: new Date(n.day_window_start), end: new Date(n.day_window_end) };
-    release = computeDayRelease(now, settings, dayWindow.end, maxTimeoutSec);
-  } else {
-    release = computeRunRelease(now, settings, maxTimeoutSec);
-  }
+  const release = releaseTimesFor(n, now, settings, maxTimeoutSec);
+  const dayWindow =
+    n.kind === 'day' && n.day_window_start && n.day_window_end
+      ? { start: new Date(n.day_window_start), end: new Date(n.day_window_end) }
+      : undefined;
 
   // EDR context.
   const edr: NoticeEmailData['edr'] = [];
@@ -516,4 +540,318 @@ export async function sendNotice(id: string, now?: Date): Promise<SendOutcome> {
   if (!repo.recordSendFailure(id, claimAt, error, accepted, rejected)) return 'not_claimed';
   await alertSlackOnFailure(n, error);
   return 'failed';
+}
+
+// ---------------------------------------------------------------------------
+// Sweeps (scheduler tick)
+// ---------------------------------------------------------------------------
+
+const HOUR = 60 * MIN;
+const DAY = 24 * HOUR;
+const MAX_FINISHED_ATTEMPTS = 3;
+/**
+ * Finished emails only for windows that closed this recently, so turning
+ * send_finished back on doesn't mail every old run at once. Task TTL is 7 days,
+ * so a run's tasks are terminal well inside this.
+ */
+const FINISHED_LOOKBACK_MS = 7 * DAY;
+/** The banner flags a pending notice older than this. */
+const PENDING_OVERDUE_MS = 5 * MIN;
+const NOT_DELIVERED_LOOKBACK_MS = 7 * DAY;
+const SMTP_CHECK_INTERVAL_MS = DAY;
+
+const REASON_NOT_DELIVERED = 'Not run: notice not delivered';
+const REASON_HOST_OFFLINE = 'Not run: host offline during notice window';
+
+function notRunResult(reason: string): string {
+  return JSON.stringify({ error: reason, exit_code: -1, stdout: '', stderr: '', execution_duration_ms: 0 });
+}
+
+/** Post to Slack if it is configured. Returns false if not configured or the post failed. */
+async function postSlack(text: string): Promise<boolean> {
+  const slack = settingsService().getAlertSettings()?.slack;
+  if (!slack?.configured || !slack.enabled || !slack.webhook_url) return false;
+  try {
+    await sendSlackText(slack.webhook_url, text);
+    return true;
+  } catch (err) {
+    console.error('[Notices] Slack post failed:', err);
+    return false;
+  }
+}
+
+function slackConfigured(): boolean {
+  const slack = settingsService().getAlertSettings()?.slack;
+  return !!(slack?.configured && slack.enabled && slack.webhook_url);
+}
+
+export interface ProcessNoticesResult {
+  sent: number;
+  notDelivered: number;
+  expiredTasks: number;
+  finished: number;
+}
+
+/** Run one phase; an error is logged and the pass moves on to the next phase. */
+async function phase(name: string, fn: () => Promise<void> | void): Promise<void> {
+  try {
+    await fn();
+  } catch (err) {
+    console.error(`[Notices] ${name} failed:`, err);
+  }
+}
+
+async function sendPass(now: Date): Promise<number> {
+  let sent = 0;
+  for (const id of repo.listPendingNoticeIds()) {
+    try {
+      if ((await sendNotice(id, now)) === 'sent') sent++;
+    } catch (err) {
+      console.error(`[Notices] send of ${runTag(id)} failed:`, err);
+    }
+  }
+  return sent;
+}
+
+async function boundedWaitPass(now: Date): Promise<{ notDelivered: number; expired: number }> {
+  const settings = settingsService().getPreExecutionNoticeSettings();
+  const nowIso = now.toISOString();
+  const createdCutoff = new Date(now.getTime() - settings.max_wait_minutes * MIN).toISOString();
+  const staleClaimCutoff = new Date(now.getTime() - STALE_CLAIM_MS).toISOString();
+
+  const moved = repo.markNotDelivered(createdCutoff, staleClaimCutoff);
+  for (const id of moved) console.warn(`[Notices] ${runTag(id)} not delivered within ${settings.max_wait_minutes} min`);
+
+  // Every pass, not only at the transition (Ruling R5).
+  const expired = repo.expireTasksOfNotDelivered(nowIso, notRunResult(REASON_NOT_DELIVERED));
+
+  // Once per notice. Without Slack configured, nothing is claimed.
+  if (slackConfigured()) {
+    const since = new Date(now.getTime() - NOT_DELIVERED_LOOKBACK_MS).toISOString();
+    for (const n of repo.listNotDeliveredToAlert(since)) {
+      if (!repo.claimSlackNotDeliveredAlert(n.id)) continue;
+      const why = n.last_error ? ` Last error: ${n.last_error}.` : '';
+      const ok = await postSlack(
+        `Notice ${runTag(n.id)} was not delivered within ${settings.max_wait_minutes} minutes; its tests were not run.${why}`,
+      );
+      // Unflag, so the next pass tries Slack again.
+      if (!ok) repo.resetSlackNotDeliveredAlert(n.id);
+    }
+  }
+  return { notDelivered: moved.length, expired };
+}
+
+/** Latest attempt per target: a failed task and its automatic retries count once. */
+function latestAttempts(rows: repo.TaskOutcomeRow[]): repo.TaskOutcomeRow[] {
+  const byChain = new Map<string, repo.TaskOutcomeRow>();
+  for (const r of rows) {
+    const key = r.original_task_id || r.id;
+    const cur = byChain.get(key);
+    if (!cur || (r.retry_count ?? 0) > (cur.retry_count ?? 0)) byChain.set(key, r);
+  }
+  return [...byChain.values()];
+}
+
+function parseResult(s: string | null): TaskResult | null {
+  if (!s) return null;
+  try {
+    return JSON.parse(s) as TaskResult;
+  } catch {
+    return null;
+  }
+}
+
+async function sendFinished(n: NoticeRow, now: Date): Promise<boolean> {
+  const rows = repo.getLinkedTaskOutcomes(n.id);
+  if (rows.length === 0) return false;
+
+  const counts: FinishedEmailData['counts'] = { protected: 0, unprotected: 0, error: 0, notRun: 0 };
+  for (const r of latestAttempts(rows)) {
+    counts[classifyOutcome({ status: r.status as TaskStatus, result: parseResult(r.result) })]++;
+  }
+
+  // Actual finish: the latest completed_at (ISO or SQLite UTC form).
+  let finishMs: number | null = null;
+  let firstPickupMs: number | null = null;
+  for (const r of rows) {
+    const c = parseTimestamp(r.completed_at);
+    if (c !== null && (finishMs === null || c > finishMs)) finishMs = c;
+    const a = parseTimestamp(r.assigned_at);
+    if (a !== null && (firstPickupMs === null || a < firstPickupMs)) firstPickupMs = a;
+  }
+  const releaseMs = parseTimestamp(n.release_at) ?? parseTimestamp(n.sent_at) ?? now.getTime();
+  const startedAt = new Date(firstPickupMs ?? releaseMs);
+  const finishedAt = new Date(finishMs ?? now.getTime());
+
+  const tag = runTag(n.id);
+  const timezone = safeTimezone(n.timezone);
+  const { subject, html } = buildFinishedEmail({
+    runTag: tag,
+    timezone,
+    startedAt,
+    finishedAt,
+    counts,
+    uiUrl: tasksUiUrl(),
+  });
+  // Updated event: same UID, next SEQUENCE, ending at the actual finish.
+  const icsStart = new Date(releaseMs);
+  const ics = buildIcs({
+    uid: `${n.id}@projectachilles`,
+    sequence: 1,
+    start: icsStart,
+    end: new Date(Math.max(icsStart.getTime(), finishedAt.getTime())),
+    summary: `ProjectAchilles security testing ${tag}`,
+    description: `Finished. Protected ${counts.protected}, unprotected ${counts.unprotected}, error ${counts.error}, not run ${counts.notRun}. Search for ${tag} in your security tooling.`,
+    stamp: now,
+  });
+
+  const recipients = parseJsonArray(n.recipients);
+  try {
+    const email = settingsService().getAlertSettings()?.email;
+    if (!email?.configured) throw new Error('SMTP email is not configured');
+    const result = await sendMail(email, {
+      to: recipients,
+      subject,
+      html,
+      attachments: [{ filename: `${tag}.ics`, content: ics, contentType: 'text/calendar; charset=utf-8; method=PUBLISH' }],
+    });
+    if (!isFullyAccepted(recipients, result)) throw new Error('not every recipient accepted the Finished email');
+  } catch (err) {
+    console.error(`[Notices] Finished email for ${tag} failed:`, errorMessage(err));
+    repo.recordFinishedFailure(n.id);
+    return false;
+  }
+  return repo.markFinishedSent(n.id, now.toISOString());
+}
+
+async function finishedPass(now: Date): Promise<number> {
+  if (!settingsService().getPreExecutionNoticeSettings().send_finished) return 0;
+  let finished = 0;
+  const since = new Date(now.getTime() - FINISHED_LOOKBACK_MS).toISOString();
+  for (const n of repo.listFinishedCandidates(now.toISOString(), since, MAX_FINISHED_ATTEMPTS)) {
+    if (await sendFinished(n, now)) finished++;
+  }
+  return finished;
+}
+
+async function dailySmtpCheck(now: Date): Promise<void> {
+  const svc = settingsService();
+  const settings = svc.getPreExecutionNoticeSettings();
+  if (!settings.enabled) return;
+  const last = parseTimestamp(settings.last_smtp_check_at);
+  // abs(): a timestamp in the future (clock change) must not suppress checks forever.
+  if (last !== null && Math.abs(now.getTime() - last) < SMTP_CHECK_INTERVAL_MS) return;
+
+  const email = svc.getAlertSettings()?.email;
+  let r: { success: boolean; message: string };
+  if (!email?.configured) {
+    r = { success: false, message: 'SMTP email is not configured' };
+  } else {
+    try {
+      r = await testEmailConnection(email);
+    } catch (err) {
+      r = { success: false, message: errorMessage(err) };
+    }
+  }
+  svc.savePreExecutionNoticeSettings({
+    last_smtp_check_at: now.toISOString(),
+    last_smtp_check_ok: r.success,
+    last_smtp_check_message: r.message,
+  });
+  if (!r.success) {
+    await postSlack(
+      `Daily SMTP check for pre-execution notices failed: ${r.message}. Test runs will wait for notice delivery until this is fixed.`,
+    );
+  }
+}
+
+async function runPass(now: Date): Promise<ProcessNoticesResult> {
+  const out: ProcessNoticesResult = { sent: 0, notDelivered: 0, expiredTasks: 0, finished: 0 };
+  // Existing notices are processed even when the feature is off; turning it
+  // off only affects new runs. Only the SMTP check depends on `enabled`.
+  await phase('send pass', async () => {
+    out.sent = await sendPass(now);
+  });
+  await phase('bounded wait', async () => {
+    const r = await boundedWaitPass(now);
+    out.notDelivered = r.notDelivered;
+    out.expiredTasks += r.expired;
+  });
+  await phase('pickup deadline', () => {
+    out.expiredTasks += repo.expireTasksPastPickupDeadline(now.toISOString(), notRunResult(REASON_HOST_OFFLINE));
+  });
+  await phase('finished', async () => {
+    out.finished = await finishedPass(now);
+  });
+  await phase('SMTP check', () => dailySmtpCheck(now));
+  return out;
+}
+
+let inFlight: Promise<ProcessNoticesResult> | null = null;
+
+/**
+ * One notice pass per scheduler tick: send pending notices, bounded wait,
+ * pickup deadline, Finished email, daily SMTP check. A call made while a pass
+ * is still running (a slow SMTP server can outlast the 60s tick) shares that
+ * pass instead of starting a second one, so the Finished email can't be sent
+ * twice.
+ */
+export function processNotices(now?: Date): Promise<ProcessNoticesResult> {
+  if (inFlight) return inFlight;
+  inFlight = runPass(now ?? new Date()).finally(() => {
+    inFlight = null;
+  });
+  return inFlight;
+}
+
+// ---------------------------------------------------------------------------
+// Admin
+// ---------------------------------------------------------------------------
+
+/**
+ * Release a pending notice without email: records who/why/when and releases
+ * its tasks now (lead 0), with the pickup deadline and window end computed as
+ * if it had been sent now.
+ */
+export function releaseWithoutNotice(id: string, userId: string, reason: string, now: Date = new Date()): NoticeRow {
+  const why = typeof reason === 'string' ? reason.trim() : '';
+  if (!why) throw new AppError('A reason is required to release without notice', 400);
+
+  const n = repo.getNotice(id);
+  if (!n) throw new AppError('Notice not found', 404);
+  if (n.state !== 'pending') throw new AppError(`Notice is ${n.state}, not pending`, 400);
+
+  const settings = settingsService().getPreExecutionNoticeSettings();
+  const times = releaseTimesFor(n, now, { ...settings, lead_minutes: 0 }, maxExecutionTimeoutSec(repo.getLinkedTasks(id)));
+  const nowIso = now.toISOString();
+  const applied = repo.overrideNotice(id, {
+    by: userId,
+    reason: why,
+    at: nowIso,
+    releaseAt: nowIso,
+    pickupDeadline: times.pickupDeadline.toISOString(),
+    windowEnd: times.windowEnd.toISOString(),
+  });
+  // Lost a race with a sender or the bounded wait.
+  if (!applied) throw new AppError('Notice is no longer pending', 400);
+  return repo.getNotice(id)!;
+}
+
+export interface NoticeStatus {
+  pendingOverdue: number;
+  notDeliveredLast7d: number;
+  smtpCheck: { ok: boolean | null; at: string | null; message: string | null };
+}
+
+export function getNoticeStatus(now: Date = new Date()): NoticeStatus {
+  const s = settingsService().getPreExecutionNoticeSettings();
+  return {
+    pendingOverdue: repo.countPendingCreatedBefore(new Date(now.getTime() - PENDING_OVERDUE_MS).toISOString()),
+    notDeliveredLast7d: repo.countNotDeliveredSince(new Date(now.getTime() - NOT_DELIVERED_LOOKBACK_MS).toISOString()),
+    smtpCheck: {
+      ok: s.last_smtp_check_ok ?? null,
+      at: s.last_smtp_check_at ?? null,
+      message: s.last_smtp_check_message ?? null,
+    },
+  };
 }

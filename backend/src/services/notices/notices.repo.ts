@@ -10,7 +10,8 @@
  * `datetime('now')`. The task hold compares these columns as strings.
  */
 import { getDatabase } from '../agent/database.js';
-import type { NoticeKind, NoticeRow, NoticeSourceType, NoticeState } from './types.js';
+import { runTag } from './window.js';
+import type { NoticeKind, NoticeRow, NoticeSourceType, NoticeState, NoticeSummary } from './types.js';
 
 export interface NewNotice {
   id: string;
@@ -233,4 +234,211 @@ export function getScheduleNames(scheduleIds: string[]): Map<string, string | nu
     .prepare(`SELECT id, name FROM schedules WHERE id IN (${placeholders})`)
     .all(...scheduleIds) as Array<{ id: string; name: string | null }>;
   return new Map(rows.map((r) => [r.id, r.name]));
+}
+
+// ---------------------------------------------------------------------------
+// Sweeps (processNotices)
+// ---------------------------------------------------------------------------
+
+/** Task states that still count as "in flight" for a notice. */
+const ACTIVE_TASK_STATES = `'pending','assigned','downloading','executing'`;
+
+export function listPendingNoticeIds(): string[] {
+  const rows = getDatabase()
+    .prepare(`SELECT id FROM run_notices WHERE state = 'pending' ORDER BY created_at ASC, id ASC`)
+    .all() as Array<{ id: string }>;
+  return rows.map((r) => r.id);
+}
+
+/**
+ * Bounded wait: pending notices created at or before `createdCutoffIso` become
+ * `not_delivered`. A notice held by a live (non-stale) send claim is left for
+ * the next pass, so a sender mid-SMTP isn't overtaken. Returns the ids moved.
+ */
+export function markNotDelivered(createdCutoffIso: string, staleClaimCutoffIso: string): string[] {
+  const rows = getDatabase()
+    .prepare(`
+      UPDATE run_notices SET state = 'not_delivered', claim_at = NULL
+      WHERE state = 'pending' AND created_at <= ? AND (claim_at IS NULL OR claim_at < ?)
+      RETURNING id
+    `)
+    .all(createdCutoffIso, staleClaimCutoffIso) as Array<{ id: string }>;
+  return rows.map((r) => r.id);
+}
+
+/**
+ * Expire every still-pending task linked to any `not_delivered` notice
+ * (Ruling R5: on every pass, so tasks linked after the transition expire too).
+ */
+export function expireTasksOfNotDelivered(nowIso: string, resultJson: string): number {
+  return getDatabase()
+    .prepare(`
+      UPDATE tasks SET status = 'expired', completed_at = ?, result = ?
+      WHERE status = 'pending' AND notice_id IN (SELECT id FROM run_notices WHERE state = 'not_delivered')
+    `)
+    .run(nowIso, resultJson).changes;
+}
+
+/**
+ * Pickup deadline: expire still-pending tasks of released notices whose
+ * deadline has passed. Includes automatic retries created after the deadline,
+ * which inherit the parent's notice. Picked-up tasks are untouched.
+ */
+export function expireTasksPastPickupDeadline(nowIso: string, resultJson: string): number {
+  return getDatabase()
+    .prepare(`
+      UPDATE tasks SET status = 'expired', completed_at = ?, result = ?
+      WHERE status = 'pending' AND notice_id IN (
+        SELECT id FROM run_notices WHERE state IN ('sent','overridden') AND pickup_deadline <= ?)
+    `)
+    .run(nowIso, resultJson, nowIso).changes;
+}
+
+/**
+ * not_delivered notices still owed their one Slack message: created since
+ * `sinceIso` and with at least one linked task (an orphan notice skipped no
+ * tests).
+ */
+export function listNotDeliveredToAlert(sinceIso: string): NoticeRow[] {
+  return getDatabase()
+    .prepare(`
+      SELECT * FROM run_notices n
+      WHERE state = 'not_delivered' AND slack_not_delivered_alerted = 0 AND created_at >= ?
+        AND EXISTS (SELECT 1 FROM tasks t WHERE t.notice_id = n.id)
+      ORDER BY created_at ASC
+    `)
+    .all(sinceIso) as NoticeRow[];
+}
+
+export function claimSlackNotDeliveredAlert(id: string): boolean {
+  return (
+    getDatabase()
+      .prepare('UPDATE run_notices SET slack_not_delivered_alerted = 1 WHERE id = ? AND slack_not_delivered_alerted = 0')
+      .run(id).changes > 0
+  );
+}
+
+export function resetSlackNotDeliveredAlert(id: string): void {
+  getDatabase().prepare('UPDATE run_notices SET slack_not_delivered_alerted = 0 WHERE id = ?').run(id);
+}
+
+/**
+ * Released notices whose pickup deadline passed between `sinceIso` and
+ * `nowIso`, Finished not yet sent, fewer than `maxAttempts` failures, at least
+ * one linked task and none still in flight.
+ */
+export function listFinishedCandidates(nowIso: string, sinceIso: string, maxAttempts: number): NoticeRow[] {
+  return getDatabase()
+    .prepare(`
+      SELECT * FROM run_notices n
+      WHERE state IN ('sent','overridden') AND pickup_deadline <= ? AND pickup_deadline >= ?
+        AND finished_sent_at IS NULL AND finished_attempts < ?
+        AND EXISTS (SELECT 1 FROM tasks t WHERE t.notice_id = n.id)
+        AND NOT EXISTS (SELECT 1 FROM tasks t WHERE t.notice_id = n.id AND t.status IN (${ACTIVE_TASK_STATES}))
+      ORDER BY created_at ASC
+    `)
+    .all(nowIso, sinceIso, maxAttempts) as NoticeRow[];
+}
+
+export interface TaskOutcomeRow {
+  id: string;
+  status: string;
+  result: string | null;
+  assigned_at: string | null;
+  completed_at: string | null;
+  original_task_id: string | null;
+  retry_count: number | null;
+  created_at: string;
+}
+
+export function getLinkedTaskOutcomes(noticeId: string): TaskOutcomeRow[] {
+  return getDatabase()
+    .prepare(`
+      SELECT id, status, result, assigned_at, completed_at, original_task_id, retry_count, created_at
+      FROM tasks WHERE notice_id = ?
+      ORDER BY created_at ASC, id ASC
+    `)
+    .all(noticeId) as TaskOutcomeRow[];
+}
+
+export function markFinishedSent(id: string, atIso: string): boolean {
+  return (
+    getDatabase()
+      .prepare('UPDATE run_notices SET finished_sent_at = ? WHERE id = ? AND finished_sent_at IS NULL')
+      .run(atIso, id).changes > 0
+  );
+}
+
+export function recordFinishedFailure(id: string): void {
+  getDatabase()
+    .prepare('UPDATE run_notices SET finished_attempts = finished_attempts + 1 WHERE id = ? AND finished_sent_at IS NULL')
+    .run(id);
+}
+
+/** Release without notice. Conditional on `pending`; false if the notice already moved. */
+export function overrideNotice(
+  id: string,
+  v: { by: string; reason: string; at: string; releaseAt: string; pickupDeadline: string; windowEnd: string },
+): boolean {
+  return (
+    getDatabase()
+      .prepare(`
+        UPDATE run_notices
+        SET state = 'overridden', override_by = ?, override_reason = ?, override_at = ?,
+            release_at = ?, pickup_deadline = ?, window_end = ?, claim_at = NULL
+        WHERE id = ? AND state = 'pending'
+      `)
+      .run(v.by, v.reason, v.at, v.releaseAt, v.pickupDeadline, v.windowEnd, id).changes > 0
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Read models (status banner, notice log, Tasks UI badges)
+// ---------------------------------------------------------------------------
+
+export function countPendingCreatedBefore(cutoffIso: string): number {
+  const row = getDatabase()
+    .prepare(`SELECT COUNT(*) AS c FROM run_notices WHERE state = 'pending' AND created_at <= ?`)
+    .get(cutoffIso) as { c: number };
+  return row.c;
+}
+
+export function countNotDeliveredSince(sinceIso: string): number {
+  const row = getDatabase()
+    .prepare(`SELECT COUNT(*) AS c FROM run_notices WHERE state = 'not_delivered' AND created_at >= ?`)
+    .get(sinceIso) as { c: number };
+  return row.c;
+}
+
+/** Newest first. */
+export function listNotices(limit: number, offset: number): NoticeRow[] {
+  return getDatabase()
+    .prepare('SELECT * FROM run_notices ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?')
+    .all(limit, offset) as NoticeRow[];
+}
+
+const SUMMARY_CHUNK = 500;
+
+/** Summaries keyed by notice id; unknown ids are omitted. */
+export function getNoticeSummaries(ids: string[]): Record<string, NoticeSummary> {
+  const unique = [...new Set(ids.filter((id) => typeof id === 'string' && id.length > 0))];
+  const out: Record<string, NoticeSummary> = {};
+  for (let i = 0; i < unique.length; i += SUMMARY_CHUNK) {
+    const chunk = unique.slice(i, i + SUMMARY_CHUNK);
+    const placeholders = chunk.map(() => '?').join(', ');
+    const rows = getDatabase()
+      .prepare(`SELECT id, state, last_error, release_at, pickup_deadline FROM run_notices WHERE id IN (${placeholders})`)
+      .all(...chunk) as Array<Omit<NoticeSummary, 'run_tag'>>;
+    for (const r of rows) {
+      out[r.id] = {
+        id: r.id,
+        run_tag: runTag(r.id),
+        state: r.state,
+        last_error: r.last_error,
+        release_at: r.release_at,
+        pickup_deadline: r.pickup_deadline,
+      };
+    }
+  }
+  return out;
 }
