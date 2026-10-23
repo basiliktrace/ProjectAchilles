@@ -4,9 +4,7 @@ import os from 'os';
 import path from 'path';
 import type { AgentOS } from '../../types/agent.js';
 
-export type ArtifactResolution =
-  | { ok: true; binaryName: string; sha256: string; size: number }
-  | {
+export type ArtifactFailure = {
       ok: false;
       reason: 'not built' | `no ${AgentOS} binary` | 'binary missing on server';
       /** Filename that was expected on disk (reason 'binary missing on server'). */
@@ -14,6 +12,13 @@ export type ArtifactResolution =
       /** OSes the build recorded (reason 'no <os> binary'); empty for legacy builds. */
       built?: string[];
     };
+
+export type ArtifactResolution =
+  | { ok: true; binaryName: string; sha256: string; size: number }
+  | ArtifactFailure;
+
+/** Result of an existence-only check (no hashing). */
+export type ArtifactExistence = { ok: true; binaryName: string } | ArtifactFailure;
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 type BuildMeta = any;
@@ -46,8 +51,19 @@ export function readBuildMeta(testUuid: string): BuildMeta | null {
 export function resolveTestArtifact(
   testUuid: string,
   agentOs: AgentOS | string,
-  opts: { fallbackFilename?: string; meta?: BuildMeta } = {},
-): ArtifactResolution {
+  opts?: { fallbackFilename?: string; meta?: BuildMeta; hash?: true },
+): ArtifactResolution;
+/** `hash: false` checks existence only: no file read, no sha256/size. */
+export function resolveTestArtifact(
+  testUuid: string,
+  agentOs: AgentOS | string,
+  opts: { fallbackFilename?: string; meta?: BuildMeta; hash: false },
+): ArtifactExistence;
+export function resolveTestArtifact(
+  testUuid: string,
+  agentOs: AgentOS | string,
+  opts: { fallbackFilename?: string; meta?: BuildMeta; hash?: boolean } = {},
+): ArtifactResolution | ArtifactExistence {
   const fallbackFilename = opts.fallbackFilename;
   let meta: BuildMeta | null;
   try {
@@ -76,6 +92,7 @@ export function resolveTestArtifact(
   if (!fs.existsSync(resolvedPath)) {
     return { ok: false, reason: 'binary missing on server', filename };
   }
+  if (opts.hash === false) return { ok: true, binaryName: filename };
   const buffer = fs.readFileSync(resolvedPath);
   return {
     ok: true,

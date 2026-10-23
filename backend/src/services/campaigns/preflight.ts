@@ -18,6 +18,7 @@ interface AgentRow {
   hostname: string;
   os: string;
   status: string;
+  org_id: string;
 }
 
 /**
@@ -25,15 +26,21 @@ interface AgentRow {
  * created. Uses the same artifact resolution as createTasks so the two cannot
  * disagree. Pure read; writes nothing.
  */
+function checkArtifact(testUuid: string, os: string) {
+  return resolveTestArtifact(testUuid, os, { hash: false });
+}
+
 export function preflightCampaign(campaign: Campaign): PreflightResult {
   const db = getDatabase();
   const ids = campaign.agent_ids;
   const rows = ids.length
     ? (db
-        .prepare(`SELECT id, hostname, os, status FROM agents WHERE id IN (${ids.map(() => '?').join(', ')})`)
+        .prepare(`SELECT id, hostname, os, status, org_id FROM agents WHERE id IN (${ids.map(() => '?').join(', ')})`)
         .all(...ids) as AgentRow[])
     : [];
-  const byId = new Map(rows.map((r) => [r.id, r]));
+  // Agents from another org are treated as ineligible and never exposed.
+  const foreign = new Set(rows.filter((r) => r.org_id !== campaign.org_id).map((r) => r.id));
+  const byId = new Map(rows.filter((r) => !foreign.has(r.id)).map((r) => [r.id, r]));
 
   const result: PreflightResult = { dispatch: [], skipped: [], task_count: 0, tests: [], agents: [] };
 
@@ -55,8 +62,14 @@ export function preflightCampaign(campaign: Campaign): PreflightResult {
 
     const agentIds: string[] = [];
     let binaryName = '';
+    // At most one resolution per (test, os): existence only, no hashing.
+    const byOs = new Map<string, ReturnType<typeof checkArtifact>>();
     for (const agentId of ids) {
       const agent = byId.get(agentId);
+      if (foreign.has(agentId)) {
+        result.skipped.push({ test_uuid: testUuid, agent_id: agentId, reason: 'agent not in organization' });
+        continue;
+      }
       if (!agent) {
         result.skipped.push({ test_uuid: testUuid, agent_id: agentId, reason: 'agent deleted' });
         continue;
@@ -65,7 +78,11 @@ export function preflightCampaign(campaign: Campaign): PreflightResult {
         result.skipped.push({ test_uuid: testUuid, agent_id: agentId, reason: `agent ${agent.status}` });
         continue;
       }
-      const res = resolveTestArtifact(testUuid, agent.os);
+      let res = byOs.get(agent.os);
+      if (!res) {
+        res = checkArtifact(testUuid, agent.os);
+        byOs.set(agent.os, res);
+      }
       if (!res.ok) {
         result.skipped.push({ test_uuid: testUuid, agent_id: agentId, reason: res.reason });
         continue;

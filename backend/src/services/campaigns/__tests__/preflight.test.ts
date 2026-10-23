@@ -73,4 +73,29 @@ describe('preflightCampaign', () => {
     expect(r.dispatch).toHaveLength(1);
     expect(r.agents.map((a) => a.id)).toEqual(['win', 'dec']);
   });
+
+  it('org-scopes agents: foreign agent skipped and not exposed; missing id stays deleted', () => {
+    insertTestAgent(testDb, { id: 'foe', org_id: 'org-2', hostname: 'secret-host', os: 'windows' });
+    writeBuild('t1', { filename: 't1.exe' }, { 't1.exe': 'x' });
+    const r = preflightCampaign(camp(['t1', 't2'], ['win', 'foe', 'ghost']));
+    expect(r.skipped).toEqual(expect.arrayContaining([
+      { test_uuid: 't1', agent_id: 'foe', reason: 'agent not in organization' },
+      { test_uuid: 't1', agent_id: 'ghost', reason: 'agent deleted' },
+    ]));
+    expect(JSON.stringify(r)).not.toContain('secret-host');
+    expect(r.agents.map((a) => a.id)).toEqual(['win']);
+  });
+
+  it('resolves once per (test, os), without hashing', () => {
+    for (let i = 0; i < 5; i++) insertTestAgent(testDb, { id: `w${i}`, org_id: 'org-1', hostname: `w${i}`, os: 'windows' });
+    writeBuild('t1', { filename: 't1.exe' }, { 't1.exe': 'x' });
+    const exists = vi.spyOn(fs, 'existsSync');
+    const read = vi.spyOn(fs, 'readFileSync');
+    const r = preflightCampaign(camp(['t1'], ['w0', 'w1', 'w2', 'w3', 'w4']));
+    expect(r.task_count).toBe(5);
+    const binChecks = exists.mock.calls.filter((c) => String(c[0]).endsWith('t1.exe'));
+    expect(binChecks).toHaveLength(1);
+    expect(read.mock.calls.filter((c) => String(c[0]).endsWith('t1.exe'))).toHaveLength(0);
+    vi.restoreAllMocks();
+  });
 });
