@@ -37,6 +37,15 @@ const ONLINE_THRESHOLD_MS = 180_000;
 /** Used for window_end when no linked task carries an execution_timeout. */
 const DEFAULT_EXECUTION_TIMEOUT_SEC = 300;
 
+/**
+ * Ruling R23: a per-machine run that comes due when today's day notice is
+ * already announced with less than this left before its pickup deadline gets
+ * its own run notice (fresh email, normal run window). An announced notice's
+ * deadline is never extended, so joining it would leave too little time to be
+ * picked up and expire the task as "host offline".
+ */
+export const LATE_LINK_MIN_PICKUP_MS = 10 * MIN;
+
 const SKIP_NO_TASKS = 'no tasks were created';
 const SKIP_NONE_HELD = 'all linked tasks were cancelled or completed';
 const SKIP_COLLISION = 'previous run still waiting for notice delivery';
@@ -213,6 +222,15 @@ export interface SchedulerTick {
   /** List a schedule on its org's run notice for this tick, after its createTasks succeeded. */
   confirmRunSchedule(scheduleId: string, orgId: string | null): void;
   dayNoticeFor(schedule: DayNoticeSchedule): string | null;
+  /**
+   * Rulings R23/R24: today's day notice for `schedule` when it is already
+   * announced (`sent`/`overridden`) with less than LATE_LINK_MIN_PICKUP_MS
+   * before its pickup deadline, as `{ dayWindowEnd }`. The caller then links
+   * this tick's due tasks, plus every remaining agent slotted before
+   * `dayWindowEnd`, to runNoticeFor instead of dayNoticeFor. Null when the
+   * gate is off or there is no such notice.
+   */
+  closedDayNotice(schedule: Pick<DayNoticeSchedule, 'id' | 'org_id' | 'timezone'>): { dayWindowEnd: Date } | null;
   hasPendingRunNotice(scheduleId: string, orgId: string | null): boolean;
   recordSkippedOccurrence(scheduleId: string, createdBy: string, timezone: string, orgId: string | null): void;
 }
@@ -319,6 +337,21 @@ export function createSchedulerTick(now: Date): SchedulerTick {
         if (!raced) throw err;
         return raced.id;
       }
+    },
+
+    closedDayNotice(schedule) {
+      if (!gateEnabled(schedule.org_id)) return null;
+      const tz = safeTimezone(schedule.timezone);
+      const existing = repo.getDayNotice(schedule.id, todayInTimezone(tz, now));
+      // Pending: its deadline is computed at acceptance (R7). not_delivered /
+      // skipped keep their own rules (R5/R18/R19).
+      if (!existing || (existing.state !== 'sent' && existing.state !== 'overridden')) return null;
+      const deadline = parseTimestamp(existing.pickup_deadline);
+      // A released notice with no deadline would never serve a task.
+      const closed = deadline === null || deadline - now.getTime() < LATE_LINK_MIN_PICKUP_MS;
+      if (!closed) return null;
+      // Without a stored window end, sweep nothing beyond the agents due now.
+      return { dayWindowEnd: new Date(parseTimestamp(existing.day_window_end) ?? now.getTime()) };
     },
 
     hasPendingRunNotice(scheduleId, orgId) {
