@@ -302,6 +302,8 @@ code {
     color-scheme: light;
     -webkit-print-color-adjust: exact;
     print-color-adjust: exact;
+    /* AppShell's bg-background wrapper sits outside .campaign-run-print. */
+    --background: var(--cr-paper);
   }
   .campaign-run-print {
     page: campaign-run;
