@@ -2,6 +2,7 @@ import { randomUUID } from 'crypto';
 import { AppError } from '../../middleware/error.middleware.js';
 import { getTestMetadata } from '../agent/test-catalog.service.js';
 import * as repo from './campaigns.repo.js';
+import { computeRunTotals } from './matrix.js';
 import type { Campaign, CampaignRow } from './types.js';
 
 export interface CampaignInput {
@@ -117,8 +118,7 @@ export function listCampaigns(callerOrg: string | undefined): CampaignListItem[]
     const run = runs.get(row.id);
     return {
       ...toCampaign(row),
-      // percent_protected is wired in by Task 5 (computeRunTotals); null until then.
-      last_run: run ? { id: run.id, started_at: run.started_at, percent_protected: null } : null,
+      last_run: run ? { id: run.id, started_at: run.started_at, percent_protected: computeRunTotals(run.id).percent_protected } : null,
     };
   });
 }

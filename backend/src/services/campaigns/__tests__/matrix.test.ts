@@ -1,0 +1,174 @@
+import { describe, it, expect, beforeEach, vi } from 'vitest';
+import type Database from 'better-sqlite3';
+import { createTestDatabase, insertTestAgent } from '../../../__tests__/helpers/db.js';
+
+let testDb: Database.Database;
+
+vi.mock('../../agent/database.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../agent/database.js')>()),
+  getDatabase: () => testDb,
+}));
+vi.mock('../../agent/test-catalog.service.js', () => ({
+  getTestMetadata: (uuid: string) => ({ uuid, name: `Test ${uuid}`, techniques: [] }),
+}));
+
+const { getRunMatrix, computeRunTotals, listRuns, runMatrixCsv } = await import('../matrix.js');
+const { createCampaign, updateCampaign, listCampaigns } = await import('../campaigns.service.js');
+const { insertNotice } = await import('../../notices/notices.repo.js');
+
+const ORG = 'org-1';
+let seq = 0;
+
+function insertRun(id: string, campaignId: string, snapshot: object, noticeId: string | null = null, org = ORG) {
+  testDb
+    .prepare(
+      `INSERT INTO campaign_runs (id, campaign_id, org_id, started_by, started_at, notice_id, snapshot, task_count)
+       VALUES (?, ?, ?, 'u1', ?, ?, ?, 1)`,
+    )
+    .run(id, campaignId, org, new Date().toISOString(), noticeId, JSON.stringify(snapshot));
+}
+
+function insertTask(o: {
+  runId: string; agent: string; test: string; status: string; exit?: number; noticeId?: string | null;
+  createdAt?: string; techniques?: string[]; id?: string;
+}): string {
+  const id = o.id ?? `task-${++seq}`;
+  testDb
+    .prepare(
+      `INSERT INTO tasks (id, agent_id, org_id, type, status, payload, result, created_at, completed_at, notice_id, campaign_run_id)
+       VALUES (?, ?, ?, 'execute_test', ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .run(
+      id, o.agent, ORG, o.status,
+      JSON.stringify({ test_uuid: o.test, test_name: o.test, metadata: { techniques: o.techniques ?? [] } }),
+      o.exit === undefined ? null : JSON.stringify({ exit_code: o.exit }),
+      o.createdAt ?? '2026-10-23 10:00:00',
+      o.status === 'completed' ? '2026-10-23T10:05:00.000Z' : null,
+      o.noticeId ?? null, o.runId,
+    );
+  return id;
+}
+
+function notice(id: string, state: string, releaseAt: string | null) {
+  insertNotice({
+    id, kind: 'run', state: 'pending', sourceType: 'campaign', scheduleIds: [], timezone: 'UTC',
+    createdBy: 'u1', createdAt: new Date().toISOString(), recipients: [], orgId: ORG,
+  } as unknown as Parameters<typeof insertNotice>[0]);
+  testDb.prepare('UPDATE run_notices SET state = ?, release_at = ? WHERE id = ?').run(state, releaseAt, id);
+}
+
+const snap = (tests: string[], agents: string[], skipped: object[] = []) => ({
+  campaign_name: 'C',
+  framework_label: 'Q4',
+  tests: tests.map((t) => ({ uuid: t, name: `Test ${t}` })),
+  agents: agents.map((a) => ({ id: a, hostname: `host-${a}`, os: 'windows' })),
+  skipped,
+});
+
+describe('campaign run matrix', () => {
+  beforeEach(() => {
+    testDb = createTestDatabase();
+    for (const a of ['a1', 'a2', 'a3', 'a4']) insertTestAgent(testDb, { id: a, org_id: ORG, hostname: `host-${a}`, os: 'windows' });
+  });
+
+  it('produces all 7 states', () => {
+    const past = new Date(Date.now() - 60_000).toISOString();
+    const future = new Date(Date.now() + 3_600_000).toISOString();
+    notice('n-wait', 'pending', null);
+    notice('n-future', 'sent', future);
+    notice('n-rel', 'overridden', past);
+    insertRun('r1', 'c1', snap(['t1', 't2', 't3', 't4', 't5', 't6', 't7'], ['a1'], [{ test_uuid: 't7', agent_id: 'a1', reason: 'not built' }]), 'n-wait');
+    insertTask({ runId: 'r1', agent: 'a1', test: 't1', status: 'pending', noticeId: 'n-wait' });
+    insertTask({ runId: 'r1', agent: 'a1', test: 't2', status: 'pending', noticeId: 'n-future' });
+    insertTask({ runId: 'r1', agent: 'a1', test: 't3', status: 'pending', noticeId: 'n-rel' });
+    insertTask({ runId: 'r1', agent: 'a1', test: 't4', status: 'executing' });
+    insertTask({ runId: 'r1', agent: 'a1', test: 't5', status: 'completed', exit: 126 });
+    insertTask({ runId: 'r1', agent: 'a1', test: 't6', status: 'expired' });
+    const m = getRunMatrix('r1', ORG);
+    const st = (t: string) => m.cells[t].a1.state;
+    expect([st('t1'), st('t2'), st('t3'), st('t4'), st('t5'), st('t6'), st('t7')]).toEqual([
+      'waiting_for_notice', 'waiting_for_notice', 'running', 'running', 'protected', 'not_run', 'na',
+    ]);
+    expect(m.cells.t7.a1.reason).toBe('not built');
+    expect(m.run.notice?.id).toBe('n-wait');
+
+    insertTask({ runId: 'r1', agent: 'a1', test: 't1', status: 'completed', exit: 101, createdAt: '2026-10-23 11:00:00' });
+    insertTask({ runId: 'r1', agent: 'a1', test: 't2', status: 'failed' , createdAt: '2026-10-23 11:00:00' });
+    const m2 = getRunMatrix('r1', ORG);
+    expect(m2.cells.t1.a1.state).toBe('unprotected');
+    expect(m2.cells.t2.a1.state).toBe('error');
+    expect(m2.totals.na).toBe(1);
+  });
+
+  it('percent protected: 2/3 -> 67, all-error -> null', () => {
+    insertRun('r2', 'c1', snap(['t1', 't2', 't3', 't4'], ['a1']));
+    insertTask({ runId: 'r2', agent: 'a1', test: 't1', status: 'completed', exit: 105 });
+    insertTask({ runId: 'r2', agent: 'a1', test: 't2', status: 'completed', exit: 127 });
+    insertTask({ runId: 'r2', agent: 'a1', test: 't3', status: 'completed', exit: 101 });
+    insertTask({ runId: 'r2', agent: 'a1', test: 't4', status: 'completed', exit: 1 });
+    expect(computeRunTotals('r2')).toMatchObject({ protected: 2, unprotected: 1, error: 1, percent_protected: 67 });
+
+    insertRun('r3', 'c1', snap(['t1'], ['a1']));
+    insertTask({ runId: 'r3', agent: 'a1', test: 't1', status: 'failed' });
+    expect(computeRunTotals('r3').percent_protected).toBeNull();
+  });
+
+  it('a retry wins over the failed original', () => {
+    insertRun('r4', 'c1', snap(['t1'], ['a1']));
+    insertTask({ runId: 'r4', agent: 'a1', test: 't1', status: 'failed', createdAt: '2026-10-23 10:00:00' });
+    insertTask({ runId: 'r4', agent: 'a1', test: 't1', status: 'completed', exit: 126, createdAt: '2026-10-23 10:30:00' });
+    expect(getRunMatrix('r4', ORG).cells.t1.a1).toMatchObject({ state: 'protected', exit_code: 126 });
+  });
+
+  it('same created_at: higher rowid wins', () => {
+    insertRun('r5', 'c1', snap(['t1'], ['a1']));
+    insertTask({ runId: 'r5', agent: 'a1', test: 't1', status: 'failed' });
+    insertTask({ runId: 'r5', agent: 'a1', test: 't1', status: 'completed', exit: 101 });
+    expect(getRunMatrix('r5', ORG).cells.t1.a1.state).toBe('unprotected');
+  });
+
+  it('snapshot is immutable after the campaign is edited', () => {
+    const c = createCampaign({ name: 'Snap', test_uuids: ['t1'], agent_ids: ['a1'] }, ORG, 'u1');
+    insertRun('r6', c.id, snap(['t1'], ['a1']));
+    insertTask({ runId: 'r6', agent: 'a1', test: 't1', status: 'completed', exit: 126 });
+    const before = getRunMatrix('r6', ORG);
+    updateCampaign(c.id, { name: 'Snap2', test_uuids: ['t2', 't3'], agent_ids: ['a2', 'a3'] }, ORG);
+    const after = getRunMatrix('r6', ORG);
+    expect(after.tests).toEqual(before.tests);
+    expect(after.agents).toEqual(before.agents);
+    expect(after.cells).toEqual(before.cells);
+    expect(after.run.campaign_name).toBe('C');
+  });
+
+  it('cross-org getRunMatrix is a 404; undefined org is unfiltered; listRuns is scoped', () => {
+    insertRun('r7', 'c1', snap(['t1'], ['a1']));
+    expect(() => getRunMatrix('r7', 'other-org')).toThrow(/Campaign run not found/);
+    expect(getRunMatrix('r7', undefined).run.id).toBe('r7');
+    expect(listRuns('c1', 'other-org')).toEqual([]);
+    expect(listRuns('c1', ORG)).toHaveLength(1);
+    expect(listRuns('c1', undefined)[0]).toMatchObject({ id: 'r7', task_count: 1, percent_protected: null });
+  });
+
+  it('CSV: header, formula guard, comma quoting, empty na outcome, techniques', () => {
+    const s = snap(['t1', 't2'], ['a1']);
+    s.tests[0].name = "=cmd|' /C calc'!A0";
+    s.agents[0].hostname = 'web,01';
+    s.skipped = [{ test_uuid: 't2', agent_id: 'a1', reason: 'no windows binary' }] as never;
+    insertRun('r8', 'c1', s);
+    insertTask({ runId: 'r8', agent: 'a1', test: 't1', status: 'completed', exit: 101, techniques: ['T1059', 'T1105'] });
+    const csv = runMatrixCsv(getRunMatrix('r8', ORG));
+    const lines = csv.trimEnd().split('\r\n');
+    expect(lines[0]).toBe('test,techniques,host,os,outcome,exit_code,completed_at');
+    expect(lines[1]).toBe(`'=cmd|' /C calc'!A0,T1059; T1105,"web,01",windows,unprotected,101,2026-10-23T10:05:00.000Z`);
+    expect(lines[2]).toBe('Test t2,,"web,01",windows,,,');
+  });
+
+  it('listCampaigns last_run.percent_protected is populated', () => {
+    const c = createCampaign({ name: 'L', test_uuids: ['t1', 't2'], agent_ids: ['a1'] }, ORG, 'u1');
+    insertRun('r9', c.id, snap(['t1', 't2'], ['a1']));
+    insertTask({ runId: 'r9', agent: 'a1', test: 't1', status: 'completed', exit: 126 });
+    insertTask({ runId: 'r9', agent: 'a1', test: 't2', status: 'completed', exit: 101 });
+    const item = listCampaigns(ORG).find((x) => x.id === c.id)!;
+    expect(item.last_run?.percent_protected).toBe(50);
+  });
+});
