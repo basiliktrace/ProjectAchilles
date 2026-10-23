@@ -1,7 +1,4 @@
 import crypto from 'crypto';
-import fs from 'fs';
-import path from 'path';
-import os from 'os';
 import { getDatabase } from './database.js';
 import { AppError } from '../../middleware/error.middleware.js';
 import type {
@@ -18,6 +15,7 @@ import type {
   ListTasksRequest,
 } from '../../types/agent.js';
 import { getTestMetadata } from './test-catalog.service.js';
+import { readBuildMeta, resolveTestArtifact } from './testArtifacts.js';
 import { IntegrationsSettingsService } from '../integrations/settings.js';
 import { recordEvent } from './events.service.js';
 import { getNoticeSummaries } from '../notices/notices.repo.js';
@@ -53,6 +51,7 @@ interface TaskRow {
   ingest_attempts: number;
   last_ingest_attempt_at: string | null;
   notice_id?: string | null;
+  campaign_run_id?: string | null;
 }
 
 function parseTaskRow(row: TaskRow): Task {
@@ -167,6 +166,7 @@ export function createTasks(
 ): string[] {
   const db = getDatabase();
   const noticeId = options.noticeId ?? null;
+  const campaignRunId = options.campaignRunId ?? null;
 
   const {
     agent_ids,
@@ -189,52 +189,35 @@ export function createTasks(
     throw new AppError('test_uuid, test_name, and binary_name are required', 400);
   }
 
-  // Resolve build directory and read build-meta.json
-  const buildDir = path.join(os.homedir(), '.projectachilles', 'builds', test_uuid);
-  const metaPath = path.join(buildDir, 'build-meta.json');
+  // Build metadata must exist (404 otherwise); per-OS artifact resolution is
+  // shared with campaign preflight in testArtifacts.ts.
+  const buildMeta = readBuildMeta(test_uuid);
 
-  if (!fs.existsSync(metaPath)) {
+  if (!buildMeta) {
     throw new AppError(`Build metadata not found for test ${test_uuid}`, 404);
   }
 
-  const buildMeta = JSON.parse(fs.readFileSync(metaPath, 'utf-8'));
-
-  // Resolve the test binary PER AGENT OS. A cross-platform build records a
-  // per-OS `binaries` map ({ windows: {filename}, linux: {filename}, ... });
-  // older single-binary builds only have one `filename`/`binary_name`. Shipping
-  // one binary to every agent regardless of OS caused Windows agents to receive
-  // the Linux orchestrator (no `.exe`), which Windows refuses to launch
-  // ("executable file not found in %PATH%"). Each agent now gets the artifact
-  // built for its own OS; hashes/sizes are memoized so each file is read once.
-  const legacyFilename: string = buildMeta.binary_name ?? buildMeta.filename ?? binary_name;
-  const hasOsMap = buildMeta.binaries && typeof buildMeta.binaries === 'object';
+  // Resolve the test binary PER AGENT OS (see resolveTestArtifact). Shipping one
+  // binary to every agent regardless of OS caused Windows agents to receive the
+  // Linux orchestrator. Results are memoized per OS so each file is read once.
   const artifactCache = new Map<string, { name: string; sha256: string; size: number }>();
 
   function resolveArtifactForOs(agentOs: string): { name: string; sha256: string; size: number } {
-    const filename: string | undefined = hasOsMap
-      ? buildMeta.binaries[agentOs]?.filename
-      : legacyFilename;
-    if (!filename) {
-      const built = hasOsMap ? Object.keys(buildMeta.binaries).join(', ') : 'none';
+    const cached = artifactCache.get(agentOs);
+    if (cached) return cached;
+    const res = resolveTestArtifact(test_uuid, agentOs, { fallbackFilename: binary_name, meta: buildMeta });
+    if (!res.ok) {
+      if (res.reason === 'binary missing on server') {
+        throw new AppError(`Binary file not found: ${res.filename}`, 404);
+      }
+      const built = res.built && res.built.length > 0 ? res.built.join(', ') : 'none';
       throw new AppError(
         `No binary was built for OS '${agentOs}' (test ${test_uuid}; built for: ${built})`,
         422,
       );
     }
-    const cached = artifactCache.get(filename);
-    if (cached) return cached;
-
-    const resolvedPath = path.join(buildDir, filename);
-    if (!fs.existsSync(resolvedPath)) {
-      throw new AppError(`Binary file not found: ${filename}`, 404);
-    }
-    const buffer = fs.readFileSync(resolvedPath);
-    const artifact = {
-      name: filename,
-      sha256: crypto.createHash('sha256').update(buffer).digest('hex'),
-      size: fs.statSync(resolvedPath).size,
-    };
-    artifactCache.set(filename, artifact);
+    const artifact = { name: res.binaryName, sha256: res.sha256, size: res.size };
+    artifactCache.set(agentOs, artifact);
     return artifact;
   }
 
@@ -312,8 +295,8 @@ export function createTasks(
   // Insert tasks inside a transaction
   const batchId = crypto.randomUUID();
   const insertStmt = db.prepare(`
-    INSERT INTO tasks (id, agent_id, org_id, type, priority, status, payload, created_at, ttl, created_by, target_index, batch_id, max_retries, notice_id)
-    VALUES (?, ?, ?, 'execute_test', ?, 'pending', ?, datetime('now'), 604800, ?, ?, ?, ?, ?)
+    INSERT INTO tasks (id, agent_id, org_id, type, priority, status, payload, created_at, ttl, created_by, target_index, batch_id, max_retries, notice_id, campaign_run_id)
+    VALUES (?, ?, ?, 'execute_test', ?, 'pending', ?, datetime('now'), 604800, ?, ?, ?, ?, ?, ?)
   `);
 
   const taskIds: string[] = [];
@@ -321,7 +304,7 @@ export function createTasks(
   const insertAll = db.transaction(() => {
     for (const agentId of agent_ids) {
       const taskId = crypto.randomUUID();
-      insertStmt.run(taskId, agentId, orgId, priority, payloadByAgentId.get(agentId)!, createdBy, target_index ?? null, batchId, max_retries, noticeId);
+      insertStmt.run(taskId, agentId, orgId, priority, payloadByAgentId.get(agentId)!, createdBy, target_index ?? null, batchId, max_retries, noticeId, campaignRunId);
       taskIds.push(taskId);
     }
   });
@@ -1087,14 +1070,14 @@ export function retryTask(taskId: string, retriedBy: string, noticeId: string | 
   db.prepare(`
     INSERT INTO tasks (id, agent_id, org_id, type, priority, status, payload,
       created_at, ttl, created_by, target_index, batch_id,
-      retry_count, max_retries, original_task_id, notes, notes_history, notice_id)
+      retry_count, max_retries, original_task_id, notes, notes_history, notice_id, campaign_run_id)
     VALUES (?, ?, ?, ?, ?, 'pending', ?, datetime('now'), ?, ?, ?, ?,
-      ?, ?, ?, NULL, '[]', ?)
+      ?, ?, ?, NULL, '[]', ?, ?)
   `).run(
     retryId, row.agent_id, row.org_id, row.type,
     row.priority, row.payload, row.ttl, retriedBy,
     row.target_index, row.batch_id,
-    (row.retry_count ?? 0) + 1, row.max_retries ?? 2, originalId, noticeId,
+    (row.retry_count ?? 0) + 1, row.max_retries ?? 2, originalId, noticeId, row.campaign_run_id ?? null,
   );
 
   console.log(`[tasks] Manual retry of task ${taskId} by ${retriedBy} → ${retryId}`);
@@ -1175,9 +1158,9 @@ export function expireStaleTasks(): number {
   const insertRetry = db.prepare(`
     INSERT INTO tasks (id, agent_id, org_id, type, priority, status, payload,
       created_at, ttl, created_by, target_index, batch_id,
-      retry_count, max_retries, original_task_id, notes, notes_history, notice_id)
+      retry_count, max_retries, original_task_id, notes, notes_history, notice_id, campaign_run_id)
     VALUES (?, ?, ?, ?, ?, 'pending', ?, datetime('now'), ?, ?, ?, ?,
-      ?, ?, ?, NULL, '[]', ?)
+      ?, ?, ?, NULL, '[]', ?, ?)
   `);
 
   // Re-fetch the agent's current heartbeat per task to decide whether to
@@ -1226,7 +1209,7 @@ export function expireStaleTasks(): number {
           retryId, task.agent_id, task.org_id, task.type,
           task.priority, task.payload, task.ttl, task.created_by,
           task.target_index, task.batch_id,
-          retryCount + 1, maxRetries, originalId, task.notice_id ?? null,
+          retryCount + 1, maxRetries, originalId, task.notice_id ?? null, task.campaign_run_id ?? null,
         );
         console.log(`[tasks] Created retry ${retryCount + 1}/${maxRetries} for task ${task.id} → ${retryId}`);
       } else if (canRetry) {
@@ -1291,9 +1274,9 @@ export function expireOverdueTasks(): number {
   const insertRetry = db.prepare(`
     INSERT INTO tasks (id, agent_id, org_id, type, priority, status, payload,
       created_at, ttl, created_by, target_index, batch_id,
-      retry_count, max_retries, original_task_id, notes, notes_history, notice_id)
+      retry_count, max_retries, original_task_id, notes, notes_history, notice_id, campaign_run_id)
     VALUES (?, ?, ?, ?, ?, 'pending', ?, datetime('now'), ?, ?, ?, ?,
-      ?, ?, ?, NULL, '[]', ?)
+      ?, ?, ?, NULL, '[]', ?, ?)
   `);
 
   db.transaction(() => {
@@ -1319,7 +1302,7 @@ export function expireOverdueTasks(): number {
           retryId, task.agent_id, task.org_id, task.type,
           task.priority, task.payload, task.ttl, task.created_by,
           task.target_index, task.batch_id,
-          retryCount + 1, maxRetries, originalId, task.notice_id ?? null,
+          retryCount + 1, maxRetries, originalId, task.notice_id ?? null, task.campaign_run_id ?? null,
         );
         console.log(`[tasks] Created retry ${retryCount + 1}/${maxRetries} for overdue task ${task.id} → ${retryId}`);
       }

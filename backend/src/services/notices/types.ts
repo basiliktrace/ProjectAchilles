@@ -64,3 +64,15 @@ export interface NoticeSummary {
   release_at: string | null;
   pickup_deadline: string | null;
 }
+
+/**
+ * A notice summary plus its delivery record (who it went to, when, or who
+ * released it without notice). Used by the campaign evidence page.
+ */
+export interface NoticeRecord extends NoticeSummary {
+  sent_at: string | null;
+  recipients: string[];
+  override_by: string | null;
+  override_reason: string | null;
+  override_at: string | null;
+}

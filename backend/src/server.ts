@@ -36,6 +36,7 @@ import defenderRoutes from './api/defender.routes.js';
 import crowdstrikeRoutes from './api/crowdstrike.routes.js';
 import riskAcceptanceRoutes from './api/risk-acceptance.routes.js';
 import noticesRoutes from './api/notices.routes.js';
+import campaignsRoutes from './api/campaigns.routes.js';
 import { processNotices } from './services/notices/notices.service.js';
 import reportsRoutes from './api/reports.routes.js';
 import cliAuthRoutes from './api/cli-auth.routes.js';
@@ -307,6 +308,7 @@ async function startServer() {
       gitSync: true,
       agentBuild: true,
       preExecutionNotices: true,
+      campaigns: true,
       platform: 'docker',
     });
   });
@@ -350,6 +352,9 @@ async function startServer() {
 
   // Pre-execution notices - settings, status, admin release
   app.use('/api/notices', noticesRoutes);
+
+  // Campaigns - saved test plans, one-click runs, evidence matrix
+  app.use('/api/campaigns', campaignsRoutes);
 
   // Compliance reports (SB-PC-2026-001 etc.) - read-only ES projections
   app.use('/api/reports', reportsRoutes);

@@ -31,9 +31,9 @@ cd backend && npm run build      # tsc → dist/
 
 ```bash
 # All tests
-cd backend && npm test           # 2497 tests across 117 files
-cd frontend && npm test          # 1171 tests across 112 files
-cd backend-serverless && npm test  # 1698 tests across 69 files
+cd backend && npm test           # 2695 tests across 130 files
+cd frontend && npm test          # 1210 tests across 119 files
+cd backend-serverless && npm test  # 1719 tests across 69 files
 
 # Single file
 cd backend && npx vitest src/services/agent/__tests__/enrollment.service.test.ts
@@ -126,6 +126,7 @@ SQLite has no `ALTER COLUMN`, so changing CHECK constraints requires recreating 
 | `/api/integrations/defender/*` | Clerk | Defender credentials, sync trigger |
 | `/api/agent/admin/*` | Clerk | Agent management (tokens, tasks, schedules) |
 | `/api/agent/*` | Agent key | Device endpoints (enroll, heartbeat, tasks) |
+| `/api/campaigns/*` | Clerk | Saved test campaigns (tests x agents), one-click runs, evidence matrix, CSV export; backend-only |
 | `/api/tests/*` | Clerk | Build system, certificates |
 | `/api/integrations/alerts/*` | Clerk | Alert thresholds, Slack/email config |
 | `/api/notices/*` | Clerk | Pre-execution notice settings, status, release |
@@ -352,7 +353,7 @@ Uses `backend-serverless/` — a fork of the backend adapted for serverless. Rep
 # Key env vars: CLERK_*, TURSO_*, BLOB_READ_WRITE_TOKEN, ENCRYPTION_SECRET
 # Cron routes: /api/cron/schedules, /api/cron/auto-rotation
 # Capabilities endpoint: GET /api/capabilities (feature flags for frontend)
-cd backend-serverless && npm test    # 1698 tests across 69 files
+cd backend-serverless && npm test    # 1719 tests across 69 files
 ```
 
 ### Backend Serverless (`backend-serverless/`)
@@ -387,6 +388,15 @@ Two browser tools are available for visual verification. **Prefer the Claude Cod
 
 ### SVG Text Stroke Inheritance in Recharts
 When writing custom `content` renderers for Recharts components (Treemap, etc.), always set `stroke="none"` on `<text>` elements. Recharts sets `stroke="var(--background)"` on the parent SVG container for cell borders, and SVG `stroke` is an inherited property — it cascades to all children including text. In dark mode `--background` is near-black, so text renders with a visible dark outline around every glyph. In light mode the stroke is white-on-white (invisible), making the bug theme-specific and easy to miss.
+
+### Campaigns
+Saved test plans (tests x agents) with one-click runs and an evidence matrix (`services/campaigns/`, `api/campaigns.routes.ts`, `frontend/src/pages/campaigns/`). User docs: `wiki/docs/user-guide/agent-management/campaigns.md`, `wiki/docs/api-reference/campaigns.md`.
+- **Snapshot immutability**: `campaign_runs` has no FK to `campaigns`; a run stores a JSON snapshot (name, label, tests, agents, skipped pairs, `started_by_name`). Editing or deleting a campaign never changes a past run, and `GET /api/campaigns/runs` still lists runs of deleted campaigns.
+- **`tasks.campaign_run_id`**: any new `tasks` column must also go in `migrateExecuteCommandType`'s `optionalCols` (and its index in the index recreation), or the next table-recreate migration silently drops it. `campaign_run_id` is there.
+- **Shared `resolveTestArtifact`** (`services/agent/testArtifacts.js`): preflight and `createTasks` must both resolve binaries through it so a dry run can never disagree with the real dispatch. Preflight calls it with `hash: false`.
+- **Launch is one transaction** (run row + all tasks + notice) whether or not pre-execution notices are on. Partial runs (skipped pairs) throw `PartialRunError` (409 with `skipped`) until `confirm_partial: true`. Limits: 100 tests, 5,000 tasks per run.
+- **Org**: the run always uses the campaign's org; a mismatched `org_id` is 403; agents are re-checked against the caller's org at launch (400). `REQUIRE_ORG_ISOLATION` makes no-org callers 403 on every route.
+- **Backend-only**: `backend-serverless/` reports `campaigns: false` in `/api/capabilities` and mounts nothing; the frontend hides the nav entry and routes on that flag.
 
 ### Certificate System & Code Signing
 - Multi-cert storage: `~/.projectachilles/certs/cert-<timestamp>/` (max 5)

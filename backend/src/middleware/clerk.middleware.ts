@@ -32,6 +32,20 @@ export function getUserId(auth: any): string | undefined {
 }
 
 /**
+ * The caller's display name from the Clerk session claims, if the session
+ * token carries one: `name`, `full_name`, `email` or `primary_email`, in that
+ * order. Undefined when none is present (callers fall back to the user id).
+ */
+export function getUserDisplayName(auth: any): string | undefined {
+  const claims = auth?.sessionClaims;
+  for (const key of ['name', 'full_name', 'email', 'primary_email']) {
+    const v = claims?.[key];
+    if (typeof v === 'string' && v.trim() !== '') return v.trim();
+  }
+  return undefined;
+}
+
+/**
  * Extract the user's organization ID from Clerk auth.
  * Checks: orgId (Clerk Organizations), sessionClaims.org_id (custom claim), sessionClaims.metadata.org_id.
  */

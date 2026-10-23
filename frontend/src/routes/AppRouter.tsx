@@ -4,6 +4,7 @@ import { useAnalyticsAuth } from '../hooks/useAnalyticsAuth';
 import { useCanAccessModule } from '../hooks/useAppRole';
 import { RequireAuth } from '../components/auth/RequireAuth';
 import { RequireModule } from '../components/auth/RequireModule';
+import { RequireCapability } from '../components/auth/RequireCapability';
 import Layout from '../components/shared/Layout';
 import { Loading } from '../components/shared/ui/Spinner';
 import { Alert } from '../components/shared/ui/Alert';
@@ -26,6 +27,8 @@ const SettingsPage = lazy(() => import('../pages/settings/SettingsPage'));
 const AgentsPage = lazy(() => import('../pages/endpoints/AgentsPage'));
 const AgentDetailPage = lazy(() => import('../pages/endpoints/AgentDetailPage'));
 const TasksPage = lazy(() => import('../pages/endpoints/TasksPage'));
+const CampaignsPage = lazy(() => import('../pages/campaigns/CampaignsPage'));
+const CampaignRunPage = lazy(() => import('../pages/campaigns/CampaignRunPage'));
 
 // Analytics route guard — renders children directly (layout provided by AppLayout above)
 function AnalyticsProtectedRoute({ children }: { children: React.ReactNode }) {
@@ -136,6 +139,8 @@ export default function AppRouter() {
           <Route path="agents" element={<AgentsPage />} />
           <Route path="agents/:agentId" element={<AgentDetailPage />} />
           <Route path="tasks" element={<TasksPage />} />
+          <Route path="campaigns" element={<RequireCapability capability="campaigns"><CampaignsPage /></RequireCapability>} />
+          <Route path="campaigns/runs/:runId" element={<RequireCapability capability="campaigns"><CampaignRunPage /></RequireCapability>} />
         </Route>
 
         {/* Settings */}

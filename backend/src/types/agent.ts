@@ -304,6 +304,8 @@ export interface BundleResults {
 export interface CreateTaskOptions {
   /** Pre-execution notice gating these tasks; NULL/absent = ungated. */
   noticeId?: string | null;
+  /** Campaign run these tasks belong to; NULL/absent = not part of a campaign. */
+  campaignRunId?: string | null;
 }
 
 export interface CreateTaskRequest {

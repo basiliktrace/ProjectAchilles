@@ -211,6 +211,32 @@ export function initializeTables(database: Database.Database): void {
       org_id TEXT
     );
     CREATE INDEX IF NOT EXISTS idx_run_notices_state ON run_notices(state);
+
+    CREATE TABLE IF NOT EXISTS campaigns (
+      id TEXT PRIMARY KEY,
+      org_id TEXT NOT NULL,
+      name TEXT NOT NULL,
+      description TEXT,
+      framework_label TEXT,
+      test_uuids TEXT NOT NULL,
+      agent_ids TEXT NOT NULL,
+      created_by TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE(org_id, name)
+    );
+    -- No FK to campaigns: runs (evidence) survive campaign deletion.
+    CREATE TABLE IF NOT EXISTS campaign_runs (
+      id TEXT PRIMARY KEY,
+      campaign_id TEXT NOT NULL,
+      org_id TEXT NOT NULL,
+      started_by TEXT NOT NULL,
+      started_at TEXT NOT NULL,
+      notice_id TEXT,
+      snapshot TEXT NOT NULL,
+      task_count INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_campaign_runs_campaign ON campaign_runs(campaign_id, started_at);
     CREATE UNIQUE INDEX IF NOT EXISTS idx_run_notices_day ON run_notices(schedule_id, window_date) WHERE kind = 'day';
   `);
 
@@ -263,6 +289,10 @@ export function initializeTables(database: Database.Database): void {
     database.exec(`ALTER TABLE tasks ADD COLUMN notice_id TEXT DEFAULT NULL`);
   }
   database.exec('CREATE INDEX IF NOT EXISTS idx_tasks_notice ON tasks(notice_id)');
+  if (!colNames.has('campaign_run_id')) {
+    database.exec(`ALTER TABLE tasks ADD COLUMN campaign_run_id TEXT DEFAULT NULL`);
+  }
+  database.exec('CREATE INDEX IF NOT EXISTS idx_tasks_campaign_run ON tasks(campaign_run_id)');
 
   // Migration: add api_key_rotated_at column to agents table
   const agentCols = database.prepare(`PRAGMA table_info(agents)`).all() as { name: string }[];
@@ -547,6 +577,7 @@ function migrateExecuteCommandType(database: Database.Database): void {
     colSet.has('ingest_attempts') ? 'ingest_attempts INTEGER NOT NULL DEFAULT 0' : null,
     colSet.has('last_ingest_attempt_at') ? 'last_ingest_attempt_at TEXT DEFAULT NULL' : null,
     colSet.has('notice_id') ? 'notice_id TEXT DEFAULT NULL' : null,
+    colSet.has('campaign_run_id') ? 'campaign_run_id TEXT DEFAULT NULL' : null,
   ].filter(Boolean);
 
   database.exec(`DROP TABLE IF EXISTS tasks_new`);
@@ -576,6 +607,7 @@ function migrateExecuteCommandType(database: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_tasks_org ON tasks(org_id);
     CREATE INDEX IF NOT EXISTS idx_tasks_batch ON tasks(batch_id);
     ${colSet.has('notice_id') ? 'CREATE INDEX IF NOT EXISTS idx_tasks_notice ON tasks(notice_id);' : ''}
+    ${colSet.has('campaign_run_id') ? 'CREATE INDEX IF NOT EXISTS idx_tasks_campaign_run ON tasks(campaign_run_id);' : ''}
   `);
 
   database.pragma('foreign_keys = ON');
