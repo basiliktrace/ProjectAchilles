@@ -118,7 +118,7 @@ describe('campaigns.service', () => {
     expect(svc.listCampaigns('org-1').map((c) => c.id)).toEqual([c1.id]);
     expect(svc.listCampaigns(undefined)).toHaveLength(2);
     expect(svc.listCampaigns('org-1')[0].last_run).toBeNull();
-    testDb.prepare(`INSERT INTO campaign_runs (id, campaign_id, org_id, started_by, started_at, notice_id, snapshot, task_count) VALUES ('r1', ?, 'org-1', 'u', '2026-01-01T00:00:00.000Z', NULL, '{}', 1), ('r2', ?, 'org-1', 'u', '2026-02-01T00:00:00.000Z', NULL, '{}', 1)`).run(c1.id, c1.id);
+    testDb.prepare(`INSERT INTO campaign_runs (id, campaign_id, org_id, started_by, started_at, notice_id, snapshot, task_count) VALUES ('r1', ?, 'org-1', 'u', '2026-01-01T00:00:00.000Z', NULL, '{"campaign_name":"C","framework_label":null,"tests":[],"agents":[],"skipped":[]}', 1), ('r2', ?, 'org-1', 'u', '2026-02-01T00:00:00.000Z', NULL, '{"campaign_name":"C","framework_label":null,"tests":[],"agents":[],"skipped":[]}', 1)`).run(c1.id, c1.id);
     expect(svc.listCampaigns('org-1')[0].last_run).toEqual({ id: 'r2', started_at: '2026-02-01T00:00:00.000Z', percent_protected: null });
   });
 });

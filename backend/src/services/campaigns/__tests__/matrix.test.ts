@@ -30,7 +30,7 @@ function insertRun(id: string, campaignId: string, snapshot: object, noticeId: s
 
 function insertTask(o: {
   runId: string; agent: string; test: string; status: string; exit?: number; noticeId?: string | null;
-  createdAt?: string; techniques?: string[]; id?: string;
+  createdAt?: string; techniques?: string[]; id?: string; stdout?: string; error?: string;
 }): string {
   const id = o.id ?? `task-${++seq}`;
   testDb
@@ -41,7 +41,7 @@ function insertTask(o: {
     .run(
       id, o.agent, ORG, o.status,
       JSON.stringify({ test_uuid: o.test, test_name: o.test, metadata: { techniques: o.techniques ?? [] } }),
-      o.exit === undefined ? null : JSON.stringify({ exit_code: o.exit }),
+      o.exit === undefined && o.error === undefined ? null : JSON.stringify({ exit_code: o.exit, stdout: o.stdout, error: o.error }),
       o.createdAt ?? '2026-10-23 10:00:00',
       o.status === 'completed' ? '2026-10-23T10:05:00.000Z' : null,
       o.noticeId ?? null, o.runId,
@@ -161,6 +161,16 @@ describe('campaign run matrix', () => {
     expect(lines[0]).toBe('test,techniques,host,os,outcome,exit_code,completed_at');
     expect(lines[1]).toBe(`'=cmd|' /C calc'!A0,T1059; T1105,"web,01",windows,unprotected,101,2026-10-23T10:05:00.000Z`);
     expect(lines[2]).toBe('Test t2,,"web,01",windows,,,');
+  });
+
+  it('large stdout does not affect the matrix; not_run surfaces result.error as reason', () => {
+    insertRun('r10', 'c1', snap(['t1', 't2'], ['a1']));
+    insertTask({ runId: 'r10', agent: 'a1', test: 't1', status: 'completed', exit: 126, stdout: 'x'.repeat(2_000_000), techniques: ['T1'] });
+    insertTask({ runId: 'r10', agent: 'a1', test: 't2', status: 'expired', error: 'Not run: host offline during notice window' });
+    const m = getRunMatrix('r10', ORG);
+    expect(m.cells.t1.a1).toMatchObject({ state: 'protected', exit_code: 126, reason: null });
+    expect(m.cells.t2.a1).toMatchObject({ state: 'not_run', reason: 'Not run: host offline during notice window' });
+    expect(runMatrixCsv(m)).toContain('Test t1,T1,');
   });
 
   it('listCampaigns last_run.percent_protected is populated', () => {

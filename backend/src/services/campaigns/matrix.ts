@@ -12,6 +12,8 @@ export interface MatrixCell {
   task_id: string | null;
   completed_at: string | null;
   reason: string | null;
+  /** payload.metadata.techniques of the latest attempt (for the CSV) */
+  techniques: string[];
 }
 
 export interface RunMatrix {
@@ -36,8 +38,10 @@ interface PairTask {
   agent_id: string;
   test_uuid: string;
   status: TaskStatus;
-  result: string | null;
-  payload: string;
+  exit_code: number | null;
+  error: string | null;
+  /** JSON array text from payload.metadata.techniques */
+  techniques: string | null;
   completed_at: string | null;
   notice_id: string | null;
 }
@@ -55,19 +59,25 @@ function findRun(runId: string, callerOrg: string | undefined): CampaignRunRow {
 
 /** Latest attempt per (test, agent) pair in the run: retries inherit campaign_run_id. */
 function latestTasksByPair(runId: string): Map<string, PairTask> {
+  // Only the latest attempt per pair, and only the small fields the matrix needs:
+  // result stdout/stderr can be ~1 MB each and must never be loaded here.
   const rows = getDatabase()
     .prepare(
-      `SELECT id, agent_id, json_extract(payload, '$.test_uuid') AS test_uuid, status, result, payload,
-              completed_at, notice_id
-       FROM tasks WHERE campaign_run_id = ?
-       ORDER BY created_at DESC, rowid DESC`,
+      `SELECT id, agent_id, test_uuid, status, exit_code, error, techniques, completed_at, notice_id FROM (
+         SELECT id, agent_id, json_extract(payload, '$.test_uuid') AS test_uuid, status,
+                json_extract(result, '$.exit_code') AS exit_code,
+                json_extract(result, '$.error') AS error,
+                json_extract(payload, '$.metadata.techniques') AS techniques,
+                completed_at, notice_id,
+                ROW_NUMBER() OVER (
+                  PARTITION BY json_extract(payload, '$.test_uuid'), agent_id
+                  ORDER BY created_at DESC, rowid DESC) AS rn
+         FROM tasks WHERE campaign_run_id = ?
+       ) WHERE rn = 1`,
     )
     .all(runId) as PairTask[];
   const out = new Map<string, PairTask>();
-  for (const r of rows) {
-    const key = `${r.test_uuid}\u0000${r.agent_id}`;
-    if (!out.has(key)) out.set(key, r); // first seen = newest
-  }
+  for (const r of rows) out.set(`${r.test_uuid}\u0000${r.agent_id}`, r);
   return out;
 }
 
@@ -75,9 +85,18 @@ function noticeReleased(n: NoticeSummary | undefined, nowIso: string): boolean {
   return !!n && (n.state === 'sent' || n.state === 'overridden') && n.release_at !== null && n.release_at <= nowIso;
 }
 
+function parseTechniques(raw: string | null): string[] {
+  if (!raw) return [];
+  try {
+    const v = JSON.parse(raw);
+    return Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [];
+  } catch {
+    return [];
+  }
+}
+
 function cellFor(task: PairTask, notices: Record<string, NoticeSummary>, nowIso: string): MatrixCell {
-  const result = task.result ? (JSON.parse(task.result) as TaskResult) : null;
-  const base = { exit_code: result?.exit_code ?? null, task_id: task.id, completed_at: task.completed_at, reason: null };
+  const base = { exit_code: task.exit_code, task_id: task.id, completed_at: task.completed_at, reason: null as string | null, techniques: parseTechniques(task.techniques) };
   let state: CellState;
   switch (task.status) {
     case 'pending':
@@ -89,7 +108,10 @@ function cellFor(task: PairTask, notices: Record<string, NoticeSummary>, nowIso:
       state = 'running';
       break;
     case 'completed': {
-      const o = classifyOutcome({ status: task.status, result });
+      const o = classifyOutcome({
+        status: task.status,
+        result: task.exit_code === null ? null : ({ exit_code: task.exit_code } as TaskResult),
+      });
       state = o === 'notRun' ? 'not_run' : o;
       break;
     }
@@ -99,6 +121,7 @@ function cellFor(task: PairTask, notices: Record<string, NoticeSummary>, nowIso:
     default:
       state = 'not_run'; // expired
   }
+  if (state === 'not_run') base.reason = task.error;
   return { state, ...base };
 }
 
@@ -110,14 +133,7 @@ function totalsOf(cells: Record<string, Record<string, MatrixCell>>): RunMatrix[
 }
 
 function build(row: CampaignRunRow): RunMatrix {
-  const parsed = JSON.parse(row.snapshot) as Partial<RunSnapshot>;
-  const snap: RunSnapshot = {
-    campaign_name: parsed.campaign_name ?? '',
-    framework_label: parsed.framework_label ?? null,
-    tests: parsed.tests ?? [],
-    agents: parsed.agents ?? [],
-    skipped: parsed.skipped ?? [],
-  };
+  const snap = JSON.parse(row.snapshot) as RunSnapshot;
   const nowIso = new Date().toISOString();
   const byPair = latestTasksByPair(row.id);
   const skipped = new Map(snap.skipped.map((s) => [`${s.test_uuid}\u0000${s.agent_id}`, s.reason]));
@@ -134,10 +150,10 @@ function build(row: CampaignRunRow): RunMatrix {
       const reason = skipped.get(key);
       const task = byPair.get(key);
       cells[t.uuid][a.id] = reason !== undefined
-        ? { state: 'na', exit_code: null, task_id: null, completed_at: null, reason }
+        ? { state: 'na', exit_code: null, task_id: null, completed_at: null, reason, techniques: [] }
         : task
           ? cellFor(task, notices, nowIso)
-          : { state: 'not_run', exit_code: null, task_id: null, completed_at: null, reason: null };
+          : { state: 'not_run', exit_code: null, task_id: null, completed_at: null, reason: null, techniques: [] };
     }
   }
   return {
@@ -180,28 +196,7 @@ export function listRuns(campaignId: string, callerOrg: string | undefined) {
   }));
 }
 
-const OUTCOME_LABEL: Partial<Record<CellState, string>> = {
-  waiting_for_notice: 'waiting_for_notice',
-  running: 'running',
-  protected: 'protected',
-  unprotected: 'unprotected',
-  error: 'error',
-  not_run: 'not_run',
-};
-
 export function runMatrixCsv(m: RunMatrix): string {
-  const db = getDatabase();
-  const techniquesFor = (taskId: string | null): string => {
-    if (!taskId) return '';
-    const r = db.prepare('SELECT payload FROM tasks WHERE id = ?').get(taskId) as { payload: string } | undefined;
-    if (!r) return '';
-    try {
-      const t = (JSON.parse(r.payload) as { metadata?: { techniques?: string[] } }).metadata?.techniques;
-      return Array.isArray(t) ? t.join('; ') : '';
-    } catch {
-      return '';
-    }
-  };
   const lines = ['test,techniques,host,os,outcome,exit_code,completed_at'];
   for (const t of m.tests) {
     for (const a of m.agents) {
@@ -210,10 +205,10 @@ export function runMatrixCsv(m: RunMatrix): string {
       lines.push(
         [
           csvCell(t.name),
-          csvCell(techniquesFor(c.task_id)),
+          csvCell(c.techniques.join('; ')),
           csvCell(a.hostname),
           csvCell(a.os),
-          c.state === 'na' ? '' : (OUTCOME_LABEL[c.state] ?? ''),
+          c.state === 'na' ? '' : c.state,
           c.exit_code === null ? '' : String(c.exit_code),
           csvCell(c.completed_at ?? ''),
         ].join(','),
