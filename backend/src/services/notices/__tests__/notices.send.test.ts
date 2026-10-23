@@ -281,16 +281,70 @@ describe('pre-execution notice creation and send pass', () => {
       expect(mockSendMail).toHaveBeenCalledTimes(1);
     });
 
-    it('a claim 3 minutes old is reclaimable; 1 minute old is not', async () => {
-      insertPendingNotice('stale', { claim_at: at(-3 * MIN).toISOString() });
+    it('a claim 6 minutes old is reclaimable; 4 minutes old is not', async () => {
+      insertPendingNotice('stale', { claim_at: at(-6 * MIN).toISOString() });
       linkTask('t1', 'stale');
-      insertPendingNotice('fresh', { claim_at: at(-1 * MIN).toISOString() });
+      insertPendingNotice('fresh', { claim_at: at(-4 * MIN).toISOString() });
       linkTask('t2', 'fresh');
 
       expect(await sendNotice('fresh', NOW)).toBe('not_claimed');
       expect(mockSendMail).not.toHaveBeenCalled();
       expect(await sendNotice('stale', NOW)).toBe('sent');
       expect(mockSendMail).toHaveBeenCalledTimes(1);
+    });
+
+    it('a sender whose claim was taken over cannot clear the new claim, record, or alert', async () => {
+      writeSettings({ slack: true });
+      insertPendingNotice('n1');
+      linkTask('t1', 'n1');
+
+      let failA!: (e: Error) => void;
+      let acceptB!: (v: { accepted: string[]; rejected: string[] }) => void;
+      mockSendMail
+        .mockImplementationOnce(() => new Promise((_res, rej) => { failA = rej; }))
+        .mockImplementationOnce(() => new Promise((res) => { acceptB = res; }));
+
+      // A claims at NOW and hangs; B takes over once A's claim is stale.
+      const a = sendNotice('n1', NOW);
+      const takeover = at(6 * MIN);
+      const b = sendNotice('n1', takeover);
+      expect(mockSendMail).toHaveBeenCalledTimes(2);
+      expect(notice('n1').claim_at).toBe(takeover.toISOString());
+
+      // A fails late: it no longer owns the claim, so nothing is written or alerted.
+      failA(new Error('socket timeout'));
+      expect(await a).toBe('not_claimed');
+      expect(notice('n1')).toMatchObject({
+        state: 'pending',
+        attempts: 0,
+        last_error: null,
+        claim_at: takeover.toISOString(),
+        slack_failure_alerted: 0,
+      });
+      expect(mockSendSlackText).not.toHaveBeenCalled();
+
+      // A third sender cannot claim while B holds a fresh claim.
+      expect(await sendNotice('n1', at(7 * MIN))).toBe('not_claimed');
+      expect(mockSendMail).toHaveBeenCalledTimes(2);
+
+      acceptB({ accepted: [...RECIPIENTS], rejected: [] });
+      expect(await b).toBe('sent');
+      expect(notice('n1')).toMatchObject({ state: 'sent', sent_at: takeover.toISOString(), claim_at: null });
+    });
+
+    it('a late success after takeover does not overwrite the new owner', async () => {
+      insertPendingNotice('n1');
+      linkTask('t1', 'n1');
+      let acceptA!: (v: { accepted: string[]; rejected: string[] }) => void;
+      mockSendMail
+        .mockImplementationOnce(() => new Promise((res) => { acceptA = res; }))
+        .mockImplementationOnce(() => new Promise(() => {}));
+      const a = sendNotice('n1', NOW);
+      const takeover = at(6 * MIN);
+      void sendNotice('n1', takeover);
+      acceptA({ accepted: [...RECIPIENTS], rejected: [] });
+      expect(await a).toBe('not_claimed');
+      expect(notice('n1')).toMatchObject({ state: 'pending', sent_at: null, claim_at: takeover.toISOString() });
     });
 
     it('partial rejection keeps the notice pending and the task held (Review Focus 3)', async () => {
@@ -327,6 +381,21 @@ describe('pre-execution notice creation and send pass', () => {
       expect(await sendNotice(id, at(MIN))).toBe('failed');
       expect(notice(id)).toMatchObject({ attempts: 2 });
       expect(mockSendSlackText).toHaveBeenCalledTimes(1);
+    });
+
+    it('a failed Slack alert is unflagged so the next failure retries it', async () => {
+      writeSettings({ slack: true });
+      const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      mockSendMail.mockRejectedValue(new Error('Invalid login'));
+      mockSendSlackText.mockRejectedValueOnce(new Error('slack down'));
+      insertPendingNotice('n1');
+      linkTask('t1', 'n1');
+      await sendNotice('n1', NOW);
+      expect(notice('n1').slack_failure_alerted).toBe(0);
+      await sendNotice('n1', at(MIN));
+      expect(mockSendSlackText).toHaveBeenCalledTimes(2);
+      expect(notice('n1').slack_failure_alerted).toBe(1);
+      errSpy.mockRestore();
     });
 
     it('does not alert Slack when Slack is not configured', async () => {
@@ -423,6 +492,30 @@ describe('pre-execution notice creation and send pass', () => {
       const html = mockSendMail.mock.calls[0][1].html as string;
       expect(html).toContain('announced-host');
       expect(html).toContain('Hosts (2)');
+    });
+    it('day notice accepted 3 minutes before its window end still releases its task', async () => {
+      const late = new Date('2026-10-23T16:57:00.000Z');
+      testDb.prepare('UPDATE agents SET last_heartbeat = ? WHERE id = ?').run(late.toISOString(), 'agent-001');
+      insertPendingNotice('d1', {
+        kind: 'day',
+        source_type: 'schedule',
+        schedule_ids: '["s1"]',
+        schedule_id: 's1',
+        window_date: '2026-10-23',
+        announced_agent_ids: '["agent-001"]',
+        day_window_start: '2026-10-23T09:00:00.000Z',
+        day_window_end: '2026-10-23T17:00:00.000Z',
+        created_at: late.toISOString(),
+      });
+      linkTask('t1', 'd1');
+      expect(await sendNotice('d1', late)).toBe('sent');
+      const n = notice('d1');
+      expect(n.release_at).toBe('2026-10-23T17:02:00.000Z');
+      expect(n.pickup_deadline).toBe('2026-10-23T19:02:00.000Z');
+      expect(n.window_end).toBe('2026-10-23T19:07:00.000Z');
+      // The email announces the same deadline, never one before the release.
+      expect(mockSendMail.mock.calls[0][1].html).toContain('2026-10-23 19:02');
+      expect(getNextTask('agent-001', new Date('2026-10-23T17:02:00.000Z'))?.id).toBe('t1');
     });
   });
 

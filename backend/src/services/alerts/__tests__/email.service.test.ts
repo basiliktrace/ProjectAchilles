@@ -192,6 +192,18 @@ describe('sendMail', () => {
     expect(arg.to).toBe('A@x.com, B@x.com');
   });
 
+  it('bounds SMTP time with connection, greeting and socket timeouts', async () => {
+    const { sendMail } = await import('../email.service.js');
+    const nodemailer = (await import('nodemailer')).default;
+    mockSendMail.mockResolvedValueOnce({ accepted: ['a@x.com'], rejected: [] });
+    await sendMail(makeSettings(), { to: ['a@x.com'], subject: 's', html: 'h' });
+    expect(vi.mocked(nodemailer.createTransport).mock.calls.at(-1)![0]).toMatchObject({
+      connectionTimeout: 30_000,
+      greetingTimeout: 30_000,
+      socketTimeout: 60_000,
+    });
+  });
+
   it('tolerates missing accepted/rejected lists', async () => {
     const { sendMail } = await import('../email.service.js');
     mockSendMail.mockResolvedValueOnce({ messageId: 'x' });

@@ -29,6 +29,21 @@ describe('window', () => {
     expect(r.releaseAt).toEqual(min(5));
     expect(r.windowEnd).toEqual(min(605));
   });
+  it('computeDayRelease extends the pickup deadline when release falls after the day window end', () => {
+    // Accepted 3 min before the window ends; 5 min lead puts release 2 min past it.
+    const end = min(3);
+    const r = computeDayRelease(t0, s(), end, 300);
+    expect(r.releaseAt).toEqual(min(5));
+    expect(r.pickupDeadline).toEqual(min(5 + 120));
+    expect(r.windowEnd).toEqual(min(5 + 120 + 5));
+    expect(r.pickupDeadline.getTime()).toBeGreaterThan(r.releaseAt.getTime());
+  });
+  it('computeDayRelease keeps the day window end when release is well before it', () => {
+    const end = min(600);
+    const r = computeDayRelease(t0, s(), end, 60);
+    expect(r.pickupDeadline).toEqual(end);
+    expect(r.windowEnd).toEqual(min(601));
+  });
   it('formatDual', () => {
     expect(formatDual(new Date('2026-10-23T13:05:00Z'), 'America/Santo_Domingo')).toBe('2026-10-23 09:05 AST (13:05 UTC)');
   });

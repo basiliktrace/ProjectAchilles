@@ -25,8 +25,13 @@ export function computeDayRelease(
   maxExecutionTimeoutSec: number,
 ): { releaseAt: Date; pickupDeadline: Date; windowEnd: Date } {
   const releaseAt = new Date(sentAt.getTime() + s.lead_minutes * MIN);
-  const windowEnd = new Date(dayWindowEnd.getTime() + maxExecutionTimeoutSec * 1000);
-  return { releaseAt, pickupDeadline: dayWindowEnd, windowEnd };
+  // A notice accepted near the end of the day window would otherwise release
+  // after its own deadline, so its tasks could never be picked up.
+  const pickupDeadline = new Date(
+    Math.max(dayWindowEnd.getTime(), releaseAt.getTime() + s.pickup_window_minutes * MIN),
+  );
+  const windowEnd = new Date(pickupDeadline.getTime() + maxExecutionTimeoutSec * 1000);
+  return { releaseAt, pickupDeadline, windowEnd };
 }
 
 function parts(at: Date, timezone: string, extra: Intl.DateTimeFormatOptions = {}) {

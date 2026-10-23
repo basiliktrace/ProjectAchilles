@@ -23,7 +23,7 @@ import type { TaskPayload } from '../../types/agent.js';
 
 const MIN = 60_000;
 /** A claim older than this belongs to a crashed or hung sender and may be taken over. */
-const STALE_CLAIM_MS = 2 * MIN;
+const STALE_CLAIM_MS = 5 * MIN;
 /** Matches the heartbeat service's online/offline threshold. */
 const ONLINE_THRESHOLD_MS = 180_000;
 /** Used for window_end when no linked task carries an execution_timeout. */
@@ -427,14 +427,17 @@ async function alertSlackOnFailure(n: NoticeRow, error: string): Promise<void> {
   if (n.slack_failure_alerted) return;
   const slack = settingsService().getAlertSettings()?.slack;
   if (!slack?.configured || !slack.enabled || !slack.webhook_url) return;
+  // Take the once-per-notice flag atomically before sending, so two failing
+  // senders can't both alert.
+  if (!repo.claimSlackFailureAlert(n.id)) return;
   try {
     await sendSlackText(
       slack.webhook_url,
       `Notice ${runTag(n.id)} could not be sent: ${error}. Tests are waiting.`,
     );
-    repo.markSlackFailureAlerted(n.id);
   } catch (err) {
-    // Not flagged, so the next failure tries Slack again.
+    // Unflag, so the next failure tries Slack again.
+    repo.resetSlackFailureAlert(n.id);
     console.error(`[Notices] Slack alert for ${runTag(n.id)} failed:`, err);
   }
 }
@@ -443,11 +446,14 @@ async function alertSlackOnFailure(n: NoticeRow, error: string): Promise<void> {
  * One send attempt for a pending notice. Claims it atomically (a second
  * concurrent caller gets `not_claimed`), emails the recipients snapshot, and on
  * full acceptance marks it `sent` with release times counted from acceptance.
+ * Every write after the claim is conditional on still owning it; a sender
+ * whose stale claim was taken over gets `not_claimed` and writes nothing.
  */
 export async function sendNotice(id: string, now?: Date): Promise<SendOutcome> {
   const start = now ?? new Date();
+  const claimAt = start.toISOString();
   const staleCutoff = new Date(start.getTime() - STALE_CLAIM_MS);
-  if (!repo.claimNotice(id, start.toISOString(), staleCutoff.toISOString())) return 'not_claimed';
+  if (!repo.claimNotice(id, claimAt, staleCutoff.toISOString())) return 'not_claimed';
 
   const n = repo.getNotice(id);
   if (!n) return 'not_claimed';
@@ -455,12 +461,11 @@ export async function sendNotice(id: string, now?: Date): Promise<SendOutcome> {
   const linked = repo.getLinkedTasks(id);
   if (n.kind === 'run' && linked.length === 0) {
     // Orphan (e.g. createTasks threw after the notice was created): never email.
-    repo.markSkipped(id, SKIP_NO_TASKS);
-    return 'skipped';
+    return repo.markSkipped(id, claimAt, SKIP_NO_TASKS) ? 'skipped' : 'not_claimed';
   }
   if (linked.length === 0) {
     // Day notice with nothing linked yet: nothing to announce; try next tick.
-    repo.releaseClaim(id);
+    repo.releaseClaim(id, claimAt);
     return 'not_claimed';
   }
 
@@ -483,7 +488,7 @@ export async function sendNotice(id: string, now?: Date): Promise<SendOutcome> {
       const sentAt = now ?? new Date();
       const settings = settingsService().getPreExecutionNoticeSettings();
       const releaseAt = new Date(sentAt.getTime() + settings.lead_minutes * MIN);
-      const applied = repo.markSent(id, {
+      const applied = repo.markSent(id, claimAt, {
         sentAt: sentAt.toISOString(),
         accepted,
         rejected,
@@ -491,9 +496,9 @@ export async function sendNotice(id: string, now?: Date): Promise<SendOutcome> {
         pickupDeadline: built.pickupDeadline.toISOString(),
         windowEnd: built.windowEnd.toISOString(),
       });
-      // Not applied means the notice left 'pending' mid-send (admin override).
-      if (!applied) repo.releaseClaim(id);
-      return 'sent';
+      // Not applied: this sender lost the claim (stale takeover) or the notice
+      // left 'pending' mid-send (admin override). The owner, if any, records it.
+      return applied ? 'sent' : 'not_claimed';
     }
 
     if (rejected.length > 0) {
@@ -507,7 +512,8 @@ export async function sendNotice(id: string, now?: Date): Promise<SendOutcome> {
     error = errorMessage(err);
   }
 
-  repo.recordSendFailure(id, error, accepted, rejected);
+  // A sender that lost its claim records nothing and alerts nobody.
+  if (!repo.recordSendFailure(id, claimAt, error, accepted, rejected)) return 'not_claimed';
   await alertSlackOnFailure(n, error);
   return 'failed';
 }

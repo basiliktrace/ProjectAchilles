@@ -135,6 +135,11 @@ function createTransport(settings: EmailAlertSettings) {
       user: settings.smtp_user,
       pass: settings.smtp_pass,
     },
+    // Bound SMTP time well inside the notice send pass's 5-minute stale-claim
+    // window (nodemailer's default socketTimeout is 10 minutes).
+    connectionTimeout: 30_000,
+    greetingTimeout: 30_000,
+    socketTimeout: 60_000,
   });
 }
 

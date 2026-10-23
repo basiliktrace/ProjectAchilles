@@ -105,18 +105,30 @@ export function claimNotice(id: string, nowIso: string, staleCutoffIso: string):
   return res.changes > 0;
 }
 
-export function releaseClaim(id: string): void {
-  getDatabase().prepare('UPDATE run_notices SET claim_at = NULL WHERE id = ?').run(id);
+/*
+ * Claim ownership: every write after a claim is conditional on
+ * `state = 'pending' AND claim_at = <the claim this sender wrote>`. A sender
+ * whose claim went stale and was taken over changes nothing (0 rows), so it
+ * can't clear the new owner's claim or record a late result.
+ */
+const OWNED = `id = ? AND state = 'pending' AND claim_at = ?`;
+
+/** Returns false when the caller no longer owns the claim. */
+export function releaseClaim(id: string, claimAt: string): boolean {
+  return getDatabase().prepare(`UPDATE run_notices SET claim_at = NULL WHERE ${OWNED}`).run(id, claimAt).changes > 0;
 }
 
-export function markSkipped(id: string, reason: string): void {
-  getDatabase()
-    .prepare(`UPDATE run_notices SET state = 'skipped', skip_reason = ?, claim_at = NULL WHERE id = ? AND state = 'pending'`)
-    .run(reason, id);
+export function markSkipped(id: string, claimAt: string, reason: string): boolean {
+  return (
+    getDatabase()
+      .prepare(`UPDATE run_notices SET state = 'skipped', skip_reason = ?, claim_at = NULL WHERE ${OWNED}`)
+      .run(reason, id, claimAt).changes > 0
+  );
 }
 
 export function markSent(
   id: string,
+  claimAt: string,
   v: {
     sentAt: string;
     accepted: string[];
@@ -131,7 +143,7 @@ export function markSent(
       UPDATE run_notices
       SET state = 'sent', sent_at = ?, accepted = ?, rejected = ?, attempts = attempts + 1,
           last_error = NULL, release_at = ?, pickup_deadline = ?, window_end = ?, claim_at = NULL
-      WHERE id = ? AND state = 'pending'
+      WHERE ${OWNED}
     `)
     .run(
       v.sentAt,
@@ -141,22 +153,40 @@ export function markSent(
       v.pickupDeadline,
       v.windowEnd,
       id,
+      claimAt,
     );
   return res.changes > 0;
 }
 
-export function recordSendFailure(id: string, error: string, accepted: string[], rejected: string[]): void {
-  getDatabase()
+/** Returns false when the caller no longer owns the claim (nothing written). */
+export function recordSendFailure(
+  id: string,
+  claimAt: string,
+  error: string,
+  accepted: string[],
+  rejected: string[],
+): boolean {
+  const res = getDatabase()
     .prepare(`
       UPDATE run_notices
       SET attempts = attempts + 1, last_error = ?, accepted = ?, rejected = ?, claim_at = NULL
-      WHERE id = ?
+      WHERE ${OWNED}
     `)
-    .run(error, JSON.stringify(accepted), JSON.stringify(rejected), id);
+    .run(error, JSON.stringify(accepted), JSON.stringify(rejected), id, claimAt);
+  return res.changes > 0;
 }
 
-export function markSlackFailureAlerted(id: string): void {
-  getDatabase().prepare('UPDATE run_notices SET slack_failure_alerted = 1 WHERE id = ?').run(id);
+/** Atomically take the once-per-notice Slack failure alert. False if already taken. */
+export function claimSlackFailureAlert(id: string): boolean {
+  return (
+    getDatabase()
+      .prepare('UPDATE run_notices SET slack_failure_alerted = 1 WHERE id = ? AND slack_failure_alerted = 0')
+      .run(id).changes > 0
+  );
+}
+
+export function resetSlackFailureAlert(id: string): void {
+  getDatabase().prepare('UPDATE run_notices SET slack_failure_alerted = 0 WHERE id = ?').run(id);
 }
 
 export interface LinkedTaskRow {
