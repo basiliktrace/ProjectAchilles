@@ -30,7 +30,7 @@ export function resolveTaskStatusDisplay(
 ): TaskStatusDisplay {
   if (task.status === 'pending' && notice) {
     if (notice.state === 'pending') {
-      return { label: 'Waiting for notice', variant: 'warning', title: notice.last_error ?? undefined };
+      return { label: 'Sending notice…', variant: 'warning', title: notice.last_error ?? undefined };
     }
     if (
       (notice.state === 'sent' || notice.state === 'overridden') &&

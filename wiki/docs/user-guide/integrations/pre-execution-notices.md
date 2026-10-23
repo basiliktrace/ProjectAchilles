@@ -66,7 +66,7 @@ The **finished email** is sent once the window is over and every task has ended.
 
 | Badge | Meaning |
 |-------|---------|
-| **Waiting for notice** | The notice has not been accepted yet. Hover to see the last SMTP error. |
+| **Sending notice…** | ProjectAchilles is sending the notice email and the task is held until your mail server accepts it. This normally takes seconds; if it lasts longer, sending is failing — hover to see the last SMTP error. No action is needed from the recipients. |
 | **Starting soon** | The notice was accepted and the lead time is counting down. |
 | **Not run** | The task was never executed. Hover for the reason. |
 
