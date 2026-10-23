@@ -1,0 +1,115 @@
+import { useCallback, useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
+import { Plus, Pencil, Trash2 } from 'lucide-react';
+import { PageContainer, PageHeader } from '@/components/endpoints/Layout';
+import { Button } from '@/components/shared/ui/Button';
+import { Badge } from '@/components/shared/ui/Badge';
+import { Alert } from '@/components/shared/ui/Alert';
+import { Spinner } from '@/components/shared/ui/Spinner';
+import { useHasPermission } from '@/hooks/useAppRole';
+import { campaignsApi, type CampaignListItem } from '@/services/api/campaigns';
+import { CampaignEditorDialog } from './CampaignEditorDialog';
+
+export default function CampaignsPage() {
+  const canWrite = useHasPermission('endpoints:tasks:create');
+  const [campaigns, setCampaigns] = useState<CampaignListItem[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [editorOpen, setEditorOpen] = useState(false);
+  const [editing, setEditing] = useState<CampaignListItem | null>(null);
+
+  const load = useCallback(async () => {
+    try {
+      setCampaigns(await campaignsApi.list());
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to load campaigns');
+    }
+  }, []);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  async function handleDelete(c: CampaignListItem) {
+    if (!window.confirm(`Delete campaign "${c.name}"? Past runs are kept.`)) return;
+    try {
+      await campaignsApi.remove(c.id);
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to delete campaign');
+    }
+  }
+
+  return (
+    <PageContainer>
+      <PageHeader
+        title="Campaigns"
+        description="Saved test plans: run a set of tests against a set of hosts and collect the evidence"
+        actions={canWrite ? (
+          <Button onClick={() => { setEditing(null); setEditorOpen(true); }}>
+            <Plus className="w-4 h-4 mr-2" />
+            New campaign
+          </Button>
+        ) : undefined}
+      />
+
+      {error && <Alert variant="destructive" className="mb-4">{error}</Alert>}
+
+      {campaigns === null && !error && (
+        <div className="flex justify-center py-12"><Spinner /></div>
+      )}
+
+      {campaigns && campaigns.length === 0 && (
+        <p className="py-12 text-center text-sm text-muted">No campaigns yet.</p>
+      )}
+
+      {campaigns && campaigns.length > 0 && (
+        <ul className="divide-y divide-border rounded-[10px] border border-border bg-surface">
+          {campaigns.map((c) => (
+            <li key={c.id} className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
+              <div className="min-w-0">
+                <div className="flex items-center gap-2">
+                  <span className="font-medium">{c.name}</span>
+                  {c.framework_label && <Badge variant="outline">{c.framework_label}</Badge>}
+                </div>
+                <div className="mt-1 text-sm text-muted">
+                  {`${c.test_uuids.length} tests × ${c.agent_ids.length} hosts`}
+                </div>
+              </div>
+              <div className="flex items-center gap-3 text-sm">
+                {c.last_run ? (
+                  <Link to={`/campaigns/runs/${c.last_run.id}`} className="text-accent hover:underline">
+                    {c.last_run.percent_protected === null ? 'n/a' : `${c.last_run.percent_protected}%`}
+                    {' protected · '}
+                    {new Date(c.last_run.started_at).toLocaleDateString()}
+                  </Link>
+                ) : (
+                  <span className="text-muted">Not run yet</span>
+                )}
+                {canWrite && (
+                  <>
+                    <Button variant="outline" size="sm" aria-label={`Edit ${c.name}`}
+                      onClick={() => { setEditing(c); setEditorOpen(true); }}>
+                      <Pencil className="w-4 h-4" />
+                    </Button>
+                    <Button variant="outline" size="sm" aria-label={`Delete ${c.name}`}
+                      onClick={() => void handleDelete(c)}>
+                      <Trash2 className="w-4 h-4" />
+                    </Button>
+                  </>
+                )}
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      <CampaignEditorDialog
+        open={editorOpen}
+        campaign={editing}
+        onClose={() => setEditorOpen(false)}
+        onSaved={() => { setEditorOpen(false); void load(); }}
+      />
+    </PageContainer>
+  );
+}

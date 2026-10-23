@@ -9,6 +9,7 @@ export interface Capabilities {
   gitSync: boolean;
   agentBuild: boolean;
   preExecutionNotices: boolean;
+  campaigns: boolean;
   platform: string;
 }
 
@@ -21,6 +22,7 @@ const DEFAULT_CAPABILITIES: Capabilities = {
   gitSync: true,
   agentBuild: true,
   preExecutionNotices: false,
+  campaigns: false,
   platform: 'docker',
 };
 

@@ -3,6 +3,7 @@ import { Link, useLocation } from 'react-router-dom';
 import { useClerk } from '@clerk/clerk-react';
 import {
   BarChart3,
+  ClipboardList,
   Keyboard,
   LayoutDashboard,
   ListChecks,
@@ -16,6 +17,7 @@ import {
 import { CONSOLE_CAPTION, TAGLINE, splitWordmark } from '@/lib/brand';
 import { useAnalyticsAuth } from '@/hooks/useAnalyticsAuth';
 import { useCanAccessModule, useHasPermission } from '@/hooks/useAppRole';
+import { useCapabilities } from '@/hooks/useCapabilities';
 import { useOutdatedAgentCount } from '@/hooks/useOutdatedAgentCount';
 import { useAppHotkeys } from '@/hooks/useAppHotkeys';
 import { GlobalSearch } from '@/components/layout/GlobalSearch';
@@ -157,6 +159,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   const canAccessSettings = useCanAccessModule('settings');
   const canSeeAgents = useHasPermission('endpoints:agents:read');
   const { outdatedCount } = useOutdatedAgentCount();
+  const capabilities = useCapabilities();
 
   const items = useMemo<NavItem[]>(() => {
     const nav: NavItem[] = [
@@ -170,11 +173,14 @@ export function AppShell({ children }: { children: ReactNode }) {
     if (canAccessEndpoints) {
       nav.push({ label: 'Tasks', to: '/tasks', icon: ListChecks });
     }
+    if (canAccessEndpoints && capabilities.campaigns) {
+      nav.push({ label: 'Campaigns', to: '/campaigns', icon: ClipboardList });
+    }
     if (canAccessSettings) {
       nav.push({ label: 'Settings', to: '/settings', icon: Settings });
     }
     return nav;
-  }, [analyticsConfigured, canAccessEndpoints, canSeeAgents, canAccessSettings, outdatedCount]);
+  }, [analyticsConfigured, canAccessEndpoints, canSeeAgents, canAccessSettings, outdatedCount, capabilities.campaigns]);
 
   const routes = useMemo(() => items.map((i) => i.to), [items]);
 
