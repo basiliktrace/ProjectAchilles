@@ -588,28 +588,54 @@ export function processSchedules(clock?: Date): { processed: number; errors: str
         (id) => eligibleSet.has(id) && map[id] <= nowIso,
       );
 
+      // Agents advanced below as if they had fired: the past-due ones, plus
+      // (R24) the late tail swept onto a run notice. An unparseable entry is
+      // advanced too (from now), so it heals instead of sticking forever.
+      const fired = new Set(
+        Object.keys(map).filter((id) => map[id] <= nowIso || !Number.isFinite(Date.parse(map[id]))),
+      );
+
       if (dueAgentIds.length > 0) {
+        // Rulings R23/R24: today's day notice is already announced and its
+        // pickup deadline is (nearly) past, e.g. a slot at the end of the
+        // window or a catch-up after a restart. Its window is never extended,
+        // so these runs get this tick's run notice instead. To send one email
+        // per window end rather than one per late minute, every remaining
+        // eligible agent slotted before the window end goes with them (held
+        // until the run notice's release_at like any other task).
+        const closed = tick.closedDayNotice(schedule);
+        const tail = closed
+          ? Object.keys(map).filter(
+              (id) => eligibleSet.has(id) && map[id] > nowIso && Date.parse(map[id]) < closed.dayWindowEnd.getTime(),
+            )
+          : [];
+        const request = {
+          agent_ids: [...dueAgentIds, ...tail],
+          test_uuid: schedule.test_uuid,
+          test_name: schedule.test_name,
+          binary_name: schedule.binary_name,
+          execution_timeout: schedule.execution_timeout,
+          priority: schedule.priority,
+          metadata: schedule.metadata,
+          target_index: schedule.target_index ?? undefined,
+        };
         try {
-          // One transaction: if createTasks throws, today's day notice is not
-          // left behind with no tasks (it would block the day and alarm).
-          db.transaction(() => {
-            const noticeId = tick.dayNoticeFor({ ...schedule, agent_next_runs: map });
-            createTasks(
-              {
-                agent_ids: dueAgentIds,
-                test_uuid: schedule.test_uuid,
-                test_name: schedule.test_name,
-                binary_name: schedule.binary_name,
-                execution_timeout: schedule.execution_timeout,
-                priority: schedule.priority,
-                metadata: schedule.metadata,
-                target_index: schedule.target_index ?? undefined,
-              },
-              schedule.org_id,
-              schedule.created_by,
-              { noticeId },
-            );
-          })();
+          if (closed) {
+            // Same flow as the fleet path below, minus the pending-notice skip:
+            // these per-machine runs are already due.
+            const noticeId = tick.runNoticeFor(schedule.id, schedule.timezone, schedule.created_by, schedule.org_id);
+            createTasks(request, schedule.org_id, schedule.created_by, { noticeId });
+            tick.confirmRunSchedule(schedule.id, schedule.org_id);
+            // Only on success: a failed tail keeps its slots and retries then.
+            for (const id of tail) fired.add(id);
+          } else {
+            // One transaction: if createTasks throws, today's day notice is not
+            // left behind with no tasks (it would block the day and alarm).
+            db.transaction(() => {
+              const noticeId = tick.dayNoticeFor({ ...schedule, agent_next_runs: map });
+              createTasks(request, schedule.org_id, schedule.created_by, { noticeId });
+            })();
+          }
           processed++;
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
@@ -622,13 +648,21 @@ export function processSchedules(clock?: Date): { processed: number; errors: str
         processed++;
       }
 
-      // Advance every past-due agent (including ineligible ones) to its next
-      // occurrence, so the schedule's minimum moves into the future and the row
-      // is not re-selected on every tick.
-      for (const id of Object.keys(map)) {
-        if (map[id] > nowIso) continue;
+      // Advance every past-due agent (including ineligible ones) and any swept
+      // tail to its next occurrence, so the schedule's minimum moves into the
+      // future and the row is not re-selected on every tick.
+      for (const id of fired) {
+        // From the agent's own slot (a swept tail slot is later than now), so
+        // its next occurrence is never rolled back into the slot just used.
+        // A malformed slot (NaN) falls back to now: an Invalid Date would make
+        // computeNextRun throw and abort the whole tick.
+        const nowMs = now.getTime();
+        const slotMs = Date.parse(map[id]);
+        const after = new Date(Number.isFinite(slotMs) ? Math.max(nowMs, slotMs) : nowMs);
+        // afterFire (R25): a randomized schedule never re-rolls onto the same
+        // local day as the run that just fired, tail slots included.
         const next = computeNextRun(
-          schedule.schedule_type, schedule.schedule_config, schedule.timezone, now, { afterFire: true },
+          schedule.schedule_type, schedule.schedule_config, schedule.timezone, after, { afterFire: true },
         );
         if (next) map[id] = next.toISOString();
         else delete map[id];
