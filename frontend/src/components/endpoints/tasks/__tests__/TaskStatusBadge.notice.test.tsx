@@ -17,14 +17,14 @@ const task = (status: AgentTask['status'], result: Partial<TaskResult> | null = 
   ({ status, result } as Pick<AgentTask, 'status' | 'result'>);
 
 describe('TaskStatusBadge notice states', () => {
-  it('shows "Waiting for notice" for a pending task with a pending notice', () => {
+  it('shows "Sending notice…" for a pending task with a pending notice', () => {
     render(<TaskStatusBadge task={task('pending')} notice={notice({ state: 'pending' })} />);
-    expect(screen.getByText('Waiting for notice')).toBeInTheDocument();
+    expect(screen.getByText('Sending notice…')).toBeInTheDocument();
   });
 
   it('uses last_error as the title when present', () => {
     render(<TaskStatusBadge task={task('pending')} notice={notice({ last_error: 'SMTP down' })} />);
-    expect(screen.getByText('Waiting for notice')).toHaveAttribute('title', 'SMTP down');
+    expect(screen.getByText('Sending notice…')).toHaveAttribute('title', 'SMTP down');
   });
 
   it('shows "Starting soon" when notice is sent and release_at is in the future', () => {
