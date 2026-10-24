@@ -1,6 +1,6 @@
 {
   "name": "project-achilles-backend-serverless",
-  "version": "2.3.1",
+  "version": "2.4.0",
   "description": "ProjectAchilles - Serverless Backend for Vercel",
   "main": "dist/app.js",
   "type": "module",
