@@ -1,5 +1,5 @@
-// EDR correlation for campaign evidence: fetch the Elasticsearch result docs
-// of a run's tasks so the matrix can apply the same Protected > Prevented >
+// EDR correlation for test outcomes: fetch the Elasticsearch result docs of a
+// run's tasks so campaign evidence and notice emails can apply the same Protected > Prevented >
 // Detected > Unprotected labels as Analytics. Docs are keyed exactly:
 // `_id = <task_id>` for a single result, `<task_id>::<control_id>` per stage.
 
@@ -72,7 +72,7 @@ export async function fetchEdrDocs(ids: string[]): Promise<EdrDocs> {
     }
     return { status: 'ok', docs };
   } catch (err) {
-    console.warn('[campaigns] EDR lookup failed:', err instanceof Error ? err.message : err);
+    console.warn('[outcomes] EDR lookup failed:', err instanceof Error ? err.message : err);
     return { status: 'unavailable', docs: new Map() };
   }
 }

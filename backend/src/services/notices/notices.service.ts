@@ -24,6 +24,8 @@ import { computeDayRelease, computeRunRelease, runTag } from './window.js';
 import * as repo from './notices.repo.js';
 import { resolveUserLabel } from './userLabel.js';
 import { getTestMetadata } from '../agent/test-catalog.service.js';
+import { fetchEdrDocs } from '../outcomes/edr.js';
+import { cellVerdict, controlsOf, resultDocIds } from '../outcomes/verdict.js';
 import type { NoticeRow, NoticeScope, NoticeSourceType } from './types.js';
 import type { TaskPayload, TaskResult, TaskStatus } from '../../types/agent.js';
 import type { PreExecutionNoticeSettings } from '../../types/integrations.js';
@@ -810,9 +812,29 @@ async function sendFinished(n: NoticeRow, now: Date): Promise<boolean> {
   const rows = repo.getLinkedTaskOutcomes(n.id);
   if (rows.length === 0) return false;
 
-  const counts: FinishedEmailData['counts'] = { protected: 0, unprotected: 0, error: 0, notRun: 0 };
-  for (const r of latestAttempts(rows)) {
-    counts[classifyOutcome({ status: r.status as TaskStatus, result: parseResult(r.result) })]++;
+  // Same verdict as Analytics and the campaign evidence page: completed
+  // results get EDR prevention/detection from their ES docs. By now the
+  // pickup window has closed, so the EDR sync has had time to tag them.
+  const latest = latestAttempts(rows).map((r) => ({ row: r, result: parseResult(r.result) }));
+  const completed = latest.filter((x) => x.row.status === 'completed' && x.result);
+  const edr = await fetchEdrDocs(completed.flatMap((x) =>
+    resultDocIds(x.row.id, x.row.category, controlsOf(x.result!.bundle_results?.controls))));
+  const counts: FinishedEmailData['counts'] = { protected: 0, prevented: 0, detected: 0, unprotected: 0, error: 0, notRun: 0 };
+  for (const { row, result } of latest) {
+    if (row.status === 'completed' && result) {
+      const v = cellVerdict({
+        taskId: row.id,
+        exitCode: typeof result.exit_code === 'number' ? result.exit_code : null,
+        error: null,
+        stderrTail: null,
+        category: row.category,
+        controls: controlsOf(result.bundle_results?.controls),
+        edr,
+      });
+      counts[v.state]++;
+    } else {
+      counts[classifyOutcome({ status: row.status as TaskStatus, result })]++;
+    }
   }
 
   // Actual finish: the latest completed_at (ISO or SQLite UTC form).
@@ -836,6 +858,7 @@ async function sendFinished(n: NoticeRow, now: Date): Promise<boolean> {
     startedAt,
     finishedAt,
     counts,
+    edrUnavailable: edr.status === 'unavailable',
     uiUrl: tasksUiUrl(),
   });
   // Updated event: same UID, next SEQUENCE, ending at the actual finish.
@@ -846,7 +869,7 @@ async function sendFinished(n: NoticeRow, now: Date): Promise<boolean> {
     start: icsStart,
     end: new Date(Math.max(icsStart.getTime(), finishedAt.getTime())),
     summary: `ProjectAchilles security testing ${tag}`,
-    description: `Finished. Protected ${counts.protected}, unprotected ${counts.unprotected}, error ${counts.error}, not run ${counts.notRun}. Search for ${tag} in your security tooling.`,
+    description: `Finished. Protected ${counts.protected}, prevented ${counts.prevented}, detected ${counts.detected}, unprotected ${counts.unprotected}, error ${counts.error}, not run ${counts.notRun}. Search for ${tag} in your security tooling.`,
     stamp: now,
   });
 

@@ -10,7 +10,7 @@ vi.mock('../../services/agent/database.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../services/agent/database.js')>()),
   getDatabase: () => testDb,
 }));
-vi.mock('../../services/campaigns/edr.js', () => ({ fetchEdrDocs: async () => ({ status: 'not_configured', docs: new Map() }) }));
+vi.mock('../../services/outcomes/edr.js', () => ({ fetchEdrDocs: async () => ({ status: 'not_configured', docs: new Map() }) }));
 vi.mock('../../services/notices/userLabel.js', () => ({ resolveUserLabel: async (id: string) => id }));
 vi.mock('../../services/agent/test-catalog.service.js', () => ({
   getTestMetadata: (uuid: string) => ({ uuid, name: `Test ${uuid}`, techniques: [] }),

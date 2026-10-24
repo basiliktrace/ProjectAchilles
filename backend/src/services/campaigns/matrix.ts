@@ -7,8 +7,8 @@ import { IntegrationsSettingsService } from '../integrations/settings.js';
 import type { NoticeRecord, NoticeScope, NoticeSummary } from '../notices/types.js';
 import type { TaskStatus } from '../../types/agent.js';
 import type { CampaignRunRow, CellState, RunSnapshot } from './types.js';
-import { fetchEdrDocs, type EdrDocs, type EdrStatus } from './edr.js';
-import { cellVerdict, type StageInput, type StageView } from './verdict.js';
+import { fetchEdrDocs, type EdrDocs, type EdrStatus } from '../outcomes/edr.js';
+import { cellVerdict, controlsOf, resultDocIds, type StageView } from '../outcomes/verdict.js';
 
 export interface MatrixCell {
   state: CellState;
@@ -120,24 +120,18 @@ function parseTechniques(raw: string | null): string[] {
   }
 }
 
-function parseControls(raw: string | null): StageInput[] | null {
+function parseControls(raw: string | null) {
   if (!raw) return null;
   try {
-    const v = JSON.parse(raw);
-    if (!Array.isArray(v) || v.length === 0) return null;
-    return v
-      .filter((c) => c && typeof c.control_id === 'string' && typeof c.exit_code === 'number')
-      .map((c) => ({ control_id: c.control_id, exit_code: c.exit_code, skipped: c.skipped === true, compliant: typeof c.compliant === 'boolean' ? c.compliant : undefined }));
+    return controlsOf(JSON.parse(raw));
   } catch {
     return null;
   }
 }
 
-/** Result-doc ids of a completed cell: the task id, or task id :: control id per stage. */
+/** Result-doc ids of a completed cell (none while running, or for cyber-hygiene bundles). */
 function docIdsFor(task: PairTask): string[] {
-  if (task.status !== 'completed' || task.category === 'cyber-hygiene') return [];
-  const controls = parseControls(task.controls);
-  return controls ? controls.map((c) => `${task.id}::${c.control_id}`) : [task.id];
+  return task.status === 'completed' ? resultDocIds(task.id, task.category, parseControls(task.controls)) : [];
 }
 
 const EMPTY = { edr: null, stages: [] as StageView[], stages_text: '' };

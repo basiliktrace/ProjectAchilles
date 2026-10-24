@@ -24,11 +24,15 @@ vi.mock('os', async () => {
   return { ...actual, ...overrides, default: { ...actual, ...overrides } };
 });
 
-const { mockSendMail, mockSendSlackText, mockTestEmailConnection } = vi.hoisted(() => ({
+const { mockSendMail, mockSendSlackText, mockTestEmailConnection, mockFetchEdrDocs } = vi.hoisted(() => ({
   mockSendMail: vi.fn(),
   mockSendSlackText: vi.fn(),
   mockTestEmailConnection: vi.fn(),
+  mockFetchEdrDocs: vi.fn(async (_ids: string[]): Promise<{ status: 'ok' | 'unavailable' | 'not_configured'; docs: Map<string, Record<string, unknown>> }> =>
+    ({ status: 'not_configured', docs: new Map() })),
 }));
+
+vi.mock('../../outcomes/edr.js', () => ({ fetchEdrDocs: mockFetchEdrDocs }));
 
 vi.mock('../../alerts/email.service.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../alerts/email.service.js')>();
@@ -567,6 +571,8 @@ describe('pre-execution notice sweeps', () => {
       expect(cell(mail.html, 'Unprotected')).toBe(expected.unprotected);
       expect(cell(mail.html, 'Error')).toBe(expected.error);
       expect(cell(mail.html, 'Not run')).toBe(expected.notRun);
+      expect(cell(mail.html, 'Prevented')).toBe(0);
+      expect(cell(mail.html, 'Detected')).toBe(0);
 
       // Updated calendar event: same UID, SEQUENCE 1, ends at the actual finish.
       const ics = mail.attachments!.find((a) => a.filename.endsWith('.ics'))!.content;
@@ -581,6 +587,46 @@ describe('pre-execution notice sweeps', () => {
       const r2 = await processNotices(at(MIN));
       expect(r2.finished).toBe(0);
       expect(finishedMails()).toHaveLength(1);
+    });
+
+    it('counts with the same verdict as Analytics: EDR prevention and detection on the result docs', async () => {
+      insertSentNotice('n-fin', -MIN);
+      terminalRun('n-fin');
+      mockFetchEdrDocs.mockImplementationOnce(async () => ({
+        status: 'ok',
+        docs: new Map<string, Record<string, unknown>>([
+          // The 101 single-binary result: Defender killed the process.
+          ['t-unprot', { event: { ERROR: 101 }, f0rtika: { defender_prevented: true, defender_prevention_action: 'process_killed' } }],
+          // The exit-1 result: Defender raised an alert.
+          ['t-err', { event: { ERROR: 1 }, f0rtika: { defender_detected: true, defender_stage_detected: true } }],
+        ]),
+      }));
+      await processNotices(NOW);
+      const mail = finishedMails()[0];
+      // Expired and failed tasks are never looked up; the superseded parent isn't either.
+      expect(mockFetchEdrDocs).toHaveBeenCalledWith(expect.arrayContaining(['t-unprot', 't-prot', 't-err', 't-child']));
+      expect(mockFetchEdrDocs.mock.calls.at(-1)![0]).not.toContain('t-notrun');
+      expect(mockFetchEdrDocs.mock.calls.at(-1)![0]).not.toContain('t-parent');
+      expect(cell(mail.html, 'Protected')).toBe(2);
+      expect(cell(mail.html, 'Prevented')).toBe(1);
+      expect(cell(mail.html, 'Detected')).toBe(1);
+      expect(cell(mail.html, 'Unprotected')).toBe(0);
+      expect(cell(mail.html, 'Error')).toBe(0);
+      expect(cell(mail.html, 'Not run')).toBe(1);
+      expect(mail.html).not.toContain('EDR results were unavailable');
+      const ics = mail.attachments!.find((a: { filename: string }) => a.filename.endsWith('.ics'))!.content;
+      // Unfold RFC 5545 continuation lines before matching.
+      expect(ics.replace(/\r\n /g, '')).toContain('Protected 2\\, prevented 1\\, detected 1\\, unprotected 0');
+    });
+
+    it('says so when EDR results were unavailable', async () => {
+      insertSentNotice('n-fin', -MIN);
+      terminalRun('n-fin');
+      mockFetchEdrDocs.mockImplementationOnce(async () => ({ status: 'unavailable', docs: new Map() }));
+      await processNotices(NOW);
+      const mail = finishedMails()[0];
+      expect(cell(mail.html, 'Unprotected')).toBe(1);
+      expect(mail.html).toContain('EDR results were unavailable, so these counts use test exit codes only.');
     });
 
     it('waits while any linked task is still running', async () => {

@@ -15,7 +15,7 @@ const { mockFetchEdrDocs } = vi.hoisted(() => ({
   mockFetchEdrDocs: vi.fn(async (_ids: string[]): Promise<{ status: 'ok' | 'unavailable' | 'not_configured'; docs: Map<string, Record<string, unknown>> }> =>
     ({ status: 'not_configured', docs: new Map() })),
 }));
-vi.mock('../edr.js', () => ({ fetchEdrDocs: mockFetchEdrDocs }));
+vi.mock('../../outcomes/edr.js', () => ({ fetchEdrDocs: mockFetchEdrDocs }));
 vi.mock('../../integrations/settings.js', () => ({
   IntegrationsSettingsService: class {
     isDefenderConfigured() { return true; }

@@ -79,7 +79,7 @@ describe('buildNoticeEmail', () => {
 
 describe('buildFinishedEmail', () => {
   it('subject and counts', () => {
-    const e = buildFinishedEmail({ runTag: 'PA-RUN-abc123', timezone: 'UTC', startedAt: new Date(), finishedAt: new Date(), counts: { protected: 3, unprotected: 1, error: 0, notRun: 2 }, uiUrl: 'http://u' });
+    const e = buildFinishedEmail({ runTag: 'PA-RUN-abc123', timezone: 'UTC', startedAt: new Date(), finishedAt: new Date(), counts: { protected: 3, prevented: 0, detected: 0, unprotected: 1, error: 0, notRun: 2 }, uiUrl: 'http://u' });
     expect(e.subject).toBe('[ProjectAchilles] Security testing finished — PA-RUN-abc123');
     expect(e.html).toContain('>3<');
     expect(e.html).toContain('ProjectAchilles | f0_csv');

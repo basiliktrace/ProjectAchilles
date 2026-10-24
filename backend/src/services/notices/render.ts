@@ -34,7 +34,10 @@ export interface FinishedEmailData {
   timezone: string;
   startedAt: Date;
   finishedAt: Date;
-  counts: { protected: number; unprotected: number; error: number; notRun: number };
+  /** Same labels as Analytics: prevented and detected come from EDR correlation. */
+  counts: { protected: number; prevented: number; detected: number; unprotected: number; error: number; notRun: number };
+  /** Elasticsearch could not be reached, so the counts use exit codes only. */
+  edrUnavailable?: boolean;
   uiUrl: string;
 }
 
@@ -147,6 +150,8 @@ export function buildFinishedEmail(d: FinishedEmailData): { subject: string; htm
   const cells = (
     [
       ['Protected', c.protected],
+      ['Prevented', c.prevented],
+      ['Detected', c.detected],
       ['Unprotected', c.unprotected],
       ['Error', c.error],
       ['Not run', c.notRun],
@@ -154,13 +159,18 @@ export function buildFinishedEmail(d: FinishedEmailData): { subject: string; htm
   )
     .map(
       ([label, n]) =>
-        `<td align="center" style="padding:12px;border:1px solid #e4e4e7;"><div style="font-size:22px;font-weight:600;color:#18181b;">${n}</div><div style="font-size:12px;color:#71717a;">${label}</div></td>`,
+        `<td align="center" width="16%" style="padding:10px 4px;border:1px solid #e4e4e7;"><div style="font-size:22px;font-weight:600;color:#18181b;">${n}</div><div style="font-size:12px;color:#71717a;">${label}</div></td>`,
     )
     .join('');
   const body = [
     `<tr><td style="padding:20px 24px 4px;font-size:16px;font-weight:600;color:#18181b;">Security testing has finished</td></tr>`,
     `<tr><td style="padding:0 24px;"><table width="100%" cellpadding="0" cellspacing="0">${row('Reference', `<strong>${escapeHtml(d.runTag)}</strong>`)}${row('Started', escapeHtml(formatDual(d.startedAt, d.timezone)))}${row('Finished', escapeHtml(formatDual(d.finishedAt, d.timezone)))}</table></td></tr>`,
     `<tr><td style="padding:12px 24px;"><table width="100%" cellpadding="0" cellspacing="0"><tr>${cells}</tr></table></td></tr>`,
+    `<tr><td style="padding:0 24px;font-size:12px;color:#71717a;">${
+      d.edrUnavailable
+        ? 'EDR results were unavailable, so these counts use test exit codes only.'
+        : 'Prevented and Detected come from your EDR alerts, as in Analytics.'
+    }</td></tr>`,
     `<tr><td style="padding:12px 24px 20px;"><a href="${escapeHtml(d.uiUrl)}" style="color:#2563eb;font-size:13px;">Open ProjectAchilles</a></td></tr>`,
   ].join('\n');
   return { subject, html: shell(subject, body) };
