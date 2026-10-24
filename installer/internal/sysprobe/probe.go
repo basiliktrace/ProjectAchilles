@@ -106,14 +106,14 @@ func checkOS(s System) Check {
 	name := id + " " + ver
 	rhel := map[string]bool{"rhel": true, "rocky": true, "almalinux": true, "centos": true, "ol": true}
 	switch {
-	case id == "ubuntu" && (ver == "22.04" || ver == "24.04"):
+	case id == "ubuntu" && (ver == "22.04" || ver == "24.04" || ver == "26.04"):
 		c.Detail = name
 	case id == "debian" && (ver == "12" || strings.HasPrefix(ver, "12.")):
 		c.Status, c.Detail = Warn, name+": best-effort support"
 	case rhel[id] && (ver == "9" || strings.HasPrefix(ver, "9.")):
 		c.Status, c.Detail = Warn, name+": best-effort support"
 	default:
-		c.Status, c.Detail = Fail, name+" is not supported (Ubuntu 22.04/24.04, Debian 12, RHEL-family 9)"
+		c.Status, c.Detail = Fail, name+" is not supported (Ubuntu 22.04/24.04/26.04, Debian 12, RHEL-family 9)"
 	}
 	return c
 }

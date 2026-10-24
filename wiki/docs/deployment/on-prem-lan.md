@@ -91,7 +91,7 @@ flowchart LR
 
 | Item | Who | Why |
 |------|-----|-----|
-| **Linux server** | IT | Ubuntu 22.04 or 24.04 (Debian 12 and RHEL-family 9 are best-effort). At least 2 GiB RAM, **4 GiB for self-hosted Elasticsearch**; **20 GiB free disk** for a fresh install; root or sudo; ports 80 and 443 free; NTP-synchronised clock. |
+| **Linux server** | IT | Ubuntu 22.04, 24.04 or 26.04 (Debian 12 and RHEL-family 9 are best-effort). At least 2 GiB RAM, **4 GiB for self-hosted Elasticsearch**; **20 GiB free disk** for a fresh install; root or sudo; ports 80 and 443 free; NTP-synchronised clock. |
 | **Static IP** (or DHCP reservation) | Network | Caddy binds to this one address (`10.0.5.20`). A new IP needs a re-run of the installer. |
 | **DNS record** in internal DNS | DNS / AD | `achilles.corp.example.com A 10.0.5.20`. The installer prints the exact record and the AD DNS PowerShell line. |
 | **Network firewalls** | Network | Endpoints and browsers must reach **TCP 80, TCP 443 and UDP 443** on the server. Port 80 carries the root download and the HTTPS redirect. |
@@ -213,7 +213,7 @@ secrets are kept).
 | Check | Fails when | Warns when |
 |-------|-----------|-----------|
 | Running as root | not root | |
-| Supported operating system | not Ubuntu 22.04/24.04, Debian 12 or RHEL-family 9 | Debian 12 or RHEL-family 9 |
+| Supported operating system | not Ubuntu 22.04/24.04/26.04, Debian 12 or RHEL-family 9 | Debian 12 or RHEL-family 9 |
 | Memory | < 2 GiB | < 4 GiB (self-hosted Elasticsearch is then disabled) |
 | Free disk space | < 20 GiB fresh; < 5 GiB existing | < 20 GiB existing |
 | Port 80 / 443 available | in use (our own Caddy is accepted on an existing install) | |
@@ -909,7 +909,7 @@ internet and trust a Let's Encrypt certificate.
 
 | Item | Notes |
 |------|-------|
-| **Server** | Ubuntu 24.04 or 22.04 with the usual minimums: 2 GiB RAM (4 GiB for self-hosted Elasticsearch; DigitalOcean 4 GB or Hetzner CX32 and up), 20 GiB free disk. |
+| **Server** | Ubuntu 26.04, 24.04 or 22.04 with the usual minimums: 2 GiB RAM (4 GiB for self-hosted Elasticsearch; DigitalOcean 4 GB or Hetzner CX32 and up), 20 GiB free disk. |
 | **Public DNS name** | An A record pointing at the server's public IPv4, under a domain you own. Create it first, so the DNS check passes and Let's Encrypt can validate. Don't add an AAAA record: Caddy listens on the IPv4 address only, and Let's Encrypt validates over IPv6 when one exists. |
 | **Provider firewall** | A DigitalOcean Cloud Firewall or Hetzner Firewall must allow **TCP 80, TCP 443 and UDP 443** inbound from anywhere, plus SSH. The installer can't see these firewalls. |
 | **Clerk** | Production keys (`pk_live_`) for the public domain. |

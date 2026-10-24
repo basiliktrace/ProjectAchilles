@@ -92,7 +92,7 @@ Collect these from IT before running the installer.
 
 | Item | Who | Why | Example |
 |------|-----|-----|---------|
-| **Linux server** | IT | Ubuntu 22.04 or 24.04 (Debian 12 and RHEL-family 9 are best-effort). At least 2 GiB RAM, **4 GiB for self-hosted Elasticsearch**; **20 GiB free disk** for a fresh install; root or sudo; ports 80 and 443 free; clock NTP-synchronised. | 4 vCPU, 8 GiB RAM, 40 GiB disk |
+| **Linux server** | IT | Ubuntu 22.04, 24.04 or 26.04 (Debian 12 and RHEL-family 9 are best-effort). At least 2 GiB RAM, **4 GiB for self-hosted Elasticsearch**; **20 GiB free disk** for a fresh install; root or sudo; ports 80 and 443 free; clock NTP-synchronised. | 4 vCPU, 8 GiB RAM, 40 GiB disk |
 | **Static IP** (or DHCP reservation) | Network | Caddy binds to this one address. A new IP needs a re-run of the installer. | `10.0.5.20` |
 | **DNS record** in your internal DNS | DNS / AD | Browsers and agents use the name. The installer prints the exact record and the AD DNS PowerShell line. | `achilles.corp.example.com A 10.0.5.20` |
 | **Subnets and network firewalls** | Network | Endpoints and browsers must reach **TCP 80, TCP 443 and UDP 443** on the server. Port 80 carries the root download and the HTTPS redirect. | `10.0.0.0/16` |
@@ -242,7 +242,7 @@ Read-only checks, all shown at once as PASS / WARN / FAIL. A FAIL blocks
 | Check | Fails when | Warns when |
 |-------|-----------|-----------|
 | Running as root | not root | |
-| Supported operating system | not Ubuntu 22.04/24.04, Debian 12 or RHEL-family 9 | Debian 12 or RHEL-family 9 (best-effort) |
+| Supported operating system | not Ubuntu 22.04/24.04/26.04, Debian 12 or RHEL-family 9 | Debian 12 or RHEL-family 9 (best-effort) |
 | Memory | < 2 GiB | < 4 GiB (self-hosted Elasticsearch is then disabled) |
 | Free disk space (`/var/lib/docker`, else `/`) | < 20 GiB on a fresh install; < 5 GiB on an existing one | < 20 GiB on an existing install |
 | Port 80 available / Port 443 available | in use (on an existing install, our own Caddy is accepted) | |
@@ -1076,7 +1076,7 @@ over the internet and trust a Let's Encrypt certificate.
 
 | Item | Notes |
 |------|-------|
-| **Server** | Ubuntu 24.04 or 22.04, the same minimums as section 3: 2 GiB RAM (4 GiB for self-hosted Elasticsearch; DigitalOcean 4 GB or Hetzner CX32 and up), 20 GiB free disk. |
+| **Server** | Ubuntu 26.04, 24.04 or 22.04, the same minimums as section 3: 2 GiB RAM (4 GiB for self-hosted Elasticsearch; DigitalOcean 4 GB or Hetzner CX32 and up), 20 GiB free disk. |
 | **Public DNS name** | An A record for the hostname pointing at the server's public IPv4, under a domain you own (e.g. `achilles.example.com`). Create it before you run the wizard, so the DNS check passes and Let's Encrypt can validate. Don't add an AAAA record: Caddy listens on the IPv4 address only, and Let's Encrypt validates over IPv6 when one exists. |
 | **Provider firewall** | A DigitalOcean Cloud Firewall or Hetzner Firewall must allow **TCP 80, TCP 443 and UDP 443** inbound from anywhere (agents connect from wherever they are), plus SSH for you. The installer can't see these firewalls. |
 | **Clerk** | Production keys (`pk_live_`) for the public domain, with Clerk's DNS records added to your public zone (section 4). |
