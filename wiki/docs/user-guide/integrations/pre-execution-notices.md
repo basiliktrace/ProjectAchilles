@@ -64,7 +64,7 @@ The body has:
 
 A calendar file (`.ics`) is attached so the window shows up in the engineers' calendars.
 
-The **finished email** is sent once the window is over and every task has ended. It repeats the run tag, shows the actual start and finish, and counts outcomes: protected, unprotected, error and not run. It also updates the calendar entry to end at the real finish time. If it cannot be sent, nothing is held back by that.
+The **finished email** is sent once the window is over and every task has ended. It repeats the run tag, shows the actual start and finish, and counts outcomes with the same labels as Analytics → All Executions and the campaign evidence page: **Protected**, **Prevented**, **Detected**, **Unprotected**, **Error** and **Not run**. Prevented and Detected come from Microsoft Defender or CrowdStrike Falcon alerts that match the test. The email goes out after the pickup window closes, by which time the EDR sync has caught up. If Elasticsearch can't be reached, the email says the counts use test exit codes only. It also updates the calendar entry to end at the real finish time. If it cannot be sent, nothing is held back by that.
 
 ## What the Tasks page shows
 

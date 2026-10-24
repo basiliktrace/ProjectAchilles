@@ -486,12 +486,15 @@ export interface TaskOutcomeRow {
   original_task_id: string | null;
   retry_count: number | null;
   created_at: string;
+  /** payload.metadata.category */
+  category: string | null;
 }
 
 export function getLinkedTaskOutcomes(noticeId: string): TaskOutcomeRow[] {
   return getDatabase()
     .prepare(`
-      SELECT id, status, result, assigned_at, completed_at, original_task_id, retry_count, created_at
+      SELECT id, status, result, assigned_at, completed_at, original_task_id, retry_count, created_at,
+             json_extract(payload, '$.metadata.category') AS category
       FROM tasks WHERE notice_id = ?
       ORDER BY created_at ASC, id ASC
     `)

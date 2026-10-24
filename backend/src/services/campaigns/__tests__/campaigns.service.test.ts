@@ -7,7 +7,7 @@ vi.mock('../../agent/database.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../agent/database.js')>()),
   getDatabase: () => testDb,
 }));
-vi.mock('../edr.js', () => ({ fetchEdrDocs: async () => ({ status: 'not_configured', docs: new Map() }) }));
+vi.mock('../../outcomes/edr.js', () => ({ fetchEdrDocs: async () => ({ status: 'not_configured', docs: new Map() }) }));
 vi.mock('../../integrations/settings.js', () => ({
   IntegrationsSettingsService: class { isDefenderConfigured() { return false; } isCrowdStrikeConfigured() { return false; } },
 }));

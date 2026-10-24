@@ -1,4 +1,5 @@
-// The verdict of one completed campaign cell (a test on a host), its
+// The verdict of one completed test run on one host (a campaign cell, or one
+// line of a notice's Finished email), its
 // human-readable reason, and an EDR summary. Matches Analytics' group label:
 // Protected (a stage was blocked) > Prevented (an EDR confirmed prevention) >
 // Detected (an EDR alert matched) > Unprotected (a stage ran unblocked) >
@@ -51,6 +52,24 @@ export interface Verdict {
 }
 
 const PROTECTED_CODES = [105, 126, 127];
+
+/** result.bundle_results.controls → stage inputs, or null for a single-binary result. */
+export function controlsOf(value: unknown): StageInput[] | null {
+  if (!Array.isArray(value) || value.length === 0) return null;
+  const out = value
+    .filter((c) => c && typeof c.control_id === 'string' && typeof c.exit_code === 'number')
+    .map((c) => ({ control_id: c.control_id, exit_code: c.exit_code, skipped: c.skipped === true, compliant: typeof c.compliant === 'boolean' ? c.compliant : undefined }));
+  return out.length > 0 ? out : null;
+}
+
+/**
+ * Elasticsearch ids of a completed result: `<task_id>`, or `<task_id>::<control_id>`
+ * per stage. Cyber-hygiene bundles keep their own verdict, so none are needed.
+ */
+export function resultDocIds(taskId: string, category: string | null, controls: StageInput[] | null): string[] {
+  if (category === 'cyber-hygiene') return [];
+  return controls ? controls.map((c) => `${taskId}::${c.control_id}`) : [taskId];
+}
 
 const EXIT_MEANING: Record<number, string> = {
   0: 'exited without a result',
