@@ -5,6 +5,8 @@ export type CellState =
   | 'waiting_for_notice'
   | 'running'
   | 'protected'
+  | 'prevented'
+  | 'detected'
   | 'unprotected'
   | 'error'
   | 'not_run'
@@ -42,6 +44,11 @@ export interface MatrixCell {
   completed_at: string | null;
   reason: string | null;
   techniques: string[];
+  /** EDR summary ("Defender: prevented (process killed)"), "unavailable", or null. */
+  edr: string | null;
+  /** Per-stage results of a multi-stage test (empty otherwise). */
+  stages: { label: string; exit_code: number | null; outcome: string }[];
+  stages_text: string;
 }
 
 /** The run's notice plus its delivery record. */
@@ -60,11 +67,13 @@ export interface RunMatrix {
     campaign_name: string;
     framework_label: string | null;
     started_by: string;
-    /** Display name captured at launch (the user id for older runs). */
+    /** Display name of whoever started the run ("Name (email)"). */
     started_by_name: string;
     started_at: string;
     notice: RunNotice | null;
   };
+  /** Whether EDR correlation was applied, and which integrations it reflects. */
+  edr: { status: 'ok' | 'unavailable' | 'not_configured'; sources: string[] };
   tests: { uuid: string; name: string }[];
   agents: { id: string; hostname: string; os: string }[];
   cells: Record<string, Record<string, MatrixCell>>;

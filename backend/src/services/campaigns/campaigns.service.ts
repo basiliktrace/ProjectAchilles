@@ -111,14 +111,14 @@ export function deleteCampaign(id: string, callerOrg: string | undefined): void 
   repo.deleteCampaignRow(id);
 }
 
-export function listCampaigns(callerOrg: string | undefined): CampaignListItem[] {
+export async function listCampaigns(callerOrg: string | undefined): Promise<CampaignListItem[]> {
   const rows = repo.listCampaignRows(callerOrg);
   const runs = repo.latestRuns(rows.map((r) => r.id));
-  return rows.map((row) => {
+  return Promise.all(rows.map(async (row) => {
     const run = runs.get(row.id);
     return {
       ...toCampaign(row),
-      last_run: run ? { id: run.id, started_at: run.started_at, percent_protected: computeRunTotals(run.id).percent_protected } : null,
+      last_run: run ? { id: run.id, started_at: run.started_at, percent_protected: (await computeRunTotals(run.id)).percent_protected } : null,
     };
-  });
+  }));
 }

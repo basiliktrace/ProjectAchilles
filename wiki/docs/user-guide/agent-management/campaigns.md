@@ -71,9 +71,11 @@ After you confirm, you are taken to the run's evidence page. Retries of a task (
 
 ## Reading the Matrix
 
-The evidence page shows tests as rows, hosts as columns, and one cell per pair. It refreshes every 15 seconds while anything is still in flight, and shows the **As of** time it was computed.
+The evidence page shows one cell per test and host. **Whichever list is longer runs down the side**: with more hosts than tests (the usual case), hosts are rows and tests are columns; otherwise tests are rows. The first column and the header row stay in place while you scroll. The last column and the bottom row show how many results were protected per host and per test (for example `3/4`), and the bottom-right corner shows the run's % protected.
 
-The header records who started the run (their name or email from the sign-in session at launch, or the user id when the session carried neither) and when, plus the pre-execution notice record:
+The page refreshes every 15 seconds while anything is still in flight, and shows the **As of** time it was computed and which EDR integrations the outcomes reflect (for example `EDR results from Microsoft Defender`).
+
+The header records who started the run (their name and email, looked up when the run starts; runs that stored only a user id show the name when displayed) and when, plus the pre-execution notice record:
 
 | Notice record | Shown as |
 |---------------|----------|
@@ -83,36 +85,54 @@ The header records who started the run (their name or email from the sign-in ses
 
 A notice that is still pending, not delivered, or skipped shows its run tag and state. The same header appears on the printed page.
 
+Completed cells use **the same labels and order as Analytics → All Executions**:
+
 | State | Meaning |
 |-------|---------|
+| **Protected** | A stage (or the test) was blocked: exit code 105, 126 or 127 |
+| **Prevented** | Nothing reported a block, but Microsoft Defender or CrowdStrike Falcon reported that it prevented the activity (quarantined, process killed, or blocked) |
+| **Detected** | Defender or CrowdStrike raised an alert for the test, but nothing was blocked or prevented |
+| **Unprotected** | At least one stage ran without being blocked (exit code 101), and no EDR alert matched |
+| **Error** | No stage reached a verdict and no EDR alert matched: for example exit code 999 (prerequisites not met), 1, 259 or 260, or the task failed |
 | **Waiting for notice** | The task is queued and the pre-execution notice has not been released yet |
 | **Running** | Queued (no notice), assigned, downloading, or executing |
-| **Protected** | The test completed and the control blocked or detected it |
-| **Unprotected** | The test completed and the control did not stop it |
-| **Error** | The task failed, or it completed with an exit code that is neither Protected (105, 126, 127) nor Unprotected (101): for example 0, 1, 259, 999, or 260 (blocked before execution), or a completed task with no result. The agent's error message, when there is one, is the cell's reason |
 | **Not run** | The task expired (the reason shows on hover), or there is no task for the pair |
 | **N/A** | Skipped at launch |
 
-Protected and Unprotected are decided by the same exit-code rules as the rest of the platform; see [Exit Codes and Outcomes](../analytics/exit-codes-and-outcomes).
+**Hover a cell** for its reason and, for multi-stage tests, each stage's exit code, for example:
+
+```
+Defender prevented it (process killed) during stage 2 (T1572). Stage 2 (T1572) reported a test error (999, prerequisites not met). Stage 3 (T1005) skipped.
+Stage 1 (T1105): 101
+Stage 2 (T1572): 999
+Stage 3 (T1005): skipped
+```
+
+Cyber-hygiene bundles are judged by their overall result, and the reason counts compliant controls (`47 of 52 controls compliant; 5 not.`).
+
+EDR alerts reach ProjectAchilles a few minutes after a run (the Defender sync runs every 5 minutes), so a cell can move from **Unprotected** to **Detected** or **Prevented** shortly after the test finishes. If Elasticsearch cannot be reached, the page says `EDR results unavailable` and falls back to exit codes alone. See [Exit Codes and Outcomes](../analytics/exit-codes-and-outcomes) for the exit-code rules.
 
 When a pair has more than one attempt in the run (a retry), the cell shows the **latest** attempt.
 
 ### % protected
 
 ```
-% protected = Protected / (Protected + Unprotected)
+% protected = (Protected + Prevented + Detected) / (Protected + Prevented + Detected + Unprotected)
 ```
 
-rounded to a whole number. Running, Error, Not run and N/A cells are **not** counted, so errors and skipped pairs never inflate or deflate the score. Until at least one cell is Protected or Unprotected, the value is shown as a dash.
+rounded to a whole number. This is the same basis as the Defense Score, which counts an EDR-detected result as protected. Running, Error, Not run and N/A cells are **not** counted, so errors and skipped pairs never inflate or deflate the score. Until at least one cell has a verdict, the value is shown as a dash.
 
 ## Exporting Evidence
 
-- **Download CSV** produces one row for **every** test and host pair, including skipped and not-run pairs, with the columns `test, techniques, host, os, outcome, exit_code, reason, completed_at, as_of`.
-  - `outcome` is the cell state: `protected`, `unprotected`, `error`, `not_run`, `running`, `waiting_for_notice`, or `na` for a pair skipped at launch.
-  - `reason` says why a pair has no verdict: the skip reason for `na` (for example `no windows binary`), the expiry or cancel reason for `not_run`, and the agent's error message for `error`.
+- **Download CSV** produces one row for **every** test and host pair, including skipped and not-run pairs, with the columns `test, techniques, host, os, outcome, exit_code, reason, completed_at, as_of, stages, edr`.
+  - `outcome` is the cell state: `protected`, `prevented`, `detected`, `unprotected`, `error`, `not_run`, `running`, `waiting_for_notice`, or `na` for a pair skipped at launch.
+  - `reason` explains every outcome, using the same text as the hover.
+  - `stages` lists each stage's exit code, for example `1:101 2:999 3:skip`, or the compliant-control count for a cyber-hygiene bundle.
+  - `edr` summarizes what the EDR reported, for example `Defender: prevented (process killed)` or `Defender: alert raised`, or `unavailable` when Elasticsearch could not be reached.
   - `exit_code` is empty for `na` and `not_run` pairs.
+  - `stages` and `edr` were added at the end of each row, so files read by position before they existed still parse.
   - The file name includes the as-of time, for example `campaign-run-<run-id>-20261023T1405Z.csv`, so two exports of the same run are distinguishable.
-- **Print** opens the browser print dialog with a print-ready layout (navigation hidden, light theme), suitable for saving as PDF.
+- **Print** opens the browser print dialog with a landscape, light-theme layout, suitable for saving as PDF. The column header repeats on every page and rows never split across pages. When there are more than 12 columns, they print in blocks of 12, each block starting a new page and repeating the first column. Reasons are in the CSV, not on paper.
 
 Every export carries the **as-of** time: the moment the evidence was read. A run that is still in progress will change on the next export.
 

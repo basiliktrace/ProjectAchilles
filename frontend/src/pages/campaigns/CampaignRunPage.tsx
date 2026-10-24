@@ -8,33 +8,76 @@ import { Spinner } from '@/components/shared/ui/Spinner';
 import { campaignsApi, type CellState, type RunMatrix, type RunNotice } from '@/services/api/campaigns';
 
 const POLL_MS = 15_000;
+/** Printed columns per block: more than this and the matrix prints in blocks, one per page. */
+const PRINT_COLS = 12;
 
 const STATE_ORDER: CellState[] = [
-  'protected', 'unprotected', 'error', 'running', 'waiting_for_notice', 'not_run', 'na',
+  'protected', 'prevented', 'detected', 'unprotected', 'error', 'running', 'waiting_for_notice', 'not_run', 'na',
 ];
 
+/** Same labels and order as Analytics. */
 const STATE_LABEL: Record<CellState, string> = {
   waiting_for_notice: 'Waiting for notice',
   running: 'Running',
   protected: 'Protected',
+  prevented: 'Prevented',
+  detected: 'Detected',
   unprotected: 'Unprotected',
   error: 'Error',
   not_run: 'Not run',
   na: 'N/A',
 };
 
-/** Theme tokens only, so all three themes restyle the matrix. */
+/** Theme tokens only. Error is blue (info) so it never reads as Detected (amber). */
 const STATE_CLASS: Record<CellState, string> = {
-  waiting_for_notice: 'bg-info-dim text-info',
-  running: 'bg-info-dim text-info',
+  waiting_for_notice: 'bg-raised text-muted',
+  running: 'bg-raised text-foreground',
   protected: 'bg-success/15 text-success',
+  prevented: 'bg-success/15 text-success',
+  detected: 'bg-warning-dim text-warning',
   unprotected: 'bg-danger-dim text-danger',
-  error: 'bg-warning-dim text-warning',
+  error: 'bg-info-dim text-info',
   not_run: 'bg-raised text-muted',
   na: 'bg-raised text-faint',
 };
 
-const TERMINAL: CellState[] = ['protected', 'unprotected', 'error', 'not_run'];
+const TERMINAL: CellState[] = ['protected', 'prevented', 'detected', 'unprotected', 'error', 'not_run'];
+/** Counted as protected, like the Defense Score. */
+const COVERED: CellState[] = ['protected', 'prevented', 'detected'];
+
+type Cell = RunMatrix['cells'][string][string];
+interface Axis { key: string; label: string; sub?: string }
+
+/** "covered/conclusive" for a row or column of cells, or "—" when nothing is conclusive. */
+function coverage(cells: (Cell | undefined)[]): string {
+  const covered = cells.filter((c) => c && COVERED.includes(c.state)).length;
+  const conclusive = covered + cells.filter((c) => c?.state === 'unprotected').length;
+  return conclusive === 0 ? '—' : `${covered}/${conclusive}`;
+}
+
+/** Hover text: outcome, reason, and the stage-by-stage result. */
+function cellTitle(c: Cell): string | undefined {
+  const lines = [c.reason ?? '', ...c.stages.map((s) => `${s.label}: ${s.outcome === 'skipped' ? 'skipped' : s.exit_code ?? '—'}`)];
+  const text = lines.filter(Boolean).join('\n');
+  return text || undefined;
+}
+
+function chunk<T>(items: T[], size: number): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size));
+  return out.length > 0 ? out : [[]];
+}
+
+/** Landscape while the run page is mounted, like the Analytics report: a named @page would add a blank page. */
+function useLandscapePrint() {
+  useEffect(() => {
+    const style = document.createElement('style');
+    style.setAttribute('data-campaign-print', '');
+    style.textContent = '@page { size: landscape; margin: 10mm; }';
+    document.head.appendChild(style);
+    return () => style.remove();
+  }, []);
+}
 
 function isUnsettled(m: RunMatrix): boolean {
   return m.totals.waiting_for_notice > 0 || m.totals.running > 0;
@@ -76,6 +119,7 @@ function noticeRecordText(notice: RunNotice | null): string {
 
 export default function CampaignRunPage() {
   const { runId } = useParams<{ runId: string }>();
+  useLandscapePrint();
   const [matrix, setMatrix] = useState<RunMatrix | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
@@ -133,6 +177,92 @@ export default function CampaignRunPage() {
   const percent = progressPercent(matrix);
   const notice = run.notice;
 
+  // The longer list goes down the side, so the matrix grows downward, not sideways.
+  const hostsAsRows = agents.length > tests.length;
+  const testAxis: Axis[] = tests.map((t) => ({ key: t.uuid, label: t.name }));
+  const hostAxis: Axis[] = agents.map((a) => ({ key: a.id, label: a.hostname, sub: a.os }));
+  const rows = hostsAsRows ? hostAxis : testAxis;
+  const cols = hostsAsRows ? testAxis : hostAxis;
+  const cellAt = (r: string, c: string): Cell | undefined =>
+    hostsAsRows ? cells[c]?.[r] : cells[r]?.[c];
+  const blocks = chunk(cols, PRINT_COLS);
+  const edrLine = matrix.edr.status === 'unavailable'
+    ? 'EDR results unavailable: outcomes use test exit codes only'
+    : matrix.edr.sources.length > 0 ? `EDR results from ${matrix.edr.sources.join(' and ')}` : null;
+
+  const table = (blockCols: Axis[], screen: boolean) => (
+    <table className="w-full border-separate border-spacing-0 text-sm">
+      <thead>
+        <tr>
+          <th className={`border-b border-border bg-surface px-3 py-2 text-left font-medium ${screen ? 'sticky left-0 top-0 z-30 print:static' : ''}`}>
+            {hostsAsRows ? 'Host' : 'Test'}
+          </th>
+          {blockCols.map((c) => (
+            <th
+              key={c.key}
+              title={c.label}
+              className={`min-w-[7rem] max-w-[14rem] border-b border-border bg-surface px-3 py-2 text-left align-bottom font-medium ${screen ? 'sticky top-0 z-20 print:static' : ''}`}
+            >
+              <span className="line-clamp-3 whitespace-normal">{c.label}</span>
+              {c.sub && <span className="block text-xs font-normal text-muted">{c.sub}</span>}
+            </th>
+          ))}
+          <th className={`border-b border-l border-border bg-surface px-3 py-2 text-right font-medium ${screen ? 'sticky top-0 z-20 print:static' : ''}`}>
+            Protected
+          </th>
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map((r) => {
+          const rowCells = cols.map((c) => cellAt(r.key, c.key));
+          return (
+            <tr key={r.key}>
+              <th
+                scope="row"
+                className={`border-b border-r border-border bg-background px-3 py-2 text-left font-normal ${screen ? 'sticky left-0 z-10 print:static' : ''}`}
+              >
+                {r.label}
+                {r.sub && <span className="ml-2 text-xs text-muted">{r.sub}</span>}
+              </th>
+              {blockCols.map((c) => {
+                const cell = cellAt(r.key, c.key);
+                if (!cell) return <td key={c.key} className="border-b border-border px-3 py-2" />;
+                return (
+                  <td
+                    key={c.key}
+                    data-state={cell.state}
+                    title={cellTitle(cell)}
+                    className={`whitespace-nowrap border-b border-border px-3 py-2 ${STATE_CLASS[cell.state]}`}
+                  >
+                    {STATE_LABEL[cell.state]}
+                  </td>
+                );
+              })}
+              <td className="border-b border-l border-border px-3 py-2 text-right tabular-nums text-muted">
+                {coverage(rowCells)}
+              </td>
+            </tr>
+          );
+        })}
+      </tbody>
+      <tfoot>
+        <tr>
+          <th scope="row" className={`border-t border-border bg-surface px-3 py-2 text-left font-medium ${screen ? 'sticky bottom-0 left-0 z-30 print:static' : ''}`}>
+            Protected
+          </th>
+          {blockCols.map((c) => (
+            <td key={c.key} className={`border-t border-border bg-surface px-3 py-2 tabular-nums text-muted ${screen ? 'sticky bottom-0 z-20 print:static' : ''}`}>
+              {coverage(rows.map((r) => cellAt(r.key, c.key)))}
+            </td>
+          ))}
+          <td className={`border-l border-t border-border bg-surface px-3 py-2 text-right font-medium tabular-nums ${screen ? 'sticky bottom-0 z-20 print:static' : ''}`}>
+            {totals.percent_protected === null ? '—' : `${totals.percent_protected}%`}
+          </td>
+        </tr>
+      </tfoot>
+    </table>
+  );
+
   return (
     <PageContainer>
       <div className="campaign-run-print">
@@ -160,7 +290,14 @@ export default function CampaignRunPage() {
             <dt className="sr-only">Pre-execution notice</dt>
             <dd data-testid="notice-record">{noticeRecordText(notice)}</dd>
           </div>
-          <div><dd className="inline font-medium">{`As of ${new Date(matrix.as_of).toLocaleString()}`}</dd></div>
+          <div className="sm:col-span-2">
+            <dd className="inline font-medium">{`As of ${new Date(matrix.as_of).toLocaleString()}`}</dd>
+            {edrLine && (
+              <dd data-testid="edr-line" className={`inline ${matrix.edr.status === 'unavailable' ? 'text-warning' : 'text-muted'}`}>
+                {` · ${edrLine}`}
+              </dd>
+            )}
+          </div>
         </dl>
 
         <div className="mb-4">
@@ -191,40 +328,23 @@ export default function CampaignRunPage() {
               {`${STATE_LABEL[s]}: `}<span className="text-foreground">{totals[s]}</span>
             </span>
           ))}
+          <span className="basis-full text-xs text-faint">
+            Prevented and Detected count as protected, as in the Defense Score. Hover a cell for the reason and each stage&apos;s result.
+          </span>
         </div>
 
-        <div className="campaign-matrix-scroll overflow-x-auto rounded-[10px] border border-border">
-          <table className="w-full border-collapse text-sm">
-            <thead>
-              <tr className="bg-surface">
-                <th className="px-3 py-2 text-left font-medium">Test</th>
-                {agents.map((a) => (
-                  <th key={a.id} className="px-3 py-2 text-left font-medium">
-                    {a.hostname}
-                    <span className="block text-xs font-normal text-muted">{a.os}</span>
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {tests.map((t) => (
-                <tr key={t.uuid} className="border-t border-border">
-                  <th scope="row" className="px-3 py-2 text-left font-normal">{t.name}</th>
-                  {agents.map((a) => {
-                    const c = cells[t.uuid]?.[a.id];
-                    if (!c) return <td key={a.id} className="px-3 py-2" />;
-                    const title = (c.state === 'na' || c.state === 'not_run') && c.reason ? c.reason : undefined;
-                    return (
-                      <td key={a.id} data-state={c.state} title={title} className={`px-3 py-2 ${STATE_CLASS[c.state]}`}>
-                        {STATE_LABEL[c.state]}
-                      </td>
-                    );
-                  })}
-                </tr>
-              ))}
-            </tbody>
-          </table>
+        <div className={`campaign-matrix-scroll max-h-[70vh] overflow-auto rounded-[10px] border border-border ${blocks.length > 1 ? 'print:hidden' : ''}`}>
+          {table(cols, true)}
         </div>
+        {blocks.length > 1 && (
+          <div className="hidden print:block" data-testid="print-blocks">
+            {blocks.map((b, i) => (
+              <div key={i} className={i > 0 ? 'break-before-page' : ''}>
+                {table(b, false)}
+              </div>
+            ))}
+          </div>
+        )}
 
         <p className="mt-4 text-sm print:hidden">
           <Link to="/campaigns" className="text-accent hover:underline">Back to campaigns</Link>

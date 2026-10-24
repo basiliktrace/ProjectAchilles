@@ -131,15 +131,26 @@ started before the field existed also report the user id.
 - `run`: id, campaign id and name, framework label, `started_by`, `started_by_name`, `started_at`, and `notice` (or `null` when notices were off at launch)
 - `run.notice`: `id`, `run_tag`, `state`, `last_error`, `release_at`, `pickup_deadline`, plus the delivery record `sent_at`, `recipients` (array of addresses), `override_by`, `override_reason` and `override_at`
 - `tests`, `agents`: the snapshot taken at launch
-- `cells[test_uuid][agent_id]`: `{ state, exit_code, task_id, completed_at, reason, techniques }`. `reason` is the skip reason for `na`, the task's error for `not_run` and `error`, otherwise `null`
+- `cells[test_uuid][agent_id]`: `{ state, exit_code, task_id, completed_at, reason, techniques, edr, stages, stages_text }`.
+  - `reason` explains the outcome: the skip reason for `na`, the task's error for `not_run` and failed tasks, and for completed tasks a sentence such as `Blocked at stage 2 (T1572), exit 126.`. It is `null` only while a task is running or waiting.
+  - `edr`: `Defender: prevented (process killed)`, `Defender: alert raised`, `unavailable`, or `null`.
+  - `stages`: one `{ label, exit_code, outcome }` per stage of a multi-stage test (empty otherwise). `outcome` uses the Analytics stage vocabulary: `protected`, `prevented`, `detected`, `unprotected`, `inconclusive`, `skipped`.
+  - `stages_text`: the compact form used in the CSV.
+- `edr`: `{ status, sources }`. `status` is `ok`, `unavailable` (Elasticsearch could not be reached, so outcomes use exit codes only) or `not_configured`. `sources` names the configured integrations (`Microsoft Defender`, `CrowdStrike Falcon`).
 - `totals`: a count per state plus `percent_protected`
 - `as_of`: ISO time the evidence was read
 
 Cell `state` is one of `waiting_for_notice`, `running`, `protected`,
-`unprotected`, `error`, `not_run`, `na`. `percent_protected` is
-`protected / (protected + unprotected)` rounded to an integer, or `null` when
-the denominator is 0. A cell reflects the latest task of the test and agent pair
-in the run (retries inherit the run id).
+`prevented`, `detected`, `unprotected`, `error`, `not_run`, `na`. Completed
+cells follow the Analytics label: Protected (a stage exited 105/126/127) >
+Prevented (an EDR confirmed prevention on any of the test's result documents)
+> Detected (an EDR alert matched) > Unprotected (a stage exited 101) > Error.
+EDR flags are read from the result documents by id (`<task_id>`, or
+`<task_id>::<control_id>` per stage). Cyber-hygiene bundles keep the task's own
+verdict. `percent_protected` is `(protected + prevented + detected) /
+(protected + prevented + detected + unprotected)` rounded to an integer, the
+Defense Score's basis, or `null` when the denominator is 0. A cell reflects the
+latest task of the test and agent pair in the run (retries inherit the run id).
 
 ### CSV export
 
@@ -147,8 +158,11 @@ in the run (retries inherit the run id).
 header:
 
 ```
-test,techniques,host,os,outcome,exit_code,reason,completed_at,as_of
+test,techniques,host,os,outcome,exit_code,reason,completed_at,as_of,stages,edr
 ```
+
+`stages` and `edr` were appended after the first release, so files read by
+column position still parse.
 
 There is one row for every test and host pair in the snapshot; none are left out.
 
@@ -156,7 +170,9 @@ There is one row for every test and host pair in the snapshot; none are left out
 |--------|---------|
 | `outcome` | The cell state. A pair skipped at launch is `na` |
 | `exit_code` | The latest attempt's exit code; empty for `na` and `not_run` |
-| `reason` | Skip reason (`na`), expiry or cancel reason (`not_run`), agent error (`error`); otherwise empty |
+| `reason` | Why the pair has this outcome (the cell's `reason`) |
+| `stages` | Per-stage exit codes (`1:101 2:999 3:skip`), or `<n> of <m> controls compliant` for a cyber-hygiene bundle; empty for single-binary tests |
+| `edr` | The cell's EDR summary; empty when no EDR alert matched |
 | `techniques` | ATT&CK techniques of the latest attempt, `; `-separated |
 | `as_of` | The time the evidence was read (the same on every row) |
 
