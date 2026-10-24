@@ -698,6 +698,28 @@ func TestDoneNonCAModesExplainTrust(t *testing.T) {
 	}
 }
 
+// The enroll command must stay on one line at any width: word-wrap breaks at
+// hyphens, and a split "--server" can't be copied. Found on a 100-column
+// terminal in the Hetzner test.
+func TestDoneEnrollCommandIsOneLine(t *testing.T) {
+	want := "achilles-agent --enroll <TOKEN> --server https://" + testHost + " --install"
+	for _, w := range []int{60, 78, 100, 140} {
+		s := &shared{deps: Deps{RepoRoot: "/opt/projectachilles", CADir: DefaultCADir}, theme: newTheme(true), width: w, height: 20,
+			cfg: &config.Config{TLSMode: "acme-http", AchillesDomain: testHost, CaddyBindIP: testIP}}
+		dn := newDone(s)
+		dn.Init()
+		found := false
+		for _, l := range strings.Split(dn.plain(), "\n") {
+			if strings.TrimSpace(l) == want {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("width %d: no line holds %q:\n%s", w, want, dn.plain())
+		}
+	}
+}
+
 // ---------------------------------------------------------------------------
 // 80x24 frames
 // ---------------------------------------------------------------------------

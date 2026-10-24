@@ -72,8 +72,10 @@ func (d *doneScreen) build() []string {
 		add(t.Title.Render("Certificates"))
 		para(trustText(c, d.s.deps.RepoRoot), "  ")
 		add("")
-		add(t.Title.Render("Enroll endpoints"))
-		para("Download the agent from the web UI and run it as Administrator/root with --enroll <TOKEN> --server "+url+" --install.", "  ")
+		add(t.Title.Render("Enroll endpoints") + t.Muted.Render(" (as Administrator/root):"))
+		para("Download the agent from the web UI, then run:", "  ")
+		// Never wrapped: word-wrap breaks at hyphens and would split a flag.
+		add("  " + t.Code.Render("achilles-agent --enroll <TOKEN> --server "+url+" --install"))
 		add("")
 	}
 
