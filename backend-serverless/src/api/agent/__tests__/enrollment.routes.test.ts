@@ -3,7 +3,7 @@ import express from 'express';
 import request from 'supertest';
 import type { DbHelper } from '../../../services/agent/database.js';
 import { createTestDatabase } from '../../../__tests__/helpers/db.js';
-import { mockClerkMiddleware } from '../../../__tests__/helpers/clerk-mock.js';
+import '../../../__tests__/helpers/clerk-mock.js';
 
 let testDb: DbHelper;
 
@@ -15,7 +15,6 @@ vi.mock('../../../services/agent/database.js', async (importOriginal) => {
   };
 });
 
-mockClerkMiddleware();
 
 const { agentEnrollmentRouter, adminEnrollmentRouter } = await import('../enrollment.routes.js');
 const { createToken } = await import('../../../services/agent/enrollment.service.js');

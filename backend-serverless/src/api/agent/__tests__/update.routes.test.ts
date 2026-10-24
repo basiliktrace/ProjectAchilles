@@ -5,7 +5,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import type { DbHelper } from '../../../services/agent/database.js';
 import { createTestDatabase } from '../../../__tests__/helpers/db.js';
-import { mockClerkMiddleware } from '../../../__tests__/helpers/clerk-mock.js';
+import '../../../__tests__/helpers/clerk-mock.js';
 
 // Real filesystem on purpose: containment has to hold against real symlinks
 // and `..` segments, which a mocked fs cannot exercise. Only homedir() moves,
@@ -33,7 +33,6 @@ vi.mock('../../../services/agent/signing.service.js', () => ({
   signHash: () => 'deadbeef'.repeat(16),
 }));
 
-mockClerkMiddleware();
 
 const { createAdminUpdateRouter } = await import('../update.routes.js');
 const { errorHandler } = await import('../../../middleware/error.middleware.js');

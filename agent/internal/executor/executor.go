@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"time"
 
 	"github.com/f0rt1ka/achilles-agent/internal/config"
@@ -141,6 +142,19 @@ func downloadBinary(ctx context.Context, client *httpclient.Client, task Task, d
 	return digest, written, nil
 }
 
+// executableName returns the on-disk filename to use for a downloaded test
+// binary. On Windows, Go's exec refuses to launch a file without an executable
+// extension (".exe"), reporting "executable file not found in %PATH%". If the
+// dispatched binary_name lacks it — e.g. a legacy build whose build-meta had no
+// per-OS binaries map, so a Windows agent received the extension-less name —
+// append ".exe" so the download is launchable. The check is case-insensitive.
+func executableName(goos, name string) string {
+	if goos == "windows" && !strings.HasSuffix(strings.ToLower(name), ".exe") {
+		return name + ".exe"
+	}
+	return name
+}
+
 // Execute downloads the test binary for the given task, verifies its integrity,
 // runs it with the specified arguments and timeout, and returns the execution result.
 func Execute(ctx context.Context, client *httpclient.Client, task Task, cfg *config.Config) (*Result, error) {
@@ -163,7 +177,7 @@ func Execute(ctx context.Context, client *httpclient.Client, task Task, cfg *con
 	// Step 2: Download the binary. Scope the context to MaxDownloadTimeout
 	// so a slow link can't tie up the agent forever; large binaries (e.g.
 	// 50 MB orchestrators with embedded .NET stages) need the full budget.
-	binaryPath := filepath.Join(tempDir, task.Payload.BinaryName)
+	binaryPath := filepath.Join(tempDir, executableName(runtime.GOOS, task.Payload.BinaryName))
 	dlCtx, cancelDl := context.WithTimeout(ctx, cfg.MaxDownloadTimeout)
 	digest, written, err := downloadBinary(dlCtx, client, task, binaryPath, cfg.MaxBinarySize)
 	cancelDl()

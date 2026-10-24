@@ -35,6 +35,8 @@ export function AlertsConfig({ onStatusChange }: AlertsConfigProps) {
   const [smtpSecure, setSmtpSecure] = useState(true);
   const [smtpUser, setSmtpUser] = useState('');
   const [smtpPass, setSmtpPass] = useState('');
+  // Masked saved username (`****abcd`), shown as a hint only, never sent back.
+  const [savedSmtpUserMask, setSavedSmtpUserMask] = useState('');
   const [fromAddress, setFromAddress] = useState('');
   const [recipients, setRecipients] = useState('');
 
@@ -90,7 +92,7 @@ export function AlertsConfig({ onStatusChange }: AlertsConfigProps) {
         if (settings.email?.smtp_host) setSmtpHost(settings.email.smtp_host);
         if (settings.email?.smtp_port != null) setSmtpPort(String(settings.email.smtp_port));
         if (settings.email?.smtp_secure != null) setSmtpSecure(settings.email.smtp_secure);
-        if (settings.email?.smtp_user) setSmtpUser(settings.email.smtp_user);
+        if (settings.email?.smtp_user) setSavedSmtpUserMask(settings.email.smtp_user);
         if (settings.email?.from_address) setFromAddress(settings.email.from_address);
         if (settings.email?.recipients) setRecipients(settings.email.recipients.join(', '));
 
@@ -372,7 +374,11 @@ export function AlertsConfig({ onStatusChange }: AlertsConfigProps) {
 
         <Input
           label="Username"
-          placeholder={editMode ? 'Leave blank to keep current' : 'SMTP username'}
+          placeholder={
+            editMode
+              ? savedSmtpUserMask ? `Saved (${savedSmtpUserMask}). Leave blank to keep` : 'Leave blank to keep current'
+              : 'SMTP username'
+          }
           value={smtpUser}
           onChange={(e) => setSmtpUser(e.target.value)}
           helperText={editMode ? 'Optional: Only fill in to update' : undefined}

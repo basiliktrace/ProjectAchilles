@@ -8,6 +8,7 @@ import { DefenderSyncService } from '../services/defender/sync.service.js';
 import { AlertsService } from '../services/alerts/alerts.service.js';
 import { testSlackWebhook } from '../services/alerts/slack.service.js';
 import { testEmailConnection } from '../services/alerts/email.service.js';
+import { resolveTestEmailSettings } from '../services/alerts/testEmailSettings.js';
 import { validate } from '../middleware/validation.js';
 import {
   AzureCredentialsSchema,
@@ -858,8 +859,9 @@ router.post('/alerts/test', requirePermission('integrations:write'), validate(Al
       }
     }
 
-    // Test Email — use settings from request body or existing settings
-    const emailSettings = req.body.email || settings?.email;
+    // Test Email — form values over the saved ones; blank/masked credentials
+    // reuse the saved ones only while the host is unchanged.
+    const emailSettings = resolveTestEmailSettings(req.body.email, settings?.email);
     if (emailSettings?.smtp_host) {
       try {
         await validateHostForSSRF(emailSettings.smtp_host);

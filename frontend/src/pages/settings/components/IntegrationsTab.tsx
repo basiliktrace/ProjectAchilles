@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect } from 'react';
-import { Database, Cloud, ShieldCheck, Bell } from 'lucide-react';
+import { Database, Cloud, ShieldCheck, Bird, Bell, MailCheck } from 'lucide-react';
 import { CrowdStrikeLogo, SentinelOneLogo } from '@/components/shared/VendorLogos';
 import { useAnalyticsAuth } from '@/hooks/useAnalyticsAuth';
 import type { IntegrationStatus } from './IntegrationCard';
@@ -10,12 +10,19 @@ import { DefenderConfig } from './DefenderConfig';
 import { CrowdStrikeConfig } from './CrowdStrikeConfig';
 import { SentinelOneConfig } from './SentinelOneConfig';
 import { AlertsConfig } from './AlertsConfig';
+import { PreExecutionNoticesConfig } from './PreExecutionNoticesConfig';
+import { useCapabilities } from '@/hooks/useCapabilities';
 import { integrationsApi } from '@/services/api/integrations';
 import { alertsApi } from '@/services/api/alerts';
 import { sentinelOneApi } from '@/services/api/sentinelone';
 
 export function IntegrationsTab() {
   const { configured: analyticsConfigured } = useAnalyticsAuth();
+  const { preExecutionNotices } = useCapabilities();
+  const [noticesStatus, setNoticesStatus] = useState<IntegrationStatus>('not-configured');
+  const handleNoticesStatusChange = useCallback((enabled: boolean) => {
+    setNoticesStatus(enabled ? 'connected' : 'not-configured');
+  }, []);
 
   // Local state to track status changes from config forms
   const [analyticsStatus, setAnalyticsStatus] = useState<IntegrationStatus>(
@@ -129,6 +136,17 @@ export function IntegrationsTab() {
       >
         <AlertsConfig onStatusChange={handleAlertsStatusChange} />
       </IntegrationGridCard>
+
+      {preExecutionNotices && (
+        <IntegrationGridCard
+          icon={MailCheck}
+          title="Pre-execution notices"
+          description="Email security engineers before tests run and hold tests until the notice is accepted"
+          status={noticesStatus}
+        >
+          <PreExecutionNoticesConfig onStatusChange={handleNoticesStatusChange} />
+        </IntegrationGridCard>
+      )}
     </div>
   );
 }

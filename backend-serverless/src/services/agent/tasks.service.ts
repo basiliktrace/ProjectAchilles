@@ -172,16 +172,51 @@ export async function createTasks(
   }
 
   const buildMeta = JSON.parse(metaJson);
-  const binaryFilename: string = buildMeta.binary_name ?? buildMeta.filename ?? binary_name;
 
-  const binaryBuffer = await blobRead(`builds/${test_uuid}/${binaryFilename}`);
-  if (!binaryBuffer) {
-    throw new AppError(`Binary file not found: ${binaryFilename}`, 404);
+  // Resolve the binary PER AGENT OS (see backend/ tasks.service.ts for the full
+  // rationale). A cross-platform build records a per-OS `binaries` map; older
+  // single-binary builds have only one `filename`. Shipping one binary to every
+  // agent regardless of OS gave Windows agents the Linux orchestrator (no
+  // `.exe`), which Windows refuses to launch. Each Blob is read once (memoized).
+  const legacyFilename: string = buildMeta.binary_name ?? buildMeta.filename ?? binary_name;
+  const hasOsMap = buildMeta.binaries && typeof buildMeta.binaries === 'object';
+  const artifactCache = new Map<string, { name: string; sha256: string; size: number }>();
+
+  async function resolveArtifactForOs(agentOs: string): Promise<{ name: string; sha256: string; size: number }> {
+    const filename: string | undefined = hasOsMap
+      ? buildMeta.binaries[agentOs]?.filename
+      : legacyFilename;
+    if (!filename) {
+      const built = hasOsMap ? Object.keys(buildMeta.binaries).join(', ') : 'none';
+      throw new AppError(
+        `No binary was built for OS '${agentOs}' (test ${test_uuid}; built for: ${built})`,
+        422,
+      );
+    }
+    const cached = artifactCache.get(filename);
+    if (cached) return cached;
+
+    const buffer = await blobRead(`builds/${test_uuid}/${filename}`);
+    if (!buffer) {
+      throw new AppError(`Binary file not found: ${filename}`, 404);
+    }
+    const artifact = {
+      name: filename,
+      sha256: crypto.createHash('sha256').update(buffer).digest('hex'),
+      size: buffer.length,
+    };
+    artifactCache.set(filename, artifact);
+    return artifact;
   }
 
-  // Compute SHA256 and file size from buffer
-  const binarySha256 = crypto.createHash('sha256').update(binaryBuffer).digest('hex');
-  const binarySize = binaryBuffer.length;
+  // Look up each targeted agent's OS up front (single query).
+  const osPlaceholders = agent_ids.map(() => '?').join(', ');
+  const agentOsRows = await db.all(
+    `SELECT id, os FROM agents WHERE id IN (${osPlaceholders})`,
+    agent_ids,
+  ) as unknown as Array<{ id: string; os: string }>;
+  const osByAgentId = new Map(agentOsRows.map((r) => [r.id, r.os]));
+  const fallbackOs: string = buildMeta.platform?.os ?? 'linux';
 
   // Build payload with metadata enrichment from test catalog
   let enrichedMetadata: TaskTestMetadata = metadata ?? {
@@ -218,24 +253,31 @@ export async function createTasks(
     }
   }
 
-  const payload: TaskPayload = {
-    test_uuid,
-    test_name,
-    binary_name: binaryFilename,
-    binary_sha256: binarySha256,
-    binary_size: binarySize,
-    execution_timeout,
-    arguments: args,
-    metadata: enrichedMetadata,
-  };
-
-  // Inject integration credentials as env_vars for cloud-targeted tests
+  // Integration credentials (env_vars) are per-test, not per-agent — resolve once.
   const envVars = await resolveIntegrationEnvVars(enrichedMetadata);
-  if (envVars) {
-    payload.env_vars = envVars;
-  }
 
-  const payloadJson = JSON.stringify(payload);
+  // Build each agent's payload with the artifact for that agent's OS. Resolution
+  // happens before the transaction so an unbuilt OS fails the whole batch
+  // cleanly instead of leaving a partial dispatch.
+  const payloadByAgentId = new Map<string, string>();
+  for (const agentId of agent_ids) {
+    const agentOs = osByAgentId.get(agentId) ?? fallbackOs;
+    const artifact = await resolveArtifactForOs(agentOs);
+    const payload: TaskPayload = {
+      test_uuid,
+      test_name,
+      binary_name: artifact.name,
+      binary_sha256: artifact.sha256,
+      binary_size: artifact.size,
+      execution_timeout,
+      arguments: args,
+      metadata: enrichedMetadata,
+    };
+    if (envVars) {
+      payload.env_vars = envVars;
+    }
+    payloadByAgentId.set(agentId, JSON.stringify(payload));
+  }
 
   // Insert tasks inside a transaction
   const batchId = crypto.randomUUID();
@@ -247,7 +289,7 @@ export async function createTasks(
       await tx.execute({
         sql: `INSERT INTO tasks (id, agent_id, org_id, type, priority, status, payload, created_at, ttl, created_by, target_index, batch_id)
               VALUES (?, ?, ?, 'execute_test', ?, 'pending', ?, datetime('now'), 604800, ?, ?, ?)`,
-        args: [taskId, agentId, orgId, priority, payloadJson, createdBy, target_index ?? null, batchId],
+        args: [taskId, agentId, orgId, priority, payloadByAgentId.get(agentId)!, createdBy, target_index ?? null, batchId],
       });
       taskIds.push(taskId);
     }

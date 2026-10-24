@@ -1,0 +1,154 @@
+import { Router } from 'express';
+import type { Request } from 'express';
+import {
+  requireClerkAuth,
+  requirePermission,
+  getUserId,
+  getUserDisplayName,
+  getUserOrgId,
+  validateRequestOrgId,
+} from '../middleware/clerk.middleware.js';
+import { asyncHandler, AppError } from '../middleware/error.middleware.js';
+import { validate } from '../middleware/validation.js';
+import {
+  createCampaign,
+  updateCampaign,
+  deleteCampaign,
+  getCampaign,
+  listCampaigns,
+} from '../services/campaigns/campaigns.service.js';
+import { preflightCampaign } from '../services/campaigns/preflight.js';
+import { launchRun, PartialRunError } from '../services/campaigns/runs.service.js';
+import { getRunMatrix, listRuns, listAllRuns, runMatrixCsv } from '../services/campaigns/matrix.js';
+import { resolveUserLabel } from '../services/notices/userLabel.js';
+import {
+  CreateCampaignSchema,
+  UpdateCampaignSchema,
+  RunCampaignSchema,
+} from '../schemas/campaigns.schemas.js';
+
+const router = Router();
+
+router.use(requireClerkAuth());
+
+/**
+ * The caller's Clerk org, or undefined in legacy single-org mode. A no-org
+ * caller is rejected when REQUIRE_ORG_ISOLATION=true (same rule as notices).
+ */
+function callerOrg(req: Request): string | undefined {
+  const orgId = getUserOrgId(req.auth);
+  if (orgId) return orgId;
+  if (process.env.REQUIRE_ORG_ISOLATION === 'true') {
+    throw new AppError('Organization isolation required. Configure Clerk Organizations.', 403);
+  }
+  return undefined;
+}
+
+function requireUser(req: Request): string {
+  const userId = getUserId(req.auth);
+  if (!userId) throw new AppError('Unable to determine user identity', 401);
+  return userId;
+}
+
+/** `limit` 1..100 (default 25) and `offset` >= 0, clamped like /api/notices. */
+function pageParams(req: Request): { limit: number; offset: number } {
+  const rawLimit = parseInt(String(req.query.limit ?? ''), 10);
+  const rawOffset = parseInt(String(req.query.offset ?? ''), 10);
+  // SQLite treats a negative LIMIT as unlimited, so clamp explicitly.
+  const limit = Number.isFinite(rawLimit) ? Math.min(100, Math.max(1, rawLimit)) : 25;
+  const offset = Number.isFinite(rawOffset) ? Math.max(0, rawOffset) : 0;
+  return { limit, offset };
+}
+
+// Isolation guard for every route (before validation), so a future route can't skip it.
+router.use((req, _res, next) => {
+  callerOrg(req);
+  next();
+});
+
+const READ = 'endpoints:tasks:read';
+const WRITE = 'endpoints:tasks:create';
+
+router.get('/', requirePermission(READ), asyncHandler(async (req, res) => {
+  res.json({ success: true, data: await listCampaigns(callerOrg(req)) });
+}));
+
+// Run routes first: `/runs/:runId` must not be captured by `/:id`.
+router.get('/runs', requirePermission(READ), asyncHandler(async (req, res) => {
+  const { limit, offset } = pageParams(req);
+  res.json({ success: true, data: await listAllRuns(callerOrg(req), limit, offset) });
+}));
+
+router.get('/runs/:runId', requirePermission(READ), asyncHandler(async (req, res) => {
+  res.json({ success: true, data: await getRunMatrix(req.params.runId, callerOrg(req)) });
+}));
+
+router.get('/runs/:runId/export.csv', requirePermission(READ), asyncHandler(async (req, res) => {
+  const matrix = await getRunMatrix(req.params.runId, callerOrg(req));
+  // "As of" is the evidence snapshot time (spec 6.5.4): compact form for the filename.
+  const compact = matrix.as_of.replace(/[-:]/g, '').replace(/\.\d+Z$/, 'Z').replace(/^(\d{8}T\d{4})\d{2}Z$/, '$1Z');
+  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+  res.setHeader('Content-Disposition', `attachment; filename="campaign-run-${matrix.run.id}-${compact}.csv"`);
+  res.setHeader('X-Report-As-Of', matrix.as_of);
+  res.send(runMatrixCsv(matrix));
+}));
+
+router.post('/', requirePermission(WRITE), validate(CreateCampaignSchema), asyncHandler(async (req, res) => {
+  const userId = requireUser(req);
+  const { org_id, ...input } = req.body;
+  validateRequestOrgId(org_id, req.auth);
+  res.status(201).json({ success: true, data: createCampaign(input, org_id, userId) });
+}));
+
+router.get('/:id', requirePermission(READ), asyncHandler(async (req, res) => {
+  res.json({ success: true, data: getCampaign(req.params.id, callerOrg(req)) });
+}));
+
+router.put('/:id', requirePermission(WRITE), validate(UpdateCampaignSchema), asyncHandler(async (req, res) => {
+  const org = callerOrg(req);
+  const { org_id: _ignored, ...input } = req.body;
+  res.json({ success: true, data: updateCampaign(req.params.id, input, org) });
+}));
+
+router.delete('/:id', requirePermission(WRITE), asyncHandler(async (req, res) => {
+  deleteCampaign(req.params.id, callerOrg(req));
+  res.json({ success: true });
+}));
+
+router.get('/:id/preflight', requirePermission(READ), asyncHandler(async (req, res) => {
+  const campaign = getCampaign(req.params.id, callerOrg(req));
+  res.json({ success: true, data: preflightCampaign(campaign) });
+}));
+
+router.get('/:id/runs', requirePermission(READ), asyncHandler(async (req, res) => {
+  const org = callerOrg(req);
+  getCampaign(req.params.id, org); // 404 for unknown / cross-org, not an empty list
+  const { limit, offset } = pageParams(req);
+  res.json({ success: true, data: await listRuns(req.params.id, org, limit, offset) });
+}));
+
+router.post('/:id/runs', requirePermission(WRITE), validate(RunCampaignSchema), asyncHandler(async (req, res) => {
+  const userId = requireUser(req);
+  const org = callerOrg(req);
+  const { org_id, confirm_partial } = req.body;
+  validateRequestOrgId(org_id, req.auth);
+  try {
+    const data = launchRun(req.params.id, {
+      callerOrg: org,
+      orgId: org_id,
+      userId,
+      // Session claims rarely carry a name; fall back to a Clerk directory lookup.
+      userDisplay: getUserDisplayName(req.auth) ?? await resolveUserLabel(userId),
+      confirmPartial: confirm_partial === true,
+    });
+    res.status(201).json({ success: true, data });
+  } catch (err) {
+    if (err instanceof PartialRunError) {
+      res.status(409).json({ success: false, error: err.message, skipped: err.skipped });
+      return;
+    }
+    throw err;
+  }
+}));
+
+export default router;

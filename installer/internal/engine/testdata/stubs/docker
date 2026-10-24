@@ -1,7 +1,9 @@
 #!/bin/sh
-# Test stand-in for the docker CLI: logs each call and succeeds.
+# Test stand-in for the docker CLI: logs each call and succeeds. `ps` prints
+# STUB_DOCKER_PS (the working_dir labels of existing compose containers).
 [ -n "${STUB_LOG:-}" ] && echo "docker $*" >> "$STUB_LOG"
 case "$1" in
   --version) echo "Docker version 0.0.0-stub" ;;
+  ps) [ -n "${STUB_DOCKER_PS:-}" ] && printf '%s\n' "$STUB_DOCKER_PS" ;;
 esac
 exit 0

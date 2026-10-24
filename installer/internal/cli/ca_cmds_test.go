@@ -154,8 +154,17 @@ func TestCARenewAndExport(t *testing.T) {
 	if strings.TrimSpace(out.String()) != "renewed" {
 		t.Errorf("renew output %q, want \"renewed\"", out)
 	}
-	if want := "Caddy must be restarted to use the new intermediate: docker compose -f /srv/pa/docker-compose.server.yml restart caddy (the weekly timer does this automatically)"; !strings.Contains(errb.String(), want) {
-		t.Errorf("renewed stderr %q lacks %q", errb, want)
+	for _, want := range []string{
+		"until it restarts with its cached leaf certificates cleared",
+		"sudo systemctl start achilles-ca-renew.service (the weekly timer does this automatically)",
+		"sudo /srv/pa/achilles-installer install --config /srv/pa/deploy.config.env --yes",
+	} {
+		if !strings.Contains(errb.String(), want) {
+			t.Errorf("renewed stderr %q lacks %q", errb, want)
+		}
+	}
+	if strings.Contains(errb.String(), "restart caddy") {
+		t.Errorf("renewed stderr %q still suggests a plain restart, which keeps the cached leaves", errb)
 	}
 	if code := r.Run([]string{"ca", "renew", "--dir", dir, "--if-expiring", "soon"}, out, errb); code == 0 {
 		t.Error("bad --if-expiring accepted")

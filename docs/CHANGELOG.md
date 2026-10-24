@@ -11,25 +11,188 @@ This project uses two version streams:
 
 ## [Unreleased]
 
+## [2.4.0] - 2026-10-24
+
+### Upgrade notes
+
+- **Rebuild cross-platform tests.** Dispatch now picks each agent's binary by OS from a per-OS map in `build-meta.json`. A test built before this release has no map and keeps the old single-binary behaviour until it is rebuilt (#544).
+- **New tables are created on startup.** `campaigns`, `campaign_runs` and `run_notices`, plus nullable `tasks.notice_id` and `tasks.campaign_run_id` columns, are added automatically when the backend starts. The change is additive; existing data is untouched.
+- **Threshold alerts saved from the UI start firing.** Before #546 the email and Slack channels configured in the UI were never marked configured, so alerts silently never went out. After upgrading, tenants with alerts set up in the UI will begin receiving them.
+- **Pre-execution notices are off by default.** Before enabling them, confirm **Test Channels** in Settings → Integrations → Alerts & Notifications succeeds from the server: an outbound firewall that blocks the SMTP port holds every test run until the max wait, then marks it "Not run".
+- **"Started by" names**: campaign runs and notice emails look the user up in Clerk, so no session-token change is needed. Campaign runs started before this release show the name when displayed.
+- **Campaign CSV**: `stages` and `edr` columns are appended at the end, and `outcome` gains `prevented` and `detected`. Parsers that read by column position keep working.
+- Campaigns and pre-execution notices are backend-only; the Vercel (`backend-serverless/`) deployment hides them.
+
+### Highlights
+
+- **Security test campaigns**: save a set of tests × hosts, run it with one click, and get an evidence page (matrix, % protected, notice record, CSV, print) that uses the same outcome labels as Analytics (#549, #554).
+- **Pre-execution notices**: email the security engineers before every test run and hold the tests until the mail server accepts the notice, so the SOC knows the activity is a test (#545, #547, #553, #555, #556).
+- **Scheduler fixes**: viewing schedules no longer skips most scheduled runs, and randomized schedules no longer run twice on the same day (#548).
+
+### Added
+
+#### Campaigns
+- **Campaigns** (`/campaigns`, `/api/campaigns/*`): saved, org-scoped test plans of up to 100 tests and a set of agents, with a preflight check that lists pairs that can't run, an explicit "Run the rest" for partial runs, and one transaction for the whole launch (#549)
+- **Evidence page**: tests × hosts matrix with the Analytics outcome labels (Protected, Prevented, Detected, Unprotected, Error, Not run, N/A), a reason for every cell, per-stage results on hover, per-host and per-test totals, the notice record, "started by", an as-of time, CSV export and a print layout (#549, #554)
+- **Immutable run snapshots** and a run history per campaign plus an All runs view that keeps runs of deleted campaigns (#549)
+
+#### Pre-execution notices
+- **Notice email before every test run** (Run Now, retry, schedules, campaigns), with a lead time of 0–5 minutes after the mail server accepts it, a bounded wait, a pickup window, an ICS calendar file, a CSV of hosts past 50, and an optional Finished email (#545)
+- **Delivery failures are loud**: retries with backoff, a console banner, Slack alert, and "Not run: notice not delivered" when the max wait runs out (#545)
+- **Per-organization settings** with fallback to the deployment-wide settings (#545)
+- **Email content**: header `ProjectAchilles | f0_csv`, the triggering user's name and email, tests with UUID and stage count (or a bundle's control count), column headers, and a "Finding this activity in your security tools" section that names the test UUIDs and task folders (#553, #556)
+- **Release without notice from the UI**: Settings → Integrations → Pre-execution notices lists runs whose tests are held and releases one with a recorded reason; `GET /api/notices?state=` (#556)
+
+### Changed
+
+- **Campaign % protected** counts Prevented and Detected as protected, the Defense Score's basis (#554)
+- **Finished email** counts outcomes with the same labels as Analytics, including EDR prevention and detection (#555)
+- **Campaign matrix** puts the longer list (usually hosts) down the side, with a sticky first column and header (#554)
+- **Notice badge** reads "Sending notice…" while the email is being delivered (#550)
+
+### Fixed
+
+- **Schedules skipped most runs while a page was open**: listing or viewing schedules advanced an overdue `next_run_at` before the scheduler could fire it (#548)
+- **Randomized schedules could run twice on the same day** (#548)
+- **Late per-machine runs expired as "host offline"** when they joined a day notice that had already closed; they now get their own notice (#547)
+- **Alert channels configured in the UI never sent** because their `configured` flag was never set (#546)
+- **Alerts Test Channels failed after reopening the dialog** ("Missing credentials for PLAIN"); saved credentials are now reused while the SMTP host is unchanged (#551)
+- **Campaign print added a blank page** and clipped wide matrices (#554)
+- **Campaign "Started by"** showed a raw user ID (#554)
+- **The calendar file told the SOC to search for the run tag**, which never reaches the hosts (#556)
+- **Cross-platform tests sent the Linux binary to Windows agents**, which failed at once with exit -1 "executable file not found in %PATH%". Each agent now gets the binary built for its OS, and an agent whose OS was not built fails the dispatch with a 422 (#544)
+
+#### Installer and deployment
+- **Server installs pin their compose project name** in the root `.env` (`COMPOSE_PROJECT_NAME`). Compose used the checkout's directory name, so an install in `/opt/projectachilles` and a dev clone also called `projectachilles` shared one project: `up` recreated the other stack's containers and mounted its volumes. New installs use `achilles-server`; existing installs keep the name they already run under, so no data moves. The engine refuses to start when another checkout's containers use the name, and `restore` keeps the live project name instead of the backup's (#558)
+
+### Security
+
+- **Pre-execution notices could silently switch off**: one undecryptable credential in `integrations.json` made the notice setting read as disabled, so tests ran unannounced. The gate now reads its section without decryption and keeps the last good settings if the file is unreadable (#556)
+- **Re-saving the Alerts dialog overwrote the stored SMTP username with its masked value**, which would break alert and notice emails; masked values are now ignored (#551)
+- **Test Channels can't send the stored SMTP password to another host**: saved credentials are reused only when the host matches the saved one (#551)
+- **Cross-platform builds whose primary OS was Linux shipped an unsigned Windows binary**; the signing certificate is now passed whenever Windows is a target (#544)
+- Closed CodeQL `js/path-injection` findings on the per-OS build paths (#544)
+- **Dependency advisories patched**: body-parser 1.20.9 (GHSA-27r3-jxmh-p828) and multer 2.5.0 (GHSA-q7qp-rjg7-q26m), both request-reachable denial of service in the backend, plus undici 6.29.1 (GHSA-xjj6-f33q-929c, GHSA-4qv8-2p9j-2685) and zod 4.6.7 (GHSA-mrhx-c7xc-m3w5) (#560)
+
+### Documentation
+
+- Run Command tasks are not covered by pre-execution notices; the guide says so (#552)
+
+### Agent
+
+- No new agent release. The agent source now appends `.exe` to an extension-less test binary on Windows (#544); it ships with the next agent release. Agents 0.7.0 are already covered by the server-side dispatch fix.
+
+## [2.3.1] - 2026-10-22
+
+Security patch. The 2.3.0 backend image ran Node.js 22.22.2, which is affected by the [October 21, 2026 Node.js security release](https://nodejs.org/en/blog/vulnerability/october-2026-security-releases). This release moves the Docker images to Node.js 22.23.4 and picks up the month's minor/patch dependency updates, including a critical Next.js fix for the blog. There are no application code changes.
+
+### Upgrade notes
+
+- **Rebuild your images.** The Node.js version comes from the digest-pinned Dockerfile, so a restart or `docker compose pull` alone keeps the old runtime:
+  - Docker Compose: `git pull && docker compose build --pull && docker compose up -d`
+  - Server installs: re-run `./scripts/deploy-server.sh`, or `achilles-installer upgrade` on LAN installs
+  - Render and Fly.io redeploy from `main` automatically
+- **Native (non-Docker) installs** run the host's Node.js and need it upgraded separately, e.g. `apt-get install --only-upgrade nodejs` for NodeSource installs, then a backend restart.
+- **Vercel** (`backend-serverless/`) uses Vercel's managed Node.js 22 runtime. Confirm the project's Node.js version is 22.x.
+
+### Security
+
+- **Node.js 22.23.4 base images** for the backend runtime and the frontend build stage. This fixes CVE-2026-111497 (Brotli decoder out-of-bounds write, possible RCE), the TLS hostname-verification bypasses CVE-2026-106069 and CVE-2026-106072, `dns.resolve` NUL truncation (CVE-2026-105482), the `crypto.randomUUID()` snapshot entropy reuse (CVE-2026-106074), and the bundled OpenSSL, c-ares, SQLite, undici and CA-store updates. The backend does not decompress Brotli request bodies (Express 4 accepts only gzip/deflate), so the Brotli flaw was reachable only through outbound `fetch()` responses from integrations (#537)
+- **Dependabot now updates Docker base images weekly**, so digest pins pick up runtime security patches (#537)
+- **Blog: Next.js 16.4.2**, which fixes GHSA-2464-fhr4-w9xw (critical, unauthenticated RCE in the Image Optimization API with SVG files) and GHSA-p3m5-59mp-jv5r (high, Server Actions denial of service). The same group bumps nodemailer, @vercel/blob, React 19.3.1 and the Radix UI primitives (#538)
+
+## [2.3.0] - 2026-10-22
+
+Integrations, installer and insight release. CrowdStrike Falcon joins Microsoft Defender as a first-class EDR integration, an on-prem LAN installer with its own name-constrained CA ships, the dashboards now score the latest result per test and endpoint, and a print-ready execution report is available. Dependency and path-containment vulnerabilities were remediated.
+
 ### Upgrade notes
 
 - **Server installs (deploy-server.sh):** after pulling this release, re-run
   `./scripts/deploy-server.sh` (or `achilles-installer upgrade`) — Caddy config
   is now rendered into `deploy/caddy/rendered/`.
+- **Stage descriptions and exit code 260 need agent 0.7.0.** The platform handles both; endpoints keep working on older agents but will not report them.
+
+### Highlights
+
+- **CrowdStrike Falcon integration**: alert sync, test correlation, optional auto-resolve, Zero Trust Assessment scores, and vendor-confirmed prevention detection (also added for Defender).
+- **On-prem LAN installer (`achilles-installer`)**: a terminal wizard with a name-constrained ProjectAchilles CA, LAN-scoped firewall rules, one-command bootstrap, upgrade, backup and restore, and fingerprint-pinned endpoint bootstrap scripts (#534).
+- **Dashboards score what is true now**: Defense Score uses the latest result per test and endpoint, with new cadence, threat-actor readiness, ATT&CK and chain-depth widgets and a time range shared by Dashboard and Analytics.
+- **Run detail and test library**: ordered stages with plain-language verdicts and an attack-chain strip; a list view with fleet results on the Tests page.
+- **Execution report**: a print-ready PDF report with executive verdict, kill-chain, timeline and findings.
+- **Security hardening**: critical/high dependency advisories patched across all npm roots, agent binary paths confined, CodeQL alerts cleared, and a dependency-audit CI gate.
+
+### Added
+
+#### Integrations
+- **CrowdStrike Falcon integration** with alert sync, correlation to Achilles tests, auto-resolve and ZTA scores
+- **Vendor-confirmed prevention** for CrowdStrike and Defender: a stage the EDR reports as prevented is credited as protected; EDR-killed stages are eligible for correlation
+- **Defender re-fired alerts** are re-admitted through a resolution watermark
+- **CrowdStrike and Defender tabs** share one layout: full-width alert feed with source/severity filters, linked/organic timeline, evidence-based technique coverage (prevented / detected only / missed), driven by the page date range
+- **SB-PC-2026-001 compliance export** (JSON, with JSON Schema), honouring analytics scope filters
+
+#### Analytics
+- **Defense Score on latest-result basis** (`basis=latest`) for the dashboard and Analytics, with latest breakdowns for category, host, technique and coverage (both backend forks)
+- **Dashboard widgets**: testing cadence, threat-actor readiness, ATT&CK outcome matrix, and chain depth (replaces score by category), with rows that fill their height
+- **Shared time range** between Dashboard and Analytics
+- **Execution report** at `/analytics/report` and `GET /api/reports/executions`, opened from the Export menu; names the deployment via `ORGANIZATION_NAME`
+- **Run detail**: bundle stages in order, per-stage description, plain-language verdicts, ATT&CK technique names, attack-chain strip
+- **Tests page list view** with per-test fleet results, progressive columns and honest empty states
+
+#### Installer and deployment
+- **`achilles-installer` TUI** (preflight, network/DNS, certificates, Clerk key checks, progress, status, upgrade, backup/restore), release binaries, and a Windows installer CI job
+- **Name-constrained CA** with renewal, CA rotation (`CA_ROTATE`), `HOSTS_ENTRY`, `CADDY_BIND_IP`, and LAN-scoped firewall rules that never lock out SSH
+- **Async test builds**: Build runs in the background with polling, resumes after a refresh, and Build All runs one test at a time
+- Backend warns when git sync is off and the local tests folder is missing
+- **On-prem LAN deployment guide** (repo + wiki) for the installer, managed CA and Windows rollout (#535)
+
+### Changed
+
+- **Defense Score tile and trend now share a basis**; trend extends to now and empty windows show as gaps instead of 0 (the CLI shows a dash)
+- **ATT&CK technique charts score per stage**, so a sibling stage never marks a technique protected
+- **Chain depth** buckets a blocked chain at its first blocked stage, and separates detected/undetected chains, pre-execution blocks ("Stage not run") and stage errors
+- **Test filter rail** is quieter; severity dropped from the test library
+- **"All time" preset** now queries all data (was 7 days)
+- **Installers** use the real repository URLs, a persistent Go build cache, and a root `.env` Clerk key
+- Defense Score exit-code and outcome rules documented in a canonical Exit Codes and Outcomes reference
 
 ### Fixed
 
-#### Agents
-- **Defender ASR pre-execution blocks are recorded as a result, not a failed
-  task.** When ASR rule `01443614` (or an application-control policy) denies
-  launch of a fresh, low-prevalence test binary (`ACCESS_DENIED` at process
-  creation), the agent now reports exit code `260` (`BlockedPreExecution`) with
-  a reason naming the rule and the `C:\F0\tasks` per-rule exclusion remedy,
-  instead of returning a bare error that failed the task and left it stuck in
-  `executing`. The backend classifies `260` as `inconclusive` — excluded from
-  both the Defense Score and the Error Rate — so a reputation-gate block neither
-  inflates the score nor counts as a test error; the technique simply was not
-  evaluated (both backend forks).
+#### Analytics
+- **Stage documents are no longer dropped** when exit codes exceed int32
+- **Alert correlation**: terminal alerts cannot re-enter correlation windows; coverage "detected" excludes sibling bundle stages; strict ISO window params; facet counts ignore severity
+- **Cadence counts** exclude skipped stages and upload confirmations
+- **Execution report** accuracy fixes: truncated (not rounded) rates, silent-run counts, DST-safe timelines, partial shard failures and alert budgets surfaced instead of read as "no alerts"
+
+#### Integrations
+- **Defender sync no longer fails silently** on least-privilege ES keys; Sync Now is authenticated and shows errors
+- **CrowdStrike ZTA** uses the real `queries/assessments/v1` endpoint; a 404 is treated as not licensed; the `achilles-crowdstrike` index is created by init helpers
+
+#### Frontend
+- Build All stops when the drawer closes and backs off on 429; inconclusive tests are no longer labelled "not run"; technique chips and test list fit laptop widths
+
+#### Installer and deployment
+- **Docker/installer**: Clerk key is accepted and never overwritten by the placeholder, long builds pass the nginx proxy, Fly deploys stamp the commit, existing server installs stay upgradable
+- **Windows installer** runs on PowerShell 5.1 and no longer crashes in Phase 4
+- **Backend** falls back to the global platform setting on conflicting build tags
+
+### Security
+
+- **Registered agent binary paths and build outputs are confined** to the binaries directory (CodeQL path-injection fixes)
+- **Critical/high dependency advisories patched** in backend, backend-serverless, frontend, blog and wiki (Docusaurus 3.10.2)
+- **CrowdStrike client** CodeQL SSRF and ReDoS alerts resolved
+- **Dependency-audit CI gate** fails on high/critical advisories with an expiring allow-list
+- **Installer hardening**: Windows bootstrap locks `C:\F0` and the agent ACL before use, imports the CA root from verified bytes, backup restore has containment checks and a pinned helper image
+
+## Agent [0.7.0] - 2026-10-22
+
+### Added
+- **Per-stage descriptions.** The agent carries each stage's plain-language `description` from `bundle_results.json` to the platform, shown in run detail (requires platform 2.3.0)
+
+### Fixed
+- **Defender ASR pre-execution blocks are recorded as a result, not a failed task.** When ASR rule `01443614` (or an application-control policy) denies launch of a fresh, low-prevalence test binary (`ACCESS_DENIED` at process creation), the agent now reports exit code `260` (`BlockedPreExecution`) with a reason naming the rule and the `C:\F0\tasks` per-rule exclusion remedy, instead of failing the task and leaving it stuck in `executing`. The backend classifies `260` as `inconclusive`, excluded from the Defense Score and Error Rate.
+
+### Changed
+- Updated `golang.org/x/sys`
 
 ## [2.2.0] - 2026-09-24
 
@@ -543,6 +706,8 @@ Complete platform overhaul — custom agent system, multi-deployment support, Mi
 
 | Version | Date | Description |
 |---------|------|-------------|
+| 2.3.0 | 2026-10-22 | CrowdStrike Falcon integration, on-prem LAN installer, latest-result Defense Score, execution report, security hardening |
+| Agent 0.7.0 | 2026-10-22 | Per-stage descriptions, ASR pre-execution blocks reported as exit 260 |
 | 2.2.0 | 2026-09-24 | Agent update hardening, responsive console, new landing, real `/api/health` version, Dependabot and CI supply-chain hardening |
 | Agent 0.6.7 | 2026-09-24 | Launch check with rollback, locale-safe fallback restart, repeat-install guard, update task results accepted |
 | 2.1.0 | 2026-09-01 | f0 console restyle, unified Security Dashboard, flat navigation, API keys, self-hosted targets |
@@ -551,11 +716,15 @@ Complete platform overhaul — custom agent system, multi-deployment support, Mi
 | Agent 0.6.0 | 2026-04-03 | First tagged agent binary release |
 | 1.0.0 | 2024-12-10 | Initial release |
 
-[Unreleased]: https://github.com/F0RT1KA/ProjectAchilles/compare/v2.2.0...HEAD
-[2.2.0]: https://github.com/F0RT1KA/ProjectAchilles/compare/v2.1.0...v2.2.0
-[Agent 0.6.7]: https://github.com/F0RT1KA/ProjectAchilles/compare/agent-v0.6.3...agent-v0.6.7
-[2.1.0]: https://github.com/F0RT1KA/ProjectAchilles/compare/v2.0.0...v2.1.0
-[Agent 0.6.3]: https://github.com/F0RT1KA/ProjectAchilles/compare/agent-v0.6.0...agent-v0.6.3
-[Agent 0.6.0]: https://github.com/F0RT1KA/ProjectAchilles/releases/tag/agent-v0.6.0
-[2.0.0]: https://github.com/F0RT1KA/ProjectAchilles/compare/v1.0.0...v2.0.0
-[1.0.0]: https://github.com/F0RT1KA/ProjectAchilles/releases/tag/v1.0.0
+[Unreleased]: https://github.com/projectachilles/ProjectAchilles/compare/v2.4.0...HEAD
+[2.4.0]: https://github.com/projectachilles/ProjectAchilles/compare/v2.3.1...v2.4.0
+[2.3.1]: https://github.com/projectachilles/ProjectAchilles/compare/v2.3.0...v2.3.1
+[2.3.0]: https://github.com/projectachilles/ProjectAchilles/compare/v2.2.0...v2.3.0
+[Agent 0.7.0]: https://github.com/projectachilles/ProjectAchilles/compare/agent-v0.6.7...agent-v0.7.0
+[2.2.0]: https://github.com/projectachilles/ProjectAchilles/compare/v2.1.0...v2.2.0
+[Agent 0.6.7]: https://github.com/projectachilles/ProjectAchilles/compare/agent-v0.6.3...agent-v0.6.7
+[2.1.0]: https://github.com/projectachilles/ProjectAchilles/compare/v2.0.0...v2.1.0
+[Agent 0.6.3]: https://github.com/projectachilles/ProjectAchilles/compare/agent-v0.6.0...agent-v0.6.3
+[Agent 0.6.0]: https://github.com/projectachilles/ProjectAchilles/releases/tag/agent-v0.6.0
+[2.0.0]: https://github.com/projectachilles/ProjectAchilles/compare/v1.0.0...v2.0.0
+[1.0.0]: https://github.com/projectachilles/ProjectAchilles/releases/tag/v1.0.0

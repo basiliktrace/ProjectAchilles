@@ -346,3 +346,23 @@ func TestBundleControlDescriptionRoundTrip(t *testing.T) {
 		t.Errorf("empty description should be omitted: %v", back.BundleResults.Controls[1])
 	}
 }
+
+// TestExecutableName verifies Windows gets a launchable .exe name even when the
+// dispatched binary_name lacks the extension (defensive against legacy builds
+// whose build-meta had no per-OS binaries map).
+func TestExecutableName(t *testing.T) {
+	cases := []struct {
+		goos, in, want string
+	}{
+		{"windows", "c37d6a01-3934-4e72", "c37d6a01-3934-4e72.exe"},
+		{"windows", "c37d6a01-3934-4e72.exe", "c37d6a01-3934-4e72.exe"},
+		{"windows", "tool.EXE", "tool.EXE"}, // case-insensitive: don't double-append
+		{"linux", "c37d6a01-3934-4e72", "c37d6a01-3934-4e72"},
+		{"darwin", "orchestrator", "orchestrator"},
+	}
+	for _, c := range cases {
+		if got := executableName(c.goos, c.in); got != c.want {
+			t.Errorf("executableName(%q, %q) = %q, want %q", c.goos, c.in, got, c.want)
+		}
+	}
+}

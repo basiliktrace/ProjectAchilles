@@ -37,6 +37,9 @@ import crowdstrikeRoutes from './api/crowdstrike.routes.js';
 import sentinelOneAnalyticsRoutes from './api/sentinelone-analytics.routes.js';
 import sentinelOneRoutes, { sentinelOneSyncService } from './api/sentinelone.routes.js';
 import riskAcceptanceRoutes from './api/risk-acceptance.routes.js';
+import noticesRoutes from './api/notices.routes.js';
+import campaignsRoutes from './api/campaigns.routes.js';
+import { processNotices } from './services/notices/notices.service.js';
 import reportsRoutes from './api/reports.routes.js';
 import cliAuthRoutes from './api/cli-auth.routes.js';
 import { acceptCliAuth } from './middleware/cliAuth.middleware.js';
@@ -306,6 +309,8 @@ async function startServer() {
       certUpload: true,
       gitSync: true,
       agentBuild: true,
+      preExecutionNotices: true,
+      campaigns: true,
       platform: 'docker',
     });
   });
@@ -352,6 +357,12 @@ async function startServer() {
 
   // Risk acceptance - formal risk acceptance for security controls
   app.use('/api/risk-acceptances', riskAcceptanceRoutes);
+
+  // Pre-execution notices - settings, status, admin release
+  app.use('/api/notices', noticesRoutes);
+
+  // Campaigns - saved test plans, one-click runs, evidence matrix
+  app.use('/api/campaigns', campaignsRoutes);
 
   // Compliance reports (SB-PC-2026-001 etc.) - read-only ES projections
   app.use('/api/reports', reportsRoutes);
@@ -407,7 +418,14 @@ async function startServer() {
 function startBackgroundJobs(httpServer?: http.Server) {
   // --- Task scheduler: process due schedules every 60s ---
   processSchedules(); // Startup recovery: catch up on past-due schedules
-  const schedulerInterval = setInterval(processSchedules, 60_000);
+  const noticeTick = () => {
+    processNotices().catch((err: unknown) => console.error('[Notices] Tick failed:', err));
+  };
+  noticeTick();
+  const schedulerInterval = setInterval(() => {
+    processSchedules();
+    noticeTick();
+  }, 60_000);
 
   // --- Auto key rotation: check every 60s ---
   const autoRotationInterval = setInterval(processAutoRotation, 60_000);

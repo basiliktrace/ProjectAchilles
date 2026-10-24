@@ -904,6 +904,104 @@ describe('tasks.service', () => {
       expect(payload.execution_timeout).toBe(300);
       expect(payload.arguments).toEqual([]);
     });
+
+    describe('per-OS binary selection', () => {
+      // build-meta.json produced by a cross-platform build: one artifact per OS.
+      function setupMultiOsMeta() {
+        mockReadFileSync.mockImplementation((p: string) => {
+          if (typeof p === 'string' && p.endsWith('build-meta.json')) {
+            return JSON.stringify({
+              platform: { os: 'linux', arch: 'amd64' },
+              filename: 'cross', // legacy "primary" pointer (linux)
+              binaries: {
+                windows: { filename: 'cross.exe', fileSize: 10, signed: true },
+                linux: { filename: 'cross', fileSize: 20, signed: false },
+              },
+            });
+          }
+          // Return a distinct buffer per OS artifact so SHA256 differs.
+          if (typeof p === 'string' && p.endsWith('cross.exe')) return Buffer.from('WINDOWS-PE');
+          if (typeof p === 'string' && p.endsWith('cross')) return Buffer.from('LINUX-ELF');
+          return Buffer.from('fallback');
+        });
+      }
+
+      it('dispatches the OS-matching binary filename to each agent', () => {
+        setupMultiOsMeta();
+        insertTestAgent(testDb, { id: 'win-agent', os: 'windows' });
+        insertTestAgent(testDb, { id: 'lin-agent', os: 'linux' });
+
+        createTasks({
+          agent_ids: ['win-agent', 'lin-agent'],
+          test_uuid: 'test-uuid-001',
+          test_name: 'Cross Platform',
+          binary_name: 'cross',
+        }, 'org-001', 'user-001');
+
+        const winTask = testDb.prepare('SELECT payload FROM tasks WHERE agent_id = ?').get('win-agent') as any;
+        const linTask = testDb.prepare('SELECT payload FROM tasks WHERE agent_id = ?').get('lin-agent') as any;
+
+        expect(JSON.parse(winTask.payload).binary_name).toBe('cross.exe');
+        expect(JSON.parse(linTask.payload).binary_name).toBe('cross');
+      });
+
+      it('computes a distinct SHA256 per OS artifact', () => {
+        setupMultiOsMeta();
+        insertTestAgent(testDb, { id: 'win-agent', os: 'windows' });
+        insertTestAgent(testDb, { id: 'lin-agent', os: 'linux' });
+
+        createTasks({
+          agent_ids: ['win-agent', 'lin-agent'],
+          test_uuid: 'test-uuid-001',
+          test_name: 'Cross Platform',
+          binary_name: 'cross',
+        }, 'org-001', 'user-001');
+
+        const winTask = testDb.prepare('SELECT payload FROM tasks WHERE agent_id = ?').get('win-agent') as any;
+        const linTask = testDb.prepare('SELECT payload FROM tasks WHERE agent_id = ?').get('lin-agent') as any;
+
+        expect(JSON.parse(winTask.payload).binary_sha256)
+          .not.toBe(JSON.parse(linTask.payload).binary_sha256);
+      });
+
+      it('throws 422 when no binary was built for an agent OS', () => {
+        setupMultiOsMeta(); // only windows + linux built
+        insertTestAgent(testDb, { id: 'mac-agent', os: 'darwin' });
+
+        expect(() =>
+          createTasks({
+            agent_ids: ['mac-agent'],
+            test_uuid: 'test-uuid-001',
+            test_name: 'Cross Platform',
+            binary_name: 'cross',
+          }, 'org-001', 'user-001')
+        ).toThrow(/darwin/);
+      });
+
+      it('falls back to the single legacy binary when build-meta has no binaries map', () => {
+        // Legacy meta (pre-fix builds): one filename, no per-OS map.
+        mockReadFileSync.mockImplementation((p: string) => {
+          if (typeof p === 'string' && p.endsWith('build-meta.json')) {
+            return JSON.stringify({ binary_name: 'legacy.exe', filename: 'legacy.exe' });
+          }
+          return Buffer.from('legacy-content');
+        });
+        insertTestAgent(testDb, { id: 'win-agent', os: 'windows' });
+        insertTestAgent(testDb, { id: 'lin-agent', os: 'linux' });
+
+        createTasks({
+          agent_ids: ['win-agent', 'lin-agent'],
+          test_uuid: 'test-uuid-001',
+          test_name: 'Legacy',
+          binary_name: 'legacy.exe',
+        }, 'org-001', 'user-001');
+
+        const winTask = testDb.prepare('SELECT payload FROM tasks WHERE agent_id = ?').get('win-agent') as any;
+        const linTask = testDb.prepare('SELECT payload FROM tasks WHERE agent_id = ?').get('lin-agent') as any;
+        expect(JSON.parse(winTask.payload).binary_name).toBe('legacy.exe');
+        expect(JSON.parse(linTask.payload).binary_name).toBe('legacy.exe');
+      });
+    });
   });
 
   describe('deleteTask', () => {
@@ -1159,7 +1257,7 @@ describe('tasks.service', () => {
       insertTestTask(testDb, { id: 't2', agent_id: 'agent-002', batch_id: batchId, created_at: '2026-02-01 10:00:00' });
       insertTestTask(testDb, { id: 't3', agent_id: 'agent-003', batch_id: batchId, created_at: '2026-02-01 10:00:00' });
 
-      const result = listTasksGrouped({});
+      const result = listTasksGrouped({}, { kind: 'all' });
 
       expect(result.total).toBe(1);
       expect(result.groups).toHaveLength(1);
@@ -1172,7 +1270,7 @@ describe('tasks.service', () => {
       insertTestTask(testDb, { id: 't1', created_at: '2026-02-01 10:00:01' });
       insertTestTask(testDb, { id: 't2', created_at: '2026-02-01 10:00:02' });
 
-      const result = listTasksGrouped({});
+      const result = listTasksGrouped({}, { kind: 'all' });
 
       expect(result.total).toBe(2);
       expect(result.groups).toHaveLength(2);
@@ -1187,7 +1285,7 @@ describe('tasks.service', () => {
       insertTestTask(testDb, { id: 't1', agent_id: 'agent-001', batch_id: batchId, status: 'completed', created_at: '2026-02-01 10:00:00' });
       insertTestTask(testDb, { id: 't2', agent_id: 'agent-002', batch_id: batchId, status: 'failed', created_at: '2026-02-01 10:00:00' });
 
-      const result = listTasksGrouped({});
+      const result = listTasksGrouped({}, { kind: 'all' });
 
       expect(result.groups[0].status_counts).toEqual({ completed: 1, failed: 1 });
     });
@@ -1203,7 +1301,7 @@ describe('tasks.service', () => {
       // Single task (different batch)
       insertTestTask(testDb, { id: 't3', created_at: '2026-02-01 10:00:01' });
 
-      const result = listTasksGrouped({ limit: 1, offset: 0 });
+      const result = listTasksGrouped({ limit: 1, offset: 0 }, { kind: 'all' });
 
       expect(result.total).toBe(2); // 2 groups
       expect(result.groups).toHaveLength(1); // page size 1
@@ -1219,7 +1317,7 @@ describe('tasks.service', () => {
       // Another group with only completed
       insertTestTask(testDb, { id: 't3', status: 'completed', created_at: '2026-02-01 10:00:01' });
 
-      const result = listTasksGrouped({ status: 'failed' });
+      const result = listTasksGrouped({ status: 'failed' }, { kind: 'all' });
 
       expect(result.total).toBe(1); // only the batch containing a failed task
       expect(result.groups[0].batch_id).toBe(batchId);
@@ -1237,7 +1335,7 @@ describe('tasks.service', () => {
       // Separate task that won't match
       insertTestTask(testDb, { id: 't3', created_at: '2026-02-01 10:00:01' });
 
-      const result = listTasksGrouped({ search: 'prod-server' });
+      const result = listTasksGrouped({ search: 'prod-server' }, { kind: 'all' });
 
       expect(result.total).toBe(1);
       expect(result.groups[0].batch_id).toBe(batchId);
@@ -1246,7 +1344,7 @@ describe('tasks.service', () => {
     it('returns empty groups for no-match', () => {
       insertTestTask(testDb, { id: 't1' });
 
-      const result = listTasksGrouped({ search: 'nonexistent-xyz' });
+      const result = listTasksGrouped({ search: 'nonexistent-xyz' }, { kind: 'all' });
       expect(result.total).toBe(0);
       expect(result.groups).toHaveLength(0);
     });
@@ -1255,7 +1353,7 @@ describe('tasks.service', () => {
       insertTestTask(testDb, { id: 't-old', batch_id: 'batch-old', created_at: '2026-01-01 10:00:00' });
       insertTestTask(testDb, { id: 't-new', batch_id: 'batch-new', created_at: '2026-02-01 10:00:00' });
 
-      const result = listTasksGrouped({});
+      const result = listTasksGrouped({}, { kind: 'all' });
 
       expect(result.groups[0].batch_id).toBe('batch-new');
       expect(result.groups[1].batch_id).toBe('batch-old');
