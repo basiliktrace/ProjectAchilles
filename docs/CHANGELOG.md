@@ -11,8 +11,11 @@ This project uses two version streams:
 
 ## [Unreleased]
 
+## [2.4.0] - 2026-10-24
+
 ### Upgrade notes
 
+- **Rebuild cross-platform tests.** Dispatch now picks each agent's binary by OS from a per-OS map in `build-meta.json`. A test built before this release has no map and keeps the old single-binary behaviour until it is rebuilt (#544).
 - **New tables are created on startup.** `campaigns`, `campaign_runs` and `run_notices`, plus nullable `tasks.notice_id` and `tasks.campaign_run_id` columns, are added automatically when the backend starts. The change is additive; existing data is untouched.
 - **Threshold alerts saved from the UI start firing.** Before #546 the email and Slack channels configured in the UI were never marked configured, so alerts silently never went out. After upgrading, tenants with alerts set up in the UI will begin receiving them.
 - **Pre-execution notices are off by default.** Before enabling them, confirm **Test Channels** in Settings → Integrations → Alerts & Notifications succeeds from the server: an outbound firewall that blocks the SMTP port holds every test run until the max wait, then marks it "Not run".
@@ -57,19 +60,26 @@ This project uses two version streams:
 - **Campaign print added a blank page** and clipped wide matrices (#554)
 - **Campaign "Started by"** showed a raw user ID (#554)
 - **The calendar file told the SOC to search for the run tag**, which never reaches the hosts (#556)
+- **Cross-platform tests sent the Linux binary to Windows agents**, which failed at once with exit -1 "executable file not found in %PATH%". Each agent now gets the binary built for its OS, and an agent whose OS was not built fails the dispatch with a 422 (#544)
 
 #### Installer and deployment
-- **Server installs pin their compose project name** in the root `.env` (`COMPOSE_PROJECT_NAME`). Compose used the checkout's directory name, so an install in `/opt/projectachilles` and a dev clone also called `projectachilles` shared one project: `up` recreated the other stack's containers and mounted its volumes. New installs use `achilles-server`; existing installs keep the name they already run under, so no data moves. The engine refuses to start when another checkout's containers use the name, and `restore` keeps the live project name instead of the backup's.
+- **Server installs pin their compose project name** in the root `.env` (`COMPOSE_PROJECT_NAME`). Compose used the checkout's directory name, so an install in `/opt/projectachilles` and a dev clone also called `projectachilles` shared one project: `up` recreated the other stack's containers and mounted its volumes. New installs use `achilles-server`; existing installs keep the name they already run under, so no data moves. The engine refuses to start when another checkout's containers use the name, and `restore` keeps the live project name instead of the backup's (#558)
 
 ### Security
 
 - **Pre-execution notices could silently switch off**: one undecryptable credential in `integrations.json` made the notice setting read as disabled, so tests ran unannounced. The gate now reads its section without decryption and keeps the last good settings if the file is unreadable (#556)
 - **Re-saving the Alerts dialog overwrote the stored SMTP username with its masked value**, which would break alert and notice emails; masked values are now ignored (#551)
 - **Test Channels can't send the stored SMTP password to another host**: saved credentials are reused only when the host matches the saved one (#551)
+- **Cross-platform builds whose primary OS was Linux shipped an unsigned Windows binary**; the signing certificate is now passed whenever Windows is a target (#544)
+- Closed CodeQL `js/path-injection` findings on the per-OS build paths (#544)
 
 ### Documentation
 
 - Run Command tasks are not covered by pre-execution notices; the guide says so (#552)
+
+### Agent
+
+- No new agent release. The agent source now appends `.exe` to an extension-less test binary on Windows (#544); it ships with the next agent release. Agents 0.7.0 are already covered by the server-side dispatch fix.
 
 ## [2.3.1] - 2026-10-22
 
@@ -705,7 +715,8 @@ Complete platform overhaul — custom agent system, multi-deployment support, Mi
 | Agent 0.6.0 | 2026-04-03 | First tagged agent binary release |
 | 1.0.0 | 2024-12-10 | Initial release |
 
-[Unreleased]: https://github.com/projectachilles/ProjectAchilles/compare/v2.3.1...HEAD
+[Unreleased]: https://github.com/projectachilles/ProjectAchilles/compare/v2.4.0...HEAD
+[2.4.0]: https://github.com/projectachilles/ProjectAchilles/compare/v2.3.1...v2.4.0
 [2.3.1]: https://github.com/projectachilles/ProjectAchilles/compare/v2.3.0...v2.3.1
 [2.3.0]: https://github.com/projectachilles/ProjectAchilles/compare/v2.2.0...v2.3.0
 [Agent 0.7.0]: https://github.com/projectachilles/ProjectAchilles/compare/agent-v0.6.7...agent-v0.7.0
