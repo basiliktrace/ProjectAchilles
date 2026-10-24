@@ -289,11 +289,12 @@ code {
   }
 }
 
-/* Campaign evidence page: print the matrix landscape on paper, whatever the
-   screen theme. Mirrors report.css: a fixed light palette (--cr-*) re-points the
+/* Campaign evidence page: print the matrix on paper, whatever the screen
+   theme. Mirrors report.css: a fixed light palette (--cr-*) re-points the
    semantic tokens inside the printed subtree, so every theme prints identically
-   and the state tints survive print-color-adjust. */
-@page campaign-run { size: landscape; margin: 10mm; }
+   and the state tints survive print-color-adjust. Landscape comes from an
+   unnamed @page that CampaignRunPage injects while mounted: a named page here
+   made Chrome add a blank portrait page for the app shell after it. */
 @media print {
   html:has(.campaign-run-print),
   html:has(.campaign-run-print) body {
@@ -306,7 +307,6 @@ code {
     --background: var(--cr-paper);
   }
   .campaign-run-print {
-    page: campaign-run;
     color-scheme: light;
     -webkit-print-color-adjust: exact;
     print-color-adjust: exact;
@@ -329,6 +329,8 @@ code {
     background: var(--cr-paper);
     color: var(--foreground);
   }
-  .campaign-run-print .campaign-matrix-scroll { overflow: visible; }
+  .campaign-run-print .campaign-matrix-scroll { overflow: visible; max-height: none; }
+  /* AppShell's full-height wrapper must not push a trailing blank page. */
+  html:has(.campaign-run-print) .min-h-screen { min-height: 0; }
   .campaign-run-print tr { break-inside: avoid; }
 }

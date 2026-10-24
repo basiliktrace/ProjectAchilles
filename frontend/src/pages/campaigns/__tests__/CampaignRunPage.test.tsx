@@ -9,8 +9,8 @@ vi.mock('@/services/api/campaigns', () => ({ campaignsApi: api }));
 import type { RunMatrix, CellState, RunNotice } from '@/services/api/campaigns';
 import CampaignRunPage from '../CampaignRunPage';
 
-const cell = (state: CellState, reason: string | null = null) =>
-  ({ state, exit_code: null, task_id: 'x', completed_at: null, reason, techniques: [] });
+const cell = (state: CellState, reason: string | null = null, stages: RunMatrix['cells'][string][string]['stages'] = []) =>
+  ({ state, exit_code: null, task_id: 'x', completed_at: null, reason, techniques: [], edr: null, stages, stages_text: '' });
 
 const SENT_AT = '2026-10-23T09:55:00.000Z';
 const sentNotice: RunNotice = {
@@ -22,12 +22,13 @@ function matrix(states: CellState[], pct: number | null = 50, notice: RunNotice 
   const agents = states.map((_, i) => ({ id: `a${i}`, hostname: `host${i}`, os: 'windows' }));
   const row: Record<string, ReturnType<typeof cell>> = {};
   states.forEach((s, i) => { row[`a${i}`] = cell(s, s === 'na' || s === 'not_run' ? 'no windows binary' : null); });
-  const totals = { waiting_for_notice: 0, running: 0, protected: 0, unprotected: 0, error: 0, not_run: 0, na: 0 } as RunMatrix['totals'];
+  const totals = { waiting_for_notice: 0, running: 0, protected: 0, prevented: 0, detected: 0, unprotected: 0, error: 0, not_run: 0, na: 0 } as RunMatrix['totals'];
   states.forEach((s) => { totals[s]++; });
   totals.percent_protected = pct;
   return {
     run: { id: 'r1', campaign_id: 'c1', campaign_name: 'CIS Baseline', framework_label: 'CIS v8', started_by: 'user_abc',
       started_by_name: 'Jane Doe', started_at: '2026-10-23T10:00:00.000Z', notice },
+    edr: { status: 'ok', sources: ['Microsoft Defender'] },
     tests: [{ uuid: 't1', name: 'Test One' }], agents, cells: { t1: row }, totals, as_of: '2026-10-23T10:05:00.000Z',
   };
 }
@@ -45,14 +46,19 @@ describe('CampaignRunPage', () => {
   afterEach(() => { vi.useRealTimers(); });
 
   it('renders header and a label for every state, with reasons as titles', async () => {
-    api.getRun.mockResolvedValue(matrix(['waiting_for_notice', 'running', 'protected', 'unprotected', 'error', 'not_run', 'na']));
-    setup();
-    const table = await screen.findByRole('table');
-    for (const label of ['Waiting for notice', 'Running', 'Protected', 'Unprotected', 'Error', 'Not run', 'N/A']) {
-      expect(within(table).getByText(label)).toBeInTheDocument();
+    const states: CellState[] = ['waiting_for_notice', 'running', 'protected', 'prevented', 'detected', 'unprotected', 'error', 'not_run', 'na'];
+    api.getRun.mockResolvedValue(matrix(states));
+    const { container } = setup();
+    await screen.findByRole('table');
+    for (const s of states) {
+      const td = container.querySelector(`td[data-state="${s}"]`)!;
+      expect(td).toHaveTextContent(
+        { waiting_for_notice: 'Waiting for notice', running: 'Running', protected: 'Protected', prevented: 'Prevented', detected: 'Detected',
+          unprotected: 'Unprotected', error: 'Error', not_run: 'Not run', na: 'N/A' }[s],
+      );
     }
-    expect(within(table).getByText('N/A').closest('td')).toHaveAttribute('title', 'no windows binary');
-    expect(within(table).getByText('Not run').closest('td')).toHaveAttribute('title', 'no windows binary');
+    expect(container.querySelector('td[data-state="na"]')).toHaveAttribute('title', 'no windows binary');
+    expect(container.querySelector('td[data-state="not_run"]')).toHaveAttribute('title', 'no windows binary');
     expect(screen.getByText('CIS Baseline')).toBeInTheDocument();
     expect(screen.getByText('CIS v8')).toBeInTheDocument();
     expect(screen.getByText(/PA-RUN-1234/)).toBeInTheDocument();
@@ -153,5 +159,91 @@ describe('CampaignRunPage', () => {
     expect(printArea).toContainElement(rec);
     expect(printArea).toContainElement(screen.getByText('Jane Doe'));
     expect(rec.closest('.print\\:hidden')).toBeNull();
+  });
+
+  it('puts the longer list down the side: hosts as rows when there are more hosts than tests', async () => {
+    api.getRun.mockResolvedValue(matrix(['protected', 'unprotected', 'error']));
+    setup();
+    const table = await screen.findByRole('table');
+    const header = within(table).getAllByRole('columnheader').map((h) => h.textContent);
+    expect(header[0]).toBe('Host');
+    expect(header).toContain('Test One');
+    expect(within(table).getAllByRole('rowheader').map((h) => h.textContent)).toEqual(
+      ['host0windows', 'host1windows', 'host2windows', 'Protected'],
+    );
+  });
+
+  it('keeps tests as rows when there are at least as many tests as hosts', async () => {
+    const m = matrix(['protected']);
+    m.tests = [{ uuid: 't1', name: 'Test One' }, { uuid: 't2', name: 'Test Two' }];
+    m.cells.t2 = { a0: cell('unprotected') };
+    api.getRun.mockResolvedValue(m);
+    setup();
+    const table = await screen.findByRole('table');
+    expect(within(table).getAllByRole('columnheader')[0]).toHaveTextContent('Test');
+    expect(within(table).getAllByRole('rowheader').map((h) => h.textContent)).toEqual(['Test One', 'Test Two', 'Protected']);
+  });
+
+  it('per-host and per-test totals count Prevented and Detected as protected', async () => {
+    api.getRun.mockResolvedValue(matrix(['prevented', 'detected', 'unprotected', 'error'], 75));
+    setup();
+    const table = await screen.findByRole('table');
+    const rows = within(table).getAllByRole('row');
+    // host rows: prevented 1/1, detected 1/1, unprotected 0/1, error —
+    expect(rows.slice(1, 5).map((r) => r.lastElementChild?.textContent)).toEqual(['1/1', '1/1', '0/1', '—']);
+    // footer: the test column 2/3, then the run percentage
+    const foot = rows[rows.length - 1];
+    expect(within(foot).getByText('2/3')).toBeInTheDocument();
+    expect(within(foot).getByText('75%')).toBeInTheDocument();
+  });
+
+  it('cell title carries the reason and each stage', async () => {
+    const m = matrix(['prevented']);
+    m.cells.t1.a0 = cell('prevented', 'Defender prevented it (process killed) during stage 1 (T1105).', [
+      { label: 'Stage 1 (T1105)', exit_code: 101, outcome: 'prevented' },
+      { label: 'Stage 2 (T1572)', exit_code: 999, outcome: 'inconclusive' },
+      { label: 'Stage 3 (T1005)', exit_code: 0, outcome: 'skipped' },
+    ]);
+    api.getRun.mockResolvedValue(m);
+    const { container } = setup();
+    await screen.findByRole('table');
+    expect(container.querySelector('td[data-state="prevented"]')).toHaveAttribute('title',
+      'Defender prevented it (process killed) during stage 1 (T1105).\nStage 1 (T1105): 101\nStage 2 (T1572): 999\nStage 3 (T1005): skipped');
+  });
+
+  it('says which EDR the outcomes reflect, and warns when EDR results are unavailable', async () => {
+    api.getRun.mockResolvedValueOnce(matrix(['protected']));
+    const { unmount } = setup();
+    expect(await screen.findByTestId('edr-line')).toHaveTextContent('EDR results from Microsoft Defender');
+    unmount();
+    const m = matrix(['protected']);
+    m.edr = { status: 'unavailable', sources: ['Microsoft Defender'] };
+    api.getRun.mockResolvedValueOnce(m);
+    setup();
+    expect(await screen.findByTestId('edr-line')).toHaveTextContent('EDR results unavailable: outcomes use test exit codes only');
+  });
+
+  it('prints in blocks of 12 columns when the matrix is wider than a page', async () => {
+    const m = matrix(['protected']);
+    m.tests = Array.from({ length: 30 }, (_, i) => ({ uuid: `t${i}`, name: `Test ${i}` }));
+    m.agents = Array.from({ length: 40 }, (_, i) => ({ id: `a${i}`, hostname: `host${i}`, os: 'windows' }));
+    m.cells = Object.fromEntries(m.tests.map((t) => [t.uuid, Object.fromEntries(m.agents.map((a) => [a.id, cell('protected')]))]));
+    api.getRun.mockResolvedValue(m);
+    setup();
+    const blocks = await screen.findByTestId('print-blocks');
+    // 40 hosts as rows, 30 tests as columns -> 12 + 12 + 6
+    const tables = within(blocks).getAllByRole('table');
+    expect(tables).toHaveLength(3);
+    expect(tables.map((t) => within(t).getAllByRole('columnheader').length - 2)).toEqual([12, 12, 6]);
+    expect(blocks.children[1]).toHaveClass('break-before-page');
+  });
+
+  it('adds a landscape @page rule while mounted and removes it on unmount', async () => {
+    api.getRun.mockResolvedValue(matrix(['protected']));
+    const { unmount } = setup();
+    await screen.findByRole('table');
+    expect(document.head.querySelector('style[data-campaign-print]')?.textContent).toContain('size: landscape');
+    unmount();
+    expect(document.head.querySelector('style[data-campaign-print]')).toBeNull();
   });
 });
