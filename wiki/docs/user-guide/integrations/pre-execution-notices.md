@@ -21,7 +21,7 @@ Pre-execution notices work on Docker Compose, Render, Fly.io, Railway and server
 1. Set up SMTP first. Go to **Settings → Integrations → Alerting → Email** and save a working SMTP host, credentials and from-address. Notices reuse this configuration. Notices count SMTP as set up once a host and a from-address are saved.
 2. Open **Settings → Integrations → Pre-execution notices**.
 3. Enter the recipients (comma or newline separated, up to 50). This list is separate from the alert recipients, because the audience is different. Use plain addresses such as `secops@example.com`, not `Name <address>`.
-4. Tick **Enable pre-execution notices** and save. You can only enable it when SMTP is configured and there is at least one recipient. If SMTP is removed or breaks later, runs still wait for a notice: the notice fails to send and the [failure alerts](#when-delivery-fails) fire, so no test runs unannounced.
+4. Tick **Enable pre-execution notices** and save. You can only enable it when SMTP is configured and there is at least one recipient. If SMTP is removed or breaks later, runs still wait for a notice: the notice fails to send and the [failure alerts](#when-delivery-fails) fire, so no test runs unannounced. The same holds if stored credentials can no longer be decrypted (for example after `ENCRYPTION_SECRET` changed): notices stay on and the sends fail loudly, rather than the setting reading as off.
 5. Click **Send test notice** to send a sample email. The card shows which addresses the mail server accepted and which it rejected.
 
 The settings apply to your organization. Each organization has its own recipients, settings and notice log, and its notices are sent through the SMTP server saved in that organization's Alerting settings, or through the deployment-wide Alerting settings if that organization has none. An organization that has never saved its own settings uses the deployment-wide defaults. A notice belongs to the organization whose tests it announces, and users only see and release their own organization's notices.
@@ -54,7 +54,8 @@ The subject looks like `[ProjectAchilles] Security testing starts 2026-10-23 09:
 
 The body has:
 
-- A **run tag** such as `PA-RUN-7f3c9a`, with a line telling the SOC to search for it in their tools.
+- A **run tag** such as `PA-RUN-7f3c9a`. It identifies the run in ProjectAchilles (emails, calendar entry, campaign evidence) but never reaches the hosts, so it won't appear in EDR telemetry.
+- A **Finding this activity in your security tools** section: on the listed hosts, during the window, the tests run from `C:\F0\tasks` (Windows) or `/opt/f0/tasks` (Linux, macOS), and their files and processes are named after the test UUIDs in the email (for example `c37d6a01-….exe`, or `c37d6a01-…-T1105.exe` for a stage). These are the agent's default folders; an agent configured with a different `work_dir` uses that instead.
 - The earliest start time, in the schedule's timezone and in UTC, and the time after which nothing new starts. Per-machine notices show the day's window instead.
 - Who or what triggered the run: the user's name and email for Run Now or a manual retry, or the schedule name. The name is looked up when the email is sent. If the lookup fails, the email shows the user ID instead.
 - A table of tests: each test's name with its UUID underneath, its number of **stages**, and its MITRE ATT&CK techniques and tactics. A single-binary test counts as 1 stage. A cyber-hygiene bundle shows its number of **controls**, taken from its most recent completed run on your deployment. Before a bundle has run once, it shows `bundle`. A test no longer in the library shows `—`.
@@ -96,9 +97,12 @@ A stuck notice must never go unnoticed, because an old Defense Score can look he
 
 ## Release a notice without sending it
 
-A user with permission to create tasks can release a pending notice without email delivery, with a required written reason. The tasks start immediately, with no lead time. The notice records who did it, when and why, so it stays on the audit trail.
+When the mail server is down, held tests wait until the max wait runs out. If the SOC has been told some other way, you can let a run start without its email:
 
-This is available through the API (`POST /api/notices/:id/release`). See the [API reference](../../api-reference/alerting#pre-execution-notices). It needs the permission that creates tasks.
+1. Open **Settings → Integrations → Pre-execution notices**. When tests are held, the card starts with **"N runs are waiting for their notice email"**, listing each run's tag, how it was started, how long it has waited, how many tests it holds, and the last send error.
+2. Click **Release without notice** on the run, type a **reason** (required, for example `Mail server down; SOC informed by phone, ticket CHG-1234`), and click **Release now**.
+
+The held tests start immediately, with no lead time, and the recipients are not emailed. The notice records who released it, when and why, and campaign evidence shows `released without notice by <user> at <time>: <reason>`. It needs the permission that creates tasks. The same action is available through the API (`POST /api/notices/:id/release`); see the [API reference](../../api-reference/alerting#pre-execution-notices).
 
 ## Audit record
 

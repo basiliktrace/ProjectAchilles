@@ -72,6 +72,9 @@ function withDerivedConfigured(alerts: AlertSettings): AlertSettings {
   return out;
 }
 
+/** Last successfully read notice settings per org id ('' = legacy), for an unreadable file. */
+const lastGoodNoticeSettings = new Map<string, PreExecutionNoticeSettings>();
+
 export class IntegrationsSettingsService {
   /**
    * Optional Clerk org_id for per-org settings isolation (PA-018).
@@ -1062,10 +1065,25 @@ export class IntegrationsSettingsService {
    * Always returns a full settings object (defaults filled, numbers clamped).
    * Org-specific > legacy, like getAlertSettings().
    */
+  /**
+   * The notice gate must fail closed. The section holds no secrets, so it is
+   * read from the raw JSON: one undecryptable credential elsewhere in the
+   * file (e.g. after ENCRYPTION_SECRET changed) must not read as "off". If the
+   * file can't be parsed at all, the last good read for this org is kept.
+   */
   getPreExecutionNoticeSettings(): PreExecutionNoticeSettings {
-    const file = this.getFileSettings();
-    const own = this.getOrgSection(file)?.pre_execution_notices;
-    return clampNoticeSettings(own ?? file?.pre_execution_notices ?? {});
+    const key = this.orgId ?? '';
+    const exists = fs.existsSync(SETTINGS_FILE);
+    const raw = exists ? this.getRawFileSettings() : null;
+    if (exists && raw === null) {
+      const last = lastGoodNoticeSettings.get(key);
+      console.error(`[integrations] integrations.json is unreadable; pre-execution notices use the last good settings${last ? '' : ' (none: defaults)'}`);
+      return last ?? clampNoticeSettings({});
+    }
+    const own = this.getOrgSection(raw)?.pre_execution_notices;
+    const settings = clampNoticeSettings(own ?? raw?.pre_execution_notices ?? {});
+    lastGoodNoticeSettings.set(key, settings);
+    return settings;
   }
 
   /**

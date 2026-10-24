@@ -15,6 +15,9 @@ import {
   tasksUiUrl,
 } from '../services/notices/notices.service.js';
 import type { NoticeScope } from '../services/notices/notices.service.js';
+import type { NoticeState } from '../services/notices/types.js';
+
+const NOTICE_STATES: NoticeState[] = ['pending', 'sent', 'not_delivered', 'overridden', 'skipped'];
 import { UpdateNoticeSettingsSchema, ReleaseNoticeSchema } from '../schemas/notices.schemas.js';
 
 const router = Router();
@@ -140,7 +143,11 @@ router.get('/', requirePermission('endpoints:tasks:read'), asyncHandler(async (r
   // SQLite treats a negative LIMIT as unlimited, so clamp explicitly.
   const limit = Number.isFinite(rawLimit) ? Math.min(100, Math.max(1, rawLimit)) : 25;
   const offset = Number.isFinite(rawOffset) ? Math.max(0, rawOffset) : 0;
-  res.json({ success: true, data: listNotices(limit, offset, scope) });
+  const state = req.query.state as string | undefined;
+  if (state !== undefined && !NOTICE_STATES.includes(state as NoticeState)) {
+    throw new AppError(`state must be one of ${NOTICE_STATES.join(', ')}`, 400);
+  }
+  res.json({ success: true, data: listNotices(limit, offset, scope, state as NoticeState | undefined) });
 }));
 
 router.post(

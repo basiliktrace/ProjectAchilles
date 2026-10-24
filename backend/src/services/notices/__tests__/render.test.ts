@@ -36,6 +36,14 @@ describe('buildNoticeEmail', () => {
     expect(html).not.toContain('high /');
     expect(html).not.toContain('intel-driven');
   });
+  it('tells the SOC what to search for: test UUIDs under the agent task folder, not the run tag', () => {
+    const html = buildNoticeEmail(mk()).html;
+    expect(html).toContain('Finding this activity in your security tools');
+    expect(html).toContain('C:\\F0\\tasks');
+    expect(html).toContain('/opt/f0/tasks');
+    expect(html).toContain('c37d6a01-3934-4e72-9cb1-3dae284b937b.exe');
+    expect(html).toContain('PA-RUN-7f3c9a identifies this run in ProjectAchilles only; it does not appear on the hosts.');
+  });
   it('singular test', () => {
     expect(buildNoticeEmail(mk({ tests: [mk().tests[0]] })).subject).toContain('1 test on 1 host');
   });

@@ -6,6 +6,7 @@ import { Input } from '@/components/shared/ui/Input';
 import { Button } from '@/components/shared/ui/Button';
 import { Alert } from '@/components/shared/ui/Alert';
 import { Spinner } from '@/components/shared/ui/Spinner';
+import { HeldNoticesPanel } from './HeldNoticesPanel';
 
 interface PreExecutionNoticesConfigProps {
   onStatusChange?: (enabled: boolean) => void;
@@ -106,6 +107,7 @@ export function PreExecutionNoticesConfig({ onStatusChange }: PreExecutionNotice
 
   return (
     <div className="space-y-6">
+      <HeldNoticesPanel />
       {successMessage && (
         <Alert variant="success">
           <CheckCircle className="w-4 h-4" />
