@@ -72,6 +72,7 @@ This project uses two version streams:
 - **Test Channels can't send the stored SMTP password to another host**: saved credentials are reused only when the host matches the saved one (#551)
 - **Cross-platform builds whose primary OS was Linux shipped an unsigned Windows binary**; the signing certificate is now passed whenever Windows is a target (#544)
 - Closed CodeQL `js/path-injection` findings on the per-OS build paths (#544)
+- **Dependency advisories patched**: body-parser 1.20.9 (GHSA-27r3-jxmh-p828) and multer 2.5.0 (GHSA-q7qp-rjg7-q26m), both request-reachable denial of service in the backend, plus undici 6.29.1 (GHSA-xjj6-f33q-929c, GHSA-4qv8-2p9j-2685) and zod 4.6.7 (GHSA-mrhx-c7xc-m3w5) (#560)
 
 ### Documentation
 
