@@ -208,6 +208,10 @@ func Restore(ctx context.Context, d Deps, file string, yes bool) error {
 		}
 	}
 
+	// The backed-up root .env may name another compose project (or none, from
+	// before it was pinned); the volumes go into this one, so keep it.
+	project := d.project()
+
 	fmt.Fprintln(w, "Stopping the stack...")
 	if _, err := d.compose(ctx, "stop"); err != nil {
 		return fmt.Errorf("stopping the stack: %w", err)
@@ -219,10 +223,10 @@ func Restore(ctx context.Context, d Deps, file string, yes bool) error {
 			fmt.Fprintf(w, "  ignoring unknown volume archive %s\n", filepath.Base(tf))
 			continue
 		}
-		name := d.volumeName(short)
+		name := project + "_" + short
 		if !d.volumeExists(ctx, name) {
 			if _, err := d.Cmd.Run(ctx, "docker", "volume", "create",
-				"--label", "com.docker.compose.project="+d.project(),
+				"--label", "com.docker.compose.project="+project,
 				"--label", "com.docker.compose.volume="+short, name); err != nil {
 				return fmt.Errorf("creating volume %s: %w", short, err)
 			}
@@ -256,6 +260,9 @@ func Restore(ctx context.Context, d Deps, file string, yes bool) error {
 			return err
 		}
 		fmt.Fprintf(w, "  %s\n", f.rel)
+	}
+	if err := setEnvFileValue(filepath.Join(d.RepoDir, ".env"), "COMPOSE_PROJECT_NAME", project); err != nil {
+		return fmt.Errorf("pinning the compose project in .env: %w", err)
 	}
 
 	fmt.Fprintln(w, "Starting the stack...")

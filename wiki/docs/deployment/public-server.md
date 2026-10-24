@@ -126,6 +126,14 @@ Persistent state lives in Docker volumes: `achilles-data` (SQLite, encrypted
 settings, certs), `esdata` (self-hosted ES), `caddy-data` (TLS certs). Back up
 `achilles-data` regularly.
 
+On the host, each volume name starts with the compose project name, which the
+installer pins in the root `.env` as `COMPOSE_PROJECT_NAME`:
+`achilles-server_achilles-data` on a new install. An install made before this
+setting keeps its directory's name (`projectachilles_achilles-data`). The
+installer refuses to run when another checkout's containers already use the
+name; for a second stack on one host, set a different `COMPOSE_PROJECT_NAME` in
+`deploy.config.env` before the first install.
+
 ## Troubleshooting
 
 | Symptom | Check |
