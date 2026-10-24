@@ -7,13 +7,6 @@
       "projects": ["backend", "backend-serverless"],
       "reason": "No fixed release (all versions <= 1.4.0 affected). The flaw is in RSA PKCS#1 v1.5 signature verification; we only parse PFX files and generate certificates, and never call forge's verify.",
       "expires": "2027-01-16"
-    },
-    {
-      "id": "GHSA-vfj7-8cjw-p6xm",
-      "package": "braces",
-      "projects": ["wiki"],
-      "reason": "No fixed release (all versions <= 3.0.3 affected). Reached via chokidar/micromatch inside Docusaurus at build/dev time only; the wiki ships static HTML, and the glob patterns are our own config.",
-      "expires": "2027-01-16"
     }
   ]
 }
