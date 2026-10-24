@@ -72,6 +72,7 @@ ProjectAchilles supports eight deployment targets. Choose based on your requirem
 - **Want your own public server with a domain?** Use [Public Server](./public-server) (Caddy auto-TLS, DigitalOcean or any VPS)
 - **Running on a private/internal network?** Use [On-Prem Server](./on-prem-server) (internal CA, DNS-01, or your own cert)
 - **Windows fleet on a LAN, no public IP?** Use [On-Prem LAN](./on-prem-lan) (TUI installer, managed CA, GPO trust)
+- **A DigitalOcean or Hetzner server and you want the wizard?** The same installer handles a public IP with Let's Encrypt: [Cloud servers](./on-prem-lan#cloud-servers-digitalocean-hetzner)
 - **Need the cheapest managed always-on?** Use [Fly.io](./fly-io) (~$8/mo)
 - **Want the simplest managed deploy?** Use [Railway](./railway) (GitHub auto-deploy)
 - **Need serverless scale?** Use [Vercel](./vercel) (requires Turso + Blob)

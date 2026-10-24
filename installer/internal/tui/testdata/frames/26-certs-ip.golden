@@ -2,7 +2,7 @@
 ────────────────────────────────────────────────────────────────────────────────
  Zone: corp.example.com
  
- ┃ Also allow the LAN IP 10.0.5.20 in certificates?                            
+ ┃ Also allow the IP 10.0.5.20 in certificates?                                
  ┃ This only lets the CA sign certificates for this IP; it does not make the   
  ┃ server reachable by IP (the site answers on its DNS name only). Say No and  
  ┃ the CA can't issue for any IP address.                                      

@@ -16,6 +16,10 @@ Install ProjectAchilles on a Linux server **on your LAN** with the
 - a fleet of agents, **mostly Windows**, that trust that CA through **GPO** (or
   Intune) and enroll with a fingerprint-pinned bootstrap script.
 
+The same wizard also installs on a **cloud server with a public IP**
+(DigitalOcean, Hetzner and similar) with Let's Encrypt certificates: see
+[Cloud servers](#cloud-servers-digitalocean-hetzner).
+
 It shares its engine (`scripts/deploy-server.sh`, `docker-compose.server.yml`,
 Caddy) with the other server installs. For SSH-driven installs, Let's Encrypt
 DNS-01 or your own certificate without the wizard, see
@@ -122,7 +126,7 @@ exclusion for exactly `C:\F0\achilles-agent.exe` before rollout. See
 
 The installer classifies the hostname as you type it on the **Network & name**
 screen. The class decides which Clerk keys it accepts and whether Let's Encrypt
-DNS-01 is offered.
+(DNS-01 or HTTP-01) is offered.
 
 | | **Under a public domain you own** | **Private-only name** |
 |---|---|---|
@@ -131,7 +135,7 @@ DNS-01 is offered.
 | Clerk keys | **Production** (`pk_live_` + `sk_live_`) expected. Development keys (`pk_test_`) work with a warning (a "Development mode" banner, lower limits). | **Development keys only** (`pk_test_` + `sk_test_`). A `pk_live_` key is an error. |
 | Clerk app domain | The key's Frontend API host must be `clerk.<D>`, where D is the hostname or one of its parents **down to and including the registrable domain**. For `achilles.corp.example.com`: `clerk.achilles.corp.example.com`, `clerk.corp.example.com` or `clerk.example.com`. | n/a (development instances use a `*.clerk.accounts.dev` host) |
 | DNS records | Add the records Clerk's dashboard lists to the **public** zone; sign-in fails until Clerk shows them verified. The server's own A record stays **internal-only**. | Only the internal A record. |
-| Certificates | ProjectAchilles CA (default), Enterprise CA, your own files, **or Let's Encrypt DNS-01** | ProjectAchilles CA (default), Enterprise CA or your own files. DNS-01 is not offered. |
+| Certificates | ProjectAchilles CA (default on a LAN IP), Enterprise CA, your own files, **or Let's Encrypt (DNS-01, or HTTP-01 with inbound port 80)** | ProjectAchilles CA (default), Enterprise CA or your own files. Let's Encrypt is not offered. |
 
 The publishable and secret keys must come from the same Clerk instance, and the
 installer checks that the Frontend API host is reachable from the server.
@@ -233,6 +237,13 @@ continue** (helps only the server itself; endpoints still need the DNS record),
 or **Continue without a record for now**. Finally set the **LAN subnets allowed to
 reach HTTPS** (`LAN_SUBNETS`), used only if ufw or firewalld is already active.
 
+A public address is marked `public` in the interface list. On it, the DNS check
+asks for the record at your DNS provider (no Active Directory form) and the
+LAN-subnets question is skipped. With a private interface address and a name
+that resolves to public addresses only, the screen explains that this is
+expected behind 1:1 NAT (AWS, Azure, Google Cloud, a DigitalOcean reserved IP):
+choose **Continue without a record for now**.
+
 ![Network & name screen (3/10): listening on 10.0.5.20 (eth0) as achilles.corp.example.com, LAN subnets 10.0.5.0/24](/img/screenshots/onprem-network.png)
 
 **4/10 Certificates.**
@@ -243,6 +254,10 @@ reach HTTPS** (`LAN_SUBNETS`), used only if ufw or firewalld is already active.
 | **Enterprise CA** | `byo` | The installer writes a key and a certificate request (`deploy/caddy/certs/request.csr`); your CA signs it as a serverAuth certificate, then you give the path to the signed PEM chain. |
 | **Bring your own certificate and key files** | `byo` | Paths to a PEM chain (server certificate first) and an unencrypted PEM key, validated and copied to `deploy/caddy/certs/`. |
 | **Let's Encrypt DNS-01** | `acme-dns` | Publicly trusted certificates; needs an email, the Caddy DNS plugin name and a TXT-capable API token. Offered only for names under a public domain. |
+| **Let's Encrypt HTTP-01** | `acme-http` | Publicly trusted certificates; needs an email only. The name must resolve publicly to the server and port 80 must be open to the internet. Offered only for names under a public domain. |
+
+On a LAN address the ProjectAchilles CA comes first and is recommended. On a
+public address the Let's Encrypt options come first, with HTTP-01 recommended.
 
 This page assumes the ProjectAchilles CA. With Enterprise CA or your own files,
 endpoints must already trust your CA and no bootstrap scripts are rendered. For
@@ -252,7 +267,7 @@ the ProjectAchilles CA the screen also asks:
   down to the registrable domain. The zone is fixed into the root and can't be
   widened later without a new root on every endpoint, so pick the narrowest zone
   (`CA_ZONE`).
-- **Also allow the LAN IP in certificates?** (`CA_INCLUDE_IP`) No (default) means
+- **Also allow the IP in certificates?** (`CA_INCLUDE_IP`) No (default) means
   no IP address can be certified; yes permits exactly the LAN IP. Neither makes
   the site reachable by IP.
 - **An existing CA that doesn't match:** **Keep** it, or **Rotate**
@@ -758,9 +773,10 @@ The data and the hostname stay.
 - **Same name, publicly trusted certificate, still no inbound access:** if the name
   is under a public domain, run the wizard, choose **Reconfigure**, and pick
   **Let's Encrypt DNS-01**.
-- **Public IP with inbound 80/443:** edit `deploy.config.env`: set
-  `TLS_MODE=acme-http` and `ACME_EMAIL`, publish a public A record, keep the
-  internal A record pointing at the LAN IP, and run the unattended install. For
+- **Public IP with inbound 80/443:** publish a public A record, keep the
+  internal A record pointing at the LAN IP, then run the wizard, choose
+  **Reconfigure** and pick **Let's Encrypt HTTP-01** (or set `TLS_MODE=acme-http`
+  and `ACME_EMAIL` in `deploy.config.env` and run the unattended install). For
   `CADDY_BIND_IP`:
   - **Public address NATed or port-forwarded to the server** (the usual on-prem
     case): keep the LAN IP, where the forwarded traffic arrives, or leave it empty
@@ -881,3 +897,44 @@ active; it never enables an inactive firewall and never touches port 22.
   constraints (see above), remove the old root from every endpoint, not only from
   the GPO ([Removing the old root from endpoints](#removing-the-old-root-from-endpoints)),
   and destroy the older backups, which hold the compromised keys.
+
+## Cloud servers (DigitalOcean, Hetzner)
+
+The wizard also installs on a cloud server whose public IP is on its own network
+interface, as on DigitalOcean Droplets and Hetzner Cloud servers. There is no
+LAN, no GPO and no private CA: browsers and agents reach the server over the
+internet and trust a Let's Encrypt certificate.
+
+**Before you start**
+
+| Item | Notes |
+|------|-------|
+| **Server** | Ubuntu 24.04 or 22.04 with the usual minimums: 2 GiB RAM (4 GiB for self-hosted Elasticsearch; DigitalOcean 4 GB or Hetzner CX32 and up), 20 GiB free disk. |
+| **Public DNS name** | An A record pointing at the server's public IPv4, under a domain you own. Create it first, so the DNS check passes and Let's Encrypt can validate. Don't add an AAAA record: Caddy listens on the IPv4 address only, and Let's Encrypt validates over IPv6 when one exists. |
+| **Provider firewall** | A DigitalOcean Cloud Firewall or Hetzner Firewall must allow **TCP 80, TCP 443 and UDP 443** inbound from anywhere, plus SSH. The installer can't see these firewalls. |
+| **Clerk** | Production keys (`pk_live_`) for the public domain. |
+| **Outbound email** | DigitalOcean blocks SMTP ports 25, 465 and 587 on new accounts; Hetzner blocks 25 and 465. Use a relay on an open port (Hetzner: 587) or have the block lifted. With [pre-execution notices](../user-guide/integrations/pre-execution-notices) on, a server that can't send mail **holds every test run** until the maximum wait, then marks it Not run. |
+
+**Install.** Run the one-command bootstrap, then on the wizard pick the interface
+marked `public`, type the hostname (the DNS check should show the public IP), and
+keep **Let's Encrypt HTTP-01 (recommended)** on the Certificates screen. If port 80
+must stay closed, pick **Let's Encrypt DNS-01**; Caddy has plugins for both
+providers (`digitalocean`, `hetzner`). Caddy fetches and renews the certificate on
+its own.
+
+**Enroll agents** with a token from the web UI. The certificate is publicly
+trusted, so no `ca_cert` is needed:
+
+```text
+achilles-agent --enroll <TOKEN> --server https://achilles.example.com --install
+```
+
+**Providers that NAT the public IP** (AWS, Azure, Google Cloud, a DigitalOcean
+reserved IP): pick the private interface, choose **Continue without a record for
+now** on the DNS check, and pick **Let's Encrypt HTTP-01** yourself (the
+ProjectAchilles CA is listed first on a private address).
+
+**Exposure.** The web UI and agent API are on the internet, behind Clerk and
+per-agent keys; Elasticsearch, the backend and the frontend publish no ports.
+Restrict the provider firewall to known source ranges when you can: a host
+firewall (ufw) does not filter Docker-published ports.

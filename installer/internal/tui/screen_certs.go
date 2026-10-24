@@ -15,6 +15,7 @@ import (
 	"github.com/projectachilles/ProjectAchilles/installer/internal/ca"
 	"github.com/projectachilles/ProjectAchilles/installer/internal/config"
 	"github.com/projectachilles/ProjectAchilles/installer/internal/dnsclass"
+	"github.com/projectachilles/ProjectAchilles/installer/internal/sysprobe"
 	"github.com/projectachilles/ProjectAchilles/installer/internal/tlsfiles"
 )
 
@@ -31,6 +32,7 @@ const (
 	certBYOCert                  // byo: certificate path
 	certBYOKey                   // byo: key path
 	certACME                     // acme-dns: email, provider, token
+	certHTTP                     // acme-http: email
 )
 
 // Choices on the mode step. Enterprise CA and bring-your-own both end up as
@@ -40,6 +42,7 @@ const (
 	choiceEnterprise = "enterprise"
 	choiceBYO        = "byo"
 	choiceACME       = "acme-dns"
+	choiceHTTP       = "acme-http"
 )
 
 // Files under <repo>/deploy/caddy/certs/ that TLS_MODE=byo reads, plus the
@@ -89,6 +92,10 @@ type certsScreen struct {
 	email, provider, token string
 
 	writeErr error
+
+	// wasCloud is cloud() at the previous visit, so a fresh install that
+	// switches between a private and a public interface gets the new default.
+	wasCloud *bool
 }
 
 func newCerts(s *shared) *certsScreen { return &certsScreen{s: s} }
@@ -113,6 +120,10 @@ func (c *certsScreen) host() string { return c.s.cfg.AchillesDomain }
 
 func (c *certsScreen) bindIP() string { return strings.Trim(c.s.cfg.CaddyBindIP, "[]") }
 
+// cloud reports a server listening on a public IP (DigitalOcean, Hetzner...),
+// where Let's Encrypt HTTP-01 is the natural choice.
+func (c *certsScreen) cloud() bool { return sysprobe.IsPublicIPv4(c.bindIP()) }
+
 func (c *certsScreen) zones() []string {
 	if z := c.s.class.ZoneCandidates; len(z) > 0 {
 		return z
@@ -122,13 +133,24 @@ func (c *certsScreen) zones() []string {
 
 func (c *certsScreen) Init() tea.Cmd {
 	cfg := c.s.cfg
+	mode := cfg.TLSMode
+	cloud := c.cloud()
+	if c.wasCloud != nil && *c.wasCloud != cloud && c.existingMode() == "" {
+		mode = "" // the interface changed: offer that interface's default
+	}
+	c.wasCloud = &cloud
+	if mode == "" {
+		mode = c.existingMode() // "" on a fresh install
+	}
 	switch {
-	case cfg.TLSMode == "byo":
+	case mode == "byo":
 		if c.choice != choiceEnterprise {
 			c.choice = choiceBYO
 		}
-	case cfg.TLSMode == "acme-dns" && c.public():
+	case mode == "acme-dns" && c.public():
 		c.choice = choiceACME
+	case mode == "acme-http" && c.public(), mode == "" && c.public() && cloud:
+		c.choice = choiceHTTP
 	default:
 		c.choice = choiceAchilles
 	}
@@ -152,13 +174,25 @@ func (c *certsScreen) Init() tea.Cmd {
 
 func (c *certsScreen) toMode() tea.Cmd {
 	c.step = certMode
-	opts := []huh.Option[string]{
-		huh.NewOption("ProjectAchilles CA (recommended): a private CA limited to your zone", choiceAchilles),
+	private := []huh.Option[string]{
+		huh.NewOption("ProjectAchilles CA: a private CA limited to your zone", choiceAchilles),
 		huh.NewOption("Enterprise CA: generate a request (CSR) for your own CA to sign", choiceEnterprise),
 		huh.NewOption("Bring your own certificate and key files", choiceBYO),
 	}
-	if c.public() {
-		opts = append(opts, huh.NewOption("Let's Encrypt DNS-01: public certificates via your DNS provider", choiceACME))
+	dns := huh.NewOption("Let's Encrypt DNS-01: public certificates via your DNS provider", choiceACME)
+	http := huh.NewOption("Let's Encrypt HTTP-01: public certificates via inbound port 80", choiceHTTP)
+	var opts []huh.Option[string]
+	switch {
+	case c.public() && c.cloud():
+		// A cloud server: the public certificates come first.
+		http.Key = "Let's Encrypt HTTP-01 (recommended): public certificates via port 80"
+		opts = append(append(opts, http, dns), private...)
+	case c.public():
+		private[0].Key = "ProjectAchilles CA (recommended): a private CA limited to your zone"
+		opts = append(private, dns, http)
+	default:
+		private[0].Key = "ProjectAchilles CA (recommended): a private CA limited to your zone"
+		opts = private
 	}
 	var cmd tea.Cmd
 	c.form, cmd = c.s.newForm(huh.NewGroup(
@@ -211,6 +245,8 @@ func (c *certsScreen) toChoice() tea.Cmd {
 		return c.toBYOCert()
 	case choiceACME:
 		return c.toACME()
+	case choiceHTTP:
+		return c.toHTTP()
 	default:
 		return c.toZone()
 	}
@@ -237,7 +273,7 @@ func (c *certsScreen) toIP() tea.Cmd {
 	var cmd tea.Cmd
 	c.form, cmd = c.s.newForm(huh.NewGroup(
 		huh.NewConfirm().
-			Title(fmt.Sprintf("Also allow the LAN IP %s in certificates?", c.bindIP())).
+			Title(fmt.Sprintf("Also allow the IP %s in certificates?", c.bindIP())).
 			Description(ipCADesc).
 			Affirmative("Yes").
 			Negative("No").
@@ -316,7 +352,7 @@ func (c *certsScreen) toEntIP() tea.Cmd {
 	var cmd tea.Cmd
 	c.form, cmd = c.s.newForm(huh.NewGroup(
 		huh.NewConfirm().
-			Title(fmt.Sprintf("Include the LAN IP %s in the request?", c.bindIP())).
+			Title(fmt.Sprintf("Include the IP %s in the request?", c.bindIP())).
 			Description(ipEntDesc).
 			Affirmative("Yes").
 			Negative("No").
@@ -443,13 +479,7 @@ func (c *certsScreen) toACME() tea.Cmd {
 			Title("Email for Let's Encrypt").
 			Description("Expiry and account notices go here.").
 			Value(&c.email).
-			Validate(func(v string) error {
-				v = strings.TrimSpace(v)
-				if !strings.Contains(v, "@") || strings.ContainsAny(v, " \t") {
-					return errors.New("enter a valid email address")
-				}
-				return nil
-			}),
+			Validate(validEmail),
 		huh.NewInput().
 			Title("DNS provider").
 			Description("The Caddy DNS plugin name, e.g. cloudflare, route53, digitalocean.").
@@ -473,6 +503,27 @@ func (c *certsScreen) toACME() tea.Cmd {
 			}),
 	))
 	return cmd
+}
+
+func (c *certsScreen) toHTTP() tea.Cmd {
+	c.step = certHTTP
+	var cmd tea.Cmd
+	c.form, cmd = c.s.newForm(huh.NewGroup(
+		huh.NewInput().
+			Title("Email for Let's Encrypt").
+			Description("Expiry and account notices go here.").
+			Value(&c.email).
+			Validate(validEmail),
+	))
+	return cmd
+}
+
+func validEmail(v string) error {
+	v = strings.TrimSpace(v)
+	if !strings.Contains(v, "@") || strings.ContainsAny(v, " \t") {
+		return errors.New("enter a valid email address")
+	}
+	return nil
 }
 
 // installPair writes the validated pair into deploy/caddy/certs/ (key 0600,
@@ -501,7 +552,7 @@ func samePath(a, b string) bool {
 
 func (c *certsScreen) Back() (bool, tea.Cmd) {
 	switch c.step {
-	case certModeWarn, certZone, certEntIP, certBYOCert, certACME:
+	case certModeWarn, certZone, certEntIP, certBYOCert, certACME, certHTTP:
 		return true, c.toMode()
 	case certIP:
 		return true, c.toZone()
@@ -585,7 +636,7 @@ func (c *certsScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return next(c.toBYOKey())
 		}
 		return next(done(c))
-	case certACME:
+	case certACME, certHTTP:
 		return next(done(c))
 	}
 	return c, cmd
@@ -618,7 +669,7 @@ func (c *certsScreen) View() tea.View {
 	case certMode:
 		b.WriteString(c.form.View())
 		if !c.public() {
-			b.WriteString("\n\n" + t.Muted.Render(wrap("Public certificates (DNS-01) aren't offered: "+c.host()+" is a private-only name.", w)))
+			b.WriteString("\n\n" + t.Muted.Render(wrap("Public certificates (Let's Encrypt) aren't offered: "+c.host()+" is a private-only name.", w)))
 		}
 	case certModeWarn:
 		b.WriteString(t.warn(wrap(fmt.Sprintf("Changing the certificate mode from %s to %s on an existing install.", c.existingMode(), tlsMode(c.choice)), w)) + "\n\n")
@@ -677,6 +728,12 @@ func (c *certsScreen) View() tea.View {
 	case certACME:
 		b.WriteString(t.Muted.Render(wrap("Caddy proves control of "+c.host()+" through a DNS TXT record, so the server needs no inbound access from the internet.", w)) + "\n\n")
 		b.WriteString(c.form.View())
+	case certHTTP:
+		para("Let's Encrypt checks http://" + c.host() + "/.well-known/acme-challenge/ from the internet: " + c.host() + " must resolve publicly to this server, and port 80 must be open to the internet, including any cloud firewall in front of it.")
+		if !c.cloud() {
+			b.WriteString(t.warn(wrap(c.bindIP()+" is a private address: this works only if your public IP forwards ports 80 and 443 to it.", w)) + "\n\n")
+		}
+		b.WriteString(c.form.View())
 	}
 	return tea.NewView(b.String())
 }
@@ -688,11 +745,17 @@ func (c *certsScreen) Apply(cfg *config.Config) {
 	switch c.choice {
 	case choiceAchilles:
 		cfg.CAZone, cfg.CAIncludeIP, cfg.CARotate = c.zone, c.includeIP, c.rotate
+	case choiceHTTP:
+		cfg.ACMEEmail = strings.TrimSpace(c.email)
 	case choiceACME:
 		provider := strings.TrimSpace(c.provider)
 		if provider != cfg.CaddyDNSProvider {
 			cfg.CaddyDNSModule = "" // the engine derives github.com/caddy-dns/<provider>
 		}
 		cfg.ACMEEmail, cfg.CaddyDNSProvider, cfg.CaddyDNSToken = strings.TrimSpace(c.email), provider, strings.TrimSpace(c.token)
+	}
+	if c.choice != choiceACME {
+		// No DNS API token left on disk for a mode that doesn't use it.
+		cfg.CaddyDNSProvider, cfg.CaddyDNSModule, cfg.CaddyDNSToken = "", "", ""
 	}
 }

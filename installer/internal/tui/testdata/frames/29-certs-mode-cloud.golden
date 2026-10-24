@@ -1,0 +1,24 @@
+ ProjectAchilles installer                                 Certificates  4 / 10
+────────────────────────────────────────────────────────────────────────────────
+ ┃ How should HTTPS certificates be issued?                                    
+ ┃ > Let's Encrypt HTTP-01 (recommended): public certificates via port 80      
+ ┃   Let's Encrypt DNS-01: public certificates via your DNS provider           
+ ┃   ProjectAchilles CA: a private CA limited to your zone                     
+ ┃   Enterprise CA: generate a request (CSR) for your own CA to sign           
+ ┃   Bring your own certificate and key files                                 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+────────────────────────────────────────────────────────────────────────────────
+ ↑/↓ choose · enter next · esc back · ctrl+c quit

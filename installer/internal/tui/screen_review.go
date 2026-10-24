@@ -112,7 +112,7 @@ func (r *reviewScreen) rows() []string {
 	case "achilles-ca":
 		ip := "no IP addresses"
 		if c.CAIncludeIP {
-			ip = "LAN IP allowed"
+			ip = "IP allowed"
 		}
 		v := "ProjectAchilles CA · zone " + c.CAZone + " · " + ip
 		row("Certificates", v)

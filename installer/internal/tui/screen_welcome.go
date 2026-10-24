@@ -123,7 +123,7 @@ func (w *welcomeScreen) View() tea.View {
 	t := w.s.theme
 	var b strings.Builder
 	if w.s.existing == nil {
-		b.WriteString(wrap("This wizard sets up ProjectAchilles on this server for your LAN.", w.s.width) + "\n\n")
+		b.WriteString(wrap("This wizard sets up ProjectAchilles on this server (LAN or cloud).", w.s.width) + "\n\n")
 		for i, step := range []string{
 			"Check that this server is ready (read-only)",
 			"Pick the network interface and the server's DNS name",

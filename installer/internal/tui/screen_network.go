@@ -126,8 +126,15 @@ func (n *networkScreen) toIface() tea.Cmd {
 	opts := make([]huh.Option[int], len(n.ifaces))
 	for i, f := range n.ifaces {
 		label := fmt.Sprintf("%-10s %-15s %s", f.Name, f.IP, f.CIDR)
+		var notes []string
 		if f.Default {
-			label += "  (default route)"
+			notes = append(notes, "default route")
+		}
+		if f.Public() {
+			notes = append(notes, "public")
+		}
+		if len(notes) > 0 {
+			label += "  (" + strings.Join(notes, ", ") + ")"
 		}
 		opts[i] = huh.NewOption(label, i)
 	}
@@ -212,6 +219,15 @@ func (n *networkScreen) toDNS(m dnsCheckMsg) tea.Cmd {
 			Value(&n.dnsChoice),
 	))
 	return cmd
+}
+
+// afterDNS asks for the LAN subnets, except on a public IP: a cloud server
+// has no LAN to restrict HTTPS to.
+func (n *networkScreen) afterDNS() tea.Cmd {
+	if n.iface().Public() {
+		return done(n)
+	}
+	return n.toSubnets()
 }
 
 func (n *networkScreen) toSubnets() tea.Cmd {
@@ -299,7 +315,7 @@ func (n *networkScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return n, nil
 			}
 			if n.step == netDNS && n.resolved {
-				return n, n.toSubnets()
+				return n, n.afterDNS()
 			}
 		}
 	}
@@ -334,7 +350,7 @@ func (n *networkScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		default:
 			return n, tea.Batch(cmd, n.toChecking())
 		}
-		return n, tea.Batch(cmd, n.toSubnets())
+		return n, tea.Batch(cmd, n.afterDNS())
 	case netSubnets:
 		n.subnets, _ = parseSubnets(n.subnets)
 		return n, tea.Batch(cmd, done(n))
@@ -349,7 +365,7 @@ func (n *networkScreen) View() tea.View {
 	switch n.step {
 	case netIface:
 		if len(n.ifaces) == 0 {
-			b.WriteString(t.bad(wrap("No LAN IPv4 address found on this server (loopback, Docker and VPN interfaces are ignored). Connect it to the LAN and run the installer again.", w-2)))
+			b.WriteString(t.bad(wrap("No usable IPv4 address found on this server (loopback, Docker and VPN interfaces are ignored). Connect it to the network and run the installer again.", w-2)))
 			break
 		}
 		b.WriteString(n.form.View())
@@ -386,7 +402,7 @@ func (n *networkScreen) classView() string {
 	case c.Kind == dnsclass.PublicDomain:
 		lines = append(lines,
 			t.ok(wrap("Under a public domain: "+c.Reason+".", w)),
-			"  "+t.Muted.Render(hang(wrap("Clerk: use production keys (pk_live_) and add the records Clerk lists to your public zone. Let's Encrypt DNS-01 is available.", w))))
+			"  "+t.Muted.Render(hang(wrap("Clerk: use production keys (pk_live_) and add the records Clerk lists to your public zone. Let's Encrypt certificates are available.", w))))
 	default:
 		lines = append(lines,
 			t.warn(wrap("Private-only name: "+c.Reason+".", w)),
@@ -418,14 +434,36 @@ func (n *networkScreen) dnsView() string {
 	default:
 		b.WriteString(t.warn(wrap(fmt.Sprintf("%s does not resolve on this server yet.", n.host), w)))
 	}
-	b.WriteString("\n\nCreate this record in your internal DNS:\n")
-	b.WriteString("  " + t.Code.Render(fmt.Sprintf("%s.  A  %s", n.host, ip)) + "\n")
+	record := "  " + t.Code.Render(fmt.Sprintf("%s.  A  %s", n.host, ip)) + "\n"
+	if n.iface().Public() {
+		b.WriteString("\n\nCreate this record at your DNS provider:\n" + record)
+		b.WriteString("\n" + n.form.View())
+		return b.String()
+	}
+	if n.behindNAT() {
+		b.WriteString("\n\n" + t.Muted.Render(wrap("If this server sits behind 1:1 NAT (AWS, Azure, Google Cloud, a DigitalOcean reserved IP), a public name pointing at the public IP is expected: choose Continue without a record.", w)))
+	}
+	b.WriteString("\n\nCreate this record in your internal DNS:\n" + record)
 	b.WriteString("On Active Directory DNS (PowerShell on a DNS server):\n")
 	for _, l := range adRecordCommand(n.host, ip, w-2) {
 		b.WriteString("  " + t.Code.Render(l) + "\n")
 	}
 	b.WriteString("\n" + n.form.View())
 	return b.String()
+}
+
+// behindNAT reports a private interface address while the name resolves to
+// public addresses only: the usual picture behind a cloud provider's NAT.
+func (n *networkScreen) behindNAT() bool {
+	if n.iface().Public() || len(n.addrs) == 0 {
+		return false
+	}
+	for _, a := range n.addrs {
+		if !sysprobe.IsPublicIPv4(a) {
+			return false
+		}
+	}
+	return true
 }
 
 // adRecordCommand is the Add-DnsServerResourceRecordA line for host, using
@@ -451,6 +489,9 @@ func (n *networkScreen) Apply(c *config.Config) {
 	c.CaddyBindIP = f.IP
 	c.AchillesDomain = n.host
 	c.LANSubnets = n.subnets
+	if f.Public() {
+		c.LANSubnets = ""
+	}
 	if n.hostsDecided {
 		c.HostsEntry = n.hostsEntry
 	}

@@ -4,7 +4,7 @@
  achilles.corp.example.com in deploy/caddy/certs/. Your CA signs the request;
  you then point the installer at the signed chain.
  
- ┃ Include the LAN IP 10.0.5.20 in the request?                                
+ ┃ Include the IP 10.0.5.20 in the request?                                    
  ┃ This only adds the IP to the certificate request; it does not make the      
  ┃ server reachable by IP (the site answers on its DNS name only).             
  ┃                                                                             

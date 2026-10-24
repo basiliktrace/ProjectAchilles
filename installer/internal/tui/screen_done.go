@@ -62,7 +62,7 @@ func (d *doneScreen) build() []string {
 	add(t.ok(t.Strong.Render("ProjectAchilles is installed and running.")))
 	add("  " + t.Muted.Render("URL     ") + t.Code.Render(url))
 	if ip := strings.Trim(c.CaddyBindIP, "[]"); ip != "" {
-		add("  " + t.Muted.Render("LAN IP  ") + ip)
+		add("  " + t.Muted.Render("IP      ") + ip)
 	}
 	add("")
 

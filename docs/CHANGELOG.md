@@ -11,6 +11,10 @@ This project uses two version streams:
 
 ## [Unreleased]
 
+### Added
+
+- **Installer on cloud servers.** `achilles-installer` now recognises a public IP on the chosen interface (DigitalOcean, Hetzner) and offers **Let's Encrypt HTTP-01** (`TLS_MODE=acme-http`), recommended there. It skips the LAN-subnets question, asks for the A record at your DNS provider instead of in AD DNS, and explains the DNS mismatch behind 1:1 NAT (AWS, Azure, Google Cloud). HTTP-01 is also offered on a LAN for names under a public domain. Guide: `docs/deployment/ON_PREM_LAN.md` section 15.
+
 ## [2.4.0] - 2026-10-24
 
 ### Upgrade notes

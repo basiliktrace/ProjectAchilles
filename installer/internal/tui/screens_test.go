@@ -178,7 +178,7 @@ func (d *driver) passCertsCA() {
 	d.enter()
 	d.waitText("name-constrained")
 	d.enter()
-	d.waitText("LAN IP")
+	d.waitText("the IP " + testIP)
 	d.enter()
 }
 
