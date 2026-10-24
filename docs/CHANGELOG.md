@@ -11,6 +11,11 @@ This project uses two version streams:
 
 ## [Unreleased]
 
+### Fixed
+
+#### Installer and deployment
+- **Server installs pin their compose project name** in the root `.env` (`COMPOSE_PROJECT_NAME`). Compose used the checkout's directory name, so an install in `/opt/projectachilles` and a dev clone also called `projectachilles` shared one project: `up` recreated the other stack's containers and mounted its volumes. New installs use `achilles-server`; existing installs keep the name they already run under, so no data moves. The engine refuses to start when another checkout's containers use the name, and `restore` keeps the live project name instead of the backup's.
+
 ## [2.3.1] - 2026-10-22
 
 Security patch. The 2.3.0 backend image ran Node.js 22.22.2, which is affected by the [October 21, 2026 Node.js security release](https://nodejs.org/en/blog/vulnerability/october-2026-security-releases). This release moves the Docker images to Node.js 22.23.4 and picks up the month's minor/patch dependency updates, including a critical Next.js fix for the blog. There are no application code changes.

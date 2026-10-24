@@ -872,6 +872,12 @@ The backup file holds every secret of the install (Clerk keys, session and
 encryption secrets, API keys) **and the CA private keys**. Anyone who reads it
 can impersonate your CA within its zone. Store it encrypted and off the server.
 
+Container and volume names start with the compose project name, which the
+engine pins in the root `.env` as `COMPOSE_PROJECT_NAME` (`achilles-server` on a
+new install; an older install keeps its directory's name, for example
+`projectachilles`). Restoring a backup from another install keeps the live
+project name, so the data lands in this install's volumes.
+
 ## 11. Moving to a public IP later
 
 Switching certificate source is a re-run with different answers, not a
@@ -998,6 +1004,8 @@ subnets can reach the LAN IP, use your network firewall (or Docker's
 | Server still presents the old intermediate after `ca renew` | Caddy reads the CA only at start, and a plain restart keeps its cached leaf (up to about 12 hours). Run `sudo systemctl start achilles-ca-renew.service` (clears the cache, then restarts), or re-run the install. |
 | `upgrade`: `… has uncommitted changes; refusing to upgrade over them` | Commit, stash or discard the changes shown, then run it again. |
 | `install-onprem.sh`: `… has local changes` | Same: stash them (`git -C /opt/projectachilles stash`) or keep running `deploy-server.sh` as before. |
+| Engine: `Compose project '…' already belongs to <dir>` | Another checkout on this host (a dev clone, an earlier install) runs containers under the same project name, and `up` would take over its containers and volumes. Install from that directory, or set another `COMPOSE_PROJECT_NAME` in `deploy.config.env` and re-run. |
+| Engine: `COMPOSE_PROJECT_NAME is '…' but this install runs as '…'` | The project name can't change after the first install: the data is in the old name's volumes. Remove `COMPOSE_PROJECT_NAME` from `deploy.config.env`. |
 | Preflight: `Port 443 available` fails | Another service holds the port. Stop it, then press **r**. |
 | A `.local` name works on some machines only | mDNS conflict (section 4). Use another name. |
 
