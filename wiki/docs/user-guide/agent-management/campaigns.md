@@ -8,6 +8,8 @@ description: "Save a test plan of tests and agents, run it with one click, and e
 
 A **campaign** is a saved test plan: a set of tests crossed with a set of agents. You run it with one click, and ProjectAchilles produces an **evidence matrix** (one cell per test and host) that you can read on screen, export as CSV, or print.
 
+![Campaigns: saved plans with their framework label, size, last result, and the expanded run history of one campaign](/img/screenshots/campaigns.png)
+
 Use campaigns when you need repeatable, auditable proof of what was tested and what the controls did, for example for a compliance review or a quarterly validation. A campaign is also optionally labelled with a **framework label** (for example `ISO 27001 A.8`) that is carried onto the evidence page.
 
 :::info Availability
@@ -23,8 +25,10 @@ Campaigns are available on self-hosted deployments (Docker, Render, Fly.io, Rail
    - **Description** (optional, up to 2000 characters)
    - **Framework label** (optional, up to 120 characters)
    - **Tests** to include (1 to 100)
-   - **Agents** to target (at least 1)
+   - **Hosts**: the agents to target (at least 1)
 4. Save
+
+![Edit campaign dialog: name, framework label, description, then searchable test and host pickers](/img/screenshots/campaign-editor.png)
 
 Editing a campaign changes the plan for future runs only. Existing runs keep the plan they started with (see [Evidence snapshots](#evidence-snapshots)).
 
@@ -72,6 +76,8 @@ After you confirm, you are taken to the run's evidence page. Retries of a task (
 ## Reading the Matrix
 
 The evidence page shows one cell per test and host. **Whichever list is longer runs down the side**: with more hosts than tests (the usual case), hosts are rows and tests are columns; otherwise tests are rows. The first column and the header row stay in place while you scroll. The last column and the bottom row show how many results were protected per host and per test (for example `3/4`), and the bottom-right corner shows the run's % protected.
+
+![Campaign run evidence page: who started it, the pre-execution notice, progress, outcome counts, and the test x host matrix with per-test and per-host totals](/img/screenshots/campaign-run.png)
 
 The page refreshes every 15 seconds while anything is still in flight, and shows the **As of** time it was computed and which EDR integrations the outcomes reflect (for example `EDR results from Microsoft Defender`).
 
