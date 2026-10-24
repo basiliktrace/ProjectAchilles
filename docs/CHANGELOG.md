@@ -15,7 +15,7 @@ This project uses two version streams:
 
 - **New tables are created on startup.** `campaigns`, `campaign_runs` and `run_notices`, plus nullable `tasks.notice_id` and `tasks.campaign_run_id` columns, are added automatically when the backend starts. The change is additive; existing data is untouched.
 - **Threshold alerts saved from the UI start firing.** Before #546 the email and Slack channels configured in the UI were never marked configured, so alerts silently never went out. After upgrading, tenants with alerts set up in the UI will begin receiving them.
-- **Pre-execution notices are off by default.** Before enabling them, confirm **Send test** in Settings → Integrations → Alerting succeeds from the server: an outbound firewall that blocks the SMTP port holds every test run until the max wait, then marks it "Not run".
+- **Pre-execution notices are off by default.** Before enabling them, confirm **Test Channels** in Settings → Integrations → Alerts & Notifications succeeds from the server: an outbound firewall that blocks the SMTP port holds every test run until the max wait, then marks it "Not run".
 - **"Started by" names**: campaign runs and notice emails look the user up in Clerk, so no session-token change is needed. Campaign runs started before this release show the name when displayed.
 - **Campaign CSV**: `stages` and `edr` columns are appended at the end, and `outcome` gains `prevented` and `detected`. Parsers that read by column position keep working.
 - Campaigns and pre-execution notices are backend-only; the Vercel (`backend-serverless/`) deployment hides them.
@@ -57,6 +57,9 @@ This project uses two version streams:
 - **Campaign print added a blank page** and clipped wide matrices (#554)
 - **Campaign "Started by"** showed a raw user ID (#554)
 - **The calendar file told the SOC to search for the run tag**, which never reaches the hosts (#556)
+
+#### Installer and deployment
+- **Server installs pin their compose project name** in the root `.env` (`COMPOSE_PROJECT_NAME`). Compose used the checkout's directory name, so an install in `/opt/projectachilles` and a dev clone also called `projectachilles` shared one project: `up` recreated the other stack's containers and mounted its volumes. New installs use `achilles-server`; existing installs keep the name they already run under, so no data moves. The engine refuses to start when another checkout's containers use the name, and `restore` keeps the live project name instead of the backup's.
 
 ### Security
 

@@ -213,8 +213,8 @@ Each task shows a color-coded status badge:
 | Status | Color | Description |
 |--------|-------|-------------|
 | Pending | Gray | Waiting for agent to poll |
-| Assigned | Blue | Agent picked up the task |
-| Downloading | Blue | Agent downloading binary |
+| Assigned | Green | Agent picked up the task |
+| Downloading | Green | Agent downloading binary |
 | Executing | Amber | Binary running on endpoint |
 | Completed | Green | Finished, and the result reported a zero exit code |
 | Failed | Red | Finished with error — including tasks that technically completed but reported a non-zero exit code |
@@ -225,7 +225,7 @@ When [pre-execution notices](../integrations/pre-execution-notices) are on, a te
 | Status | Color | Description |
 |--------|-------|-------------|
 | Sending notice… | Amber | Held until the mail server accepts the notice email. Hover for the last send error. If it lasts more than a few seconds, sending is failing; see **Settings → Integrations → Pre-execution notices**, where the held run can also be released without notice |
-| Starting soon | Blue | The notice was accepted; the task is waiting out the lead time (0–5 minutes) |
+| Starting soon | Green | The notice was accepted; the task is waiting out the lead time (0–5 minutes) |
 | Not run | Gray | The task ended without running. Hover for the reason: `Not run: notice not delivered` (the email was never accepted within the max wait) or `Not run: host offline during notice window` (the host didn't pick the task up before the pickup window closed) |
 
 :::info Honest status
