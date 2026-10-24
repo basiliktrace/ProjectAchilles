@@ -53,6 +53,9 @@ Threat intelligence reports pile up unread. Compliance checklists are checked on
 - **30+ Analytics Endpoints** — Defense scores, heatmaps, treemaps, error rate trends, and MITRE ATT&CK coverage matrices
 - **Build & Sign From UI** — Cross-compile test binaries and sign with Authenticode (Windows) or ad-hoc signing (macOS)
 - **Microsoft Defender Integration** — Sync Secure Score, alerts, and control profiles with cross-correlation analytics
+- **CrowdStrike Falcon Integration** — Sync alerts and Zero Trust Assessment scores, correlate them with tests, and optionally auto-resolve test alerts
+- **Security Test Campaigns** — Save a set of tests × hosts, run it with one click, and export an evidence matrix (CSV or print) for audits. See [Campaigns](../user-guide/agent-management/campaigns)
+- **Pre-execution Notices** — Email the security engineers before every test run and hold the tests until the notice is accepted, so the SOC knows it's a test. See [Pre-execution Notices](../user-guide/integrations/pre-execution-notices)
 - **Trend Alerting** — Threshold-based Slack and email notifications with in-app notification bell
 - **7 Deployment Targets** — Docker Compose, self-hosted server, on-prem server, Railway, Render, Fly.io, and Vercel (serverless)
 - **Risk Acceptance** — Accept risk for individual controls with audit tracking

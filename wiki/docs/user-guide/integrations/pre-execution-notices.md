@@ -18,7 +18,7 @@ Pre-execution notices work on Docker Compose, Render, Fly.io, Railway and server
 
 ## Turn it on
 
-1. Set up SMTP first. Go to **Settings → Integrations → Alerting → Email** and save a working SMTP host, credentials and from-address. Notices reuse this configuration. Notices count SMTP as set up once a host and a from-address are saved.
+1. Set up SMTP first. Go to **Settings → Integrations → Alerts & Notifications → Email** and save a working SMTP host, credentials and from-address. Notices reuse this configuration. Notices count SMTP as set up once a host and a from-address are saved.
 2. Open **Settings → Integrations → Pre-execution notices**.
 3. Enter the recipients (comma or newline separated, up to 50). This list is separate from the alert recipients, because the audience is different. Use plain addresses such as `secops@example.com`, not `Name <address>`.
 4. Tick **Enable pre-execution notices** and save. You can only enable it when SMTP is configured and there is at least one recipient. If SMTP is removed or breaks later, runs still wait for a notice: the notice fails to send and the [failure alerts](#when-delivery-fails) fire, so no test runs unannounced. The same holds if stored credentials can no longer be decrypted (for example after `ENCRYPTION_SECRET` changed): notices stay on and the sends fail loudly, rather than the setting reading as off.

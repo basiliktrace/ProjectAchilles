@@ -16,17 +16,21 @@ The alerting service dispatches notifications when test results cross configured
 Alerts are sent as Block Kit formatted messages via a Slack webhook URL.
 
 1. Create an [Incoming Webhook](https://api.slack.com/messaging/webhooks) in your Slack workspace
-2. Navigate to **Settings** → **Integrations** → **Alerting** → **Slack**
+2. Navigate to **Settings** → **Integrations** → **Alerts & Notifications** → **Slack**
 3. Paste the webhook URL
 4. Send a test message to verify
 
 ### Email
 Alerts are sent via SMTP using Nodemailer.
 
-1. Navigate to **Settings** → **Integrations** → **Alerting** → **Email**
+1. Navigate to **Settings** → **Integrations** → **Alerts & Notifications** → **Email**
 2. Configure SMTP settings (host, port, username, password)
 3. Add recipient email addresses
 4. Send a test email to verify
+
+When you reopen the dialog, the password is never shown and the **Username** field is empty, with the saved value (masked, e.g. `****abcd`) as a hint. Leave both blank to keep what is saved. **Test Channels** then uses the saved username and password, but only while the SMTP host is unchanged: if you change the host, type the credentials again, so a test can never send the stored password to a different server.
+
+If the test fails with **Connection timeout** after about 30 seconds, the server could not reach the SMTP host at all. That is usually an outbound firewall on the ProjectAchilles server dropping traffic to the mail server's port (465 or 587); ask your network team to allow it, or use your organization's internal mail relay.
 
 ## Thresholds
 
@@ -164,7 +168,7 @@ In addition to test result thresholds, the alerting service monitors **agent hea
 
 Agent alerts use a **separate cooldown** from test result alerts (default: 30 minutes). This prevents the two alert types from suppressing each other.
 
-Configure agent alerts in **Settings** → **Integrations** → **Alerting** → **Agent Alerts**.
+Configure agent alerts in **Settings** → **Integrations** → **Alerts & Notifications** → **Agent Alerts**.
 
 ### Slack Block Kit Format
 
@@ -253,6 +257,6 @@ Sensitive fields (webhook URLs, SMTP credentials) are prefixed with `enc:` and e
 Before saving channel configuration, use the built-in test functions:
 
 - **Slack**: Sends a test message to the webhook URL and verifies a 200 response
-- **Email**: Opens a transient SMTP connection and verifies authentication succeeds
+- **Email**: Opens a transient SMTP connection and verifies authentication succeeds. Blank or masked credentials fall back to the saved ones only when the host matches the saved host
 
 Both test endpoints are available in the Settings UI and return clear success/failure messages.
