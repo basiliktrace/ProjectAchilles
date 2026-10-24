@@ -385,6 +385,27 @@ Automate test execution across agent pools with flexible scheduling.
 - **Per-Task ES Index** — Target specific Elasticsearch indices per task for result isolation
 - **Priority Queue** — Higher-priority tasks assigned first
 
+### Security Test Campaigns
+
+Save a test plan, run it with one click, and hand the result to an auditor.
+
+- **Saved plans** — up to 100 tests crossed with a set of agents, scoped to your organization, with an optional framework label (e.g. "CIS v8")
+- **Preflight** — before launch, every test × host pair is checked (not built, no binary for the host's OS, agent offline); you confirm "Run the rest" or fix the plan, so a run never silently does less than the campaign says
+- **Evidence page** — a matrix with the same outcome labels as Analytics (Protected, Prevented, Detected, Unprotected, Error), a reason for every cell, per-stage results, per-host and per-test totals, % protected on the Defense Score basis, who started it, and the pre-execution notice record
+- **Export** — CSV with one row per pair (outcome, exit code, reason, stages, EDR result) and a print layout for PDF
+- **Immutable evidence** — each run snapshots its tests and hosts, so editing or deleting a campaign never rewrites past runs
+
+### Pre-execution Notices
+
+Tell the SOC before every test runs, so simulated attacks are not triaged as real ones.
+
+- **Email before every run** — Run Now, retries, schedules and campaigns; tests are held until the mail server accepts the notice, then start after a 0–5 minute lead
+- **What the SOC gets** — run reference, time window, who started it, each test with its UUID and stage count, the hosts, the EDR auto-resolve status, where the activity shows up on the hosts, and a calendar file
+- **Loud failures** — retries with backoff, a console banner and Slack alert; tests that never get a notice are marked "Not run", never run unannounced
+- **Release without notice** — during a mail outage, release a held run from Settings with a recorded reason
+- **Finished email** — outcome counts with the same labels as Analytics once the run is over
+- **Per organization**, off by default; not available on the Vercel (serverless) deployment
+
 ### Programmatic Access (API Keys)
 
 Automate the platform from scripts and CI without a browser session.

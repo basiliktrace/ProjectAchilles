@@ -11,6 +11,63 @@ This project uses two version streams:
 
 ## [Unreleased]
 
+### Upgrade notes
+
+- **New tables are created on startup.** `campaigns`, `campaign_runs` and `run_notices`, plus nullable `tasks.notice_id` and `tasks.campaign_run_id` columns, are added automatically when the backend starts. The change is additive; existing data is untouched.
+- **Threshold alerts saved from the UI start firing.** Before #546 the email and Slack channels configured in the UI were never marked configured, so alerts silently never went out. After upgrading, tenants with alerts set up in the UI will begin receiving them.
+- **Pre-execution notices are off by default.** Before enabling them, confirm **Send test** in Settings → Integrations → Alerting succeeds from the server: an outbound firewall that blocks the SMTP port holds every test run until the max wait, then marks it "Not run".
+- **"Started by" names**: campaign runs and notice emails look the user up in Clerk, so no session-token change is needed. Campaign runs started before this release show the name when displayed.
+- **Campaign CSV**: `stages` and `edr` columns are appended at the end, and `outcome` gains `prevented` and `detected`. Parsers that read by column position keep working.
+- Campaigns and pre-execution notices are backend-only; the Vercel (`backend-serverless/`) deployment hides them.
+
+### Highlights
+
+- **Security test campaigns**: save a set of tests × hosts, run it with one click, and get an evidence page (matrix, % protected, notice record, CSV, print) that uses the same outcome labels as Analytics (#549, #554).
+- **Pre-execution notices**: email the security engineers before every test run and hold the tests until the mail server accepts the notice, so the SOC knows the activity is a test (#545, #547, #553, #555, #556).
+- **Scheduler fixes**: viewing schedules no longer skips most scheduled runs, and randomized schedules no longer run twice on the same day (#548).
+
+### Added
+
+#### Campaigns
+- **Campaigns** (`/campaigns`, `/api/campaigns/*`): saved, org-scoped test plans of up to 100 tests and a set of agents, with a preflight check that lists pairs that can't run, an explicit "Run the rest" for partial runs, and one transaction for the whole launch (#549)
+- **Evidence page**: tests × hosts matrix with the Analytics outcome labels (Protected, Prevented, Detected, Unprotected, Error, Not run, N/A), a reason for every cell, per-stage results on hover, per-host and per-test totals, the notice record, "started by", an as-of time, CSV export and a print layout (#549, #554)
+- **Immutable run snapshots** and a run history per campaign plus an All runs view that keeps runs of deleted campaigns (#549)
+
+#### Pre-execution notices
+- **Notice email before every test run** (Run Now, retry, schedules, campaigns), with a lead time of 0–5 minutes after the mail server accepts it, a bounded wait, a pickup window, an ICS calendar file, a CSV of hosts past 50, and an optional Finished email (#545)
+- **Delivery failures are loud**: retries with backoff, a console banner, Slack alert, and "Not run: notice not delivered" when the max wait runs out (#545)
+- **Per-organization settings** with fallback to the deployment-wide settings (#545)
+- **Email content**: header `ProjectAchilles | f0_csv`, the triggering user's name and email, tests with UUID and stage count (or a bundle's control count), column headers, and a "Finding this activity in your security tools" section that names the test UUIDs and task folders (#553, #556)
+- **Release without notice from the UI**: Settings → Integrations → Pre-execution notices lists runs whose tests are held and releases one with a recorded reason; `GET /api/notices?state=` (#556)
+
+### Changed
+
+- **Campaign % protected** counts Prevented and Detected as protected, the Defense Score's basis (#554)
+- **Finished email** counts outcomes with the same labels as Analytics, including EDR prevention and detection (#555)
+- **Campaign matrix** puts the longer list (usually hosts) down the side, with a sticky first column and header (#554)
+- **Notice badge** reads "Sending notice…" while the email is being delivered (#550)
+
+### Fixed
+
+- **Schedules skipped most runs while a page was open**: listing or viewing schedules advanced an overdue `next_run_at` before the scheduler could fire it (#548)
+- **Randomized schedules could run twice on the same day** (#548)
+- **Late per-machine runs expired as "host offline"** when they joined a day notice that had already closed; they now get their own notice (#547)
+- **Alert channels configured in the UI never sent** because their `configured` flag was never set (#546)
+- **Alerts Test Channels failed after reopening the dialog** ("Missing credentials for PLAIN"); saved credentials are now reused while the SMTP host is unchanged (#551)
+- **Campaign print added a blank page** and clipped wide matrices (#554)
+- **Campaign "Started by"** showed a raw user ID (#554)
+- **The calendar file told the SOC to search for the run tag**, which never reaches the hosts (#556)
+
+### Security
+
+- **Pre-execution notices could silently switch off**: one undecryptable credential in `integrations.json` made the notice setting read as disabled, so tests ran unannounced. The gate now reads its section without decryption and keeps the last good settings if the file is unreadable (#556)
+- **Re-saving the Alerts dialog overwrote the stored SMTP username with its masked value**, which would break alert and notice emails; masked values are now ignored (#551)
+- **Test Channels can't send the stored SMTP password to another host**: saved credentials are reused only when the host matches the saved one (#551)
+
+### Documentation
+
+- Run Command tasks are not covered by pre-execution notices; the guide says so (#552)
+
 ## [2.3.1] - 2026-10-22
 
 Security patch. The 2.3.0 backend image ran Node.js 22.22.2, which is affected by the [October 21, 2026 Node.js security release](https://nodejs.org/en/blog/vulnerability/october-2026-security-releases). This release moves the Docker images to Node.js 22.23.4 and picks up the month's minor/patch dependency updates, including a critical Next.js fix for the blog. There are no application code changes.

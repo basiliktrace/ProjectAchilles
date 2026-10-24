@@ -31,8 +31,8 @@ cd backend && npm run build      # tsc → dist/
 
 ```bash
 # All tests
-cd backend && npm test           # 2695 tests across 130 files
-cd frontend && npm test          # 1210 tests across 119 files
+cd backend && npm test           # 2740 tests across 133 files
+cd frontend && npm test          # 1223 tests across 121 files
 cd backend-serverless && npm test  # 1719 tests across 69 files
 
 # Single file
@@ -107,7 +107,7 @@ Key directories:
 ### Database (SQLite)
 - **Location**: `~/.projectachilles/agents.db` (better-sqlite3, WAL mode)
 - **Schema**: Created via `CREATE TABLE IF NOT EXISTS` in `backend/src/services/agent/database.ts` with incremental migrations (column additions, CHECK constraint updates)
-- **Tables**: `agents`, `enrollment_tokens`, `tasks`, `agent_versions`, `schedules`
+- **Tables**: `agents`, `enrollment_tokens`, `tasks`, `agent_versions`, `schedules`, `run_notices` (pre-execution notices; `tasks.notice_id`), `campaigns`, `campaign_runs` (`tasks.campaign_run_id`). Any new `tasks` column must also be listed in `migrateExecuteCommandType`'s `optionalCols`, or the next table-recreate migration silently drops it
 - **Settings storage**: `~/.projectachilles/` — `analytics.json` (AES-256-GCM encrypted), `tests.json`, `certs/`
 
 #### Table Recreation Migrations (CHECK constraint changes)
@@ -480,5 +480,5 @@ Threshold-based alerting dispatched when test results cross configured score thr
 - **Frontend**: `AlertsConfig` settings component, `NotificationBell` in TopBar
 - **Dispatch trigger**: Called from `results.service.ts` after successful ES ingestion
 
-### Visual Themes
-Three selectable themes: Default (light/dark), Neobrutalism (hot pink accent, bold borders), Hacker Terminal (phosphor green/amber scanlines). Theme selector in settings. CSS variables drive all theme-specific styling via Tailwind CSS v4 `@theme` blocks.
+### Visual Theme
+A single theme: the f0 dark theme (since the f0 restyle). `useTheme` (`frontend/src/hooks/useTheme.tsx`) keeps the old provider/hook API so consumers and test mocks still work, but `theme` is always `'dark'` and there is no theme selector. CSS variables in `frontend/src/styles/index.css` drive all styling via Tailwind CSS v4 `@theme` blocks; print layouts (execution report, campaign evidence) re-point those tokens to a fixed light palette.
