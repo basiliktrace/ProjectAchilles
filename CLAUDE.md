@@ -31,9 +31,9 @@ cd backend && npm run build      # tsc → dist/
 
 ```bash
 # All tests
-cd backend && npm test           # 912 tests across 40 files (~12s)
-cd frontend && npm test          # 127 tests across 8 files (~2s)
-cd backend-serverless && npm test  # 626 tests across 25 files (~11s)
+cd backend && npm test           # 2740 tests across 133 files
+cd frontend && npm test          # 1223 tests across 121 files
+cd backend-serverless && npm test  # 1719 tests across 69 files
 
 # Single file
 cd backend && npx vitest src/services/agent/__tests__/enrollment.service.test.ts
@@ -107,7 +107,7 @@ Key directories:
 ### Database (SQLite)
 - **Location**: `~/.projectachilles/agents.db` (better-sqlite3, WAL mode)
 - **Schema**: Created via `CREATE TABLE IF NOT EXISTS` in `backend/src/services/agent/database.ts` with incremental migrations (column additions, CHECK constraint updates)
-- **Tables**: `agents`, `enrollment_tokens`, `tasks`, `agent_versions`, `schedules`
+- **Tables**: `agents`, `enrollment_tokens`, `tasks`, `agent_versions`, `schedules`, `run_notices` (pre-execution notices; `tasks.notice_id`), `campaigns`, `campaign_runs` (`tasks.campaign_run_id`). Any new `tasks` column must also be listed in `migrateExecuteCommandType`'s `optionalCols`, or the next table-recreate migration silently drops it
 - **Settings storage**: `~/.projectachilles/` — `analytics.json` (AES-256-GCM encrypted), `tests.json`, `certs/`
 
 #### Table Recreation Migrations (CHECK constraint changes)
@@ -126,8 +126,10 @@ SQLite has no `ALTER COLUMN`, so changing CHECK constraints requires recreating 
 | `/api/integrations/defender/*` | Clerk | Defender credentials, sync trigger |
 | `/api/agent/admin/*` | Clerk | Agent management (tokens, tasks, schedules) |
 | `/api/agent/*` | Agent key | Device endpoints (enroll, heartbeat, tasks) |
+| `/api/campaigns/*` | Clerk | Saved test campaigns (tests x agents), one-click runs, evidence matrix, CSV export; backend-only |
 | `/api/tests/*` | Clerk | Build system, certificates |
 | `/api/integrations/alerts/*` | Clerk | Alert thresholds, Slack/email config |
+| `/api/notices/*` | Clerk | Pre-execution notice settings, status, release |
 | `/api/reports/*` | Clerk | Report payloads: SB-PC-2026-001 JSON export, print-ready execution report (`/executions`) |
 
 ### API Key Scopes
@@ -351,7 +353,7 @@ Uses `backend-serverless/` — a fork of the backend adapted for serverless. Rep
 # Key env vars: CLERK_*, TURSO_*, BLOB_READ_WRITE_TOKEN, ENCRYPTION_SECRET
 # Cron routes: /api/cron/schedules, /api/cron/auto-rotation
 # Capabilities endpoint: GET /api/capabilities (feature flags for frontend)
-cd backend-serverless && npm test    # 552 tests across 23 files
+cd backend-serverless && npm test    # 1719 tests across 69 files
 ```
 
 ### Backend Serverless (`backend-serverless/`)
@@ -386,6 +388,17 @@ Two browser tools are available for visual verification. **Prefer the Claude Cod
 
 ### SVG Text Stroke Inheritance in Recharts
 When writing custom `content` renderers for Recharts components (Treemap, etc.), always set `stroke="none"` on `<text>` elements. Recharts sets `stroke="var(--background)"` on the parent SVG container for cell borders, and SVG `stroke` is an inherited property — it cascades to all children including text. In dark mode `--background` is near-black, so text renders with a visible dark outline around every glyph. In light mode the stroke is white-on-white (invisible), making the bug theme-specific and easy to miss.
+
+### Campaigns
+Saved test plans (tests x agents) with one-click runs and an evidence matrix (`services/campaigns/`, `api/campaigns.routes.ts`, `frontend/src/pages/campaigns/`). User docs: `wiki/docs/user-guide/agent-management/campaigns.md`, `wiki/docs/api-reference/campaigns.md`.
+- **Snapshot immutability**: `campaign_runs` has no FK to `campaigns`; a run stores a JSON snapshot (name, label, tests, agents, skipped pairs, `started_by_name`). Editing or deleting a campaign never changes a past run, and `GET /api/campaigns/runs` still lists runs of deleted campaigns.
+- **`tasks.campaign_run_id`**: any new `tasks` column must also go in `migrateExecuteCommandType`'s `optionalCols` (and its index in the index recreation), or the next table-recreate migration silently drops it. `campaign_run_id` is there.
+- **Shared `resolveTestArtifact`** (`services/agent/testArtifacts.js`): preflight and `createTasks` must both resolve binaries through it so a dry run can never disagree with the real dispatch. Preflight calls it with `hash: false`.
+- **Launch is one transaction** (run row + all tasks + notice) whether or not pre-execution notices are on. Partial runs (skipped pairs) throw `PartialRunError` (409 with `skipped`) until `confirm_partial: true`. Limits: 100 tests, 5,000 tasks per run.
+- **Org**: the run always uses the campaign's org; a mismatched `org_id` is 403; agents are re-checked against the caller's org at launch (400). `REQUIRE_ORG_ISOLATION` makes no-org callers 403 on every route.
+- **Backend-only**: `backend-serverless/` reports `campaigns: false` in `/api/capabilities` and mounts nothing; the frontend hides the nav entry and routes on that flag.
+- **Cell verdicts match Analytics** (`services/outcomes/verdict.ts`, shared with the notice Finished email): Protected > Prevented > Detected > Unprotected > Error, per-stage via `reports/stageOutcome.ts` `classifyStage`. EDR flags come from ES by exact `_id` (`<task_id>` or `<task_id>::<control_id>`, `outcomes/edr.ts`); ES down → exit codes only, `edr.status: 'unavailable'`. `percent_protected` counts prevented + detected as protected (Defense Score basis). If you change the Analytics label rule, change this too. The matrix is async (one ES query per run, chunked by 1,000 ids).
+- **Print**: no named `@page` (it adds a blank portrait page after the app shell); `CampaignRunPage` injects `@page { size: landscape }` while mounted, like the Analytics report.
 
 ### Certificate System & Code Signing
 - Multi-cert storage: `~/.projectachilles/certs/cert-<timestamp>/` (max 5)
@@ -446,6 +459,17 @@ Programmatically resolves Achilles-correlated alerts in Microsoft Defender so co
 - **Key files**: `services/defender/auto-resolve.service.ts`, `graph-client.ts` (`updateAlert` + `GraphPatchError`), `enrichment.service.ts` (alert-side writes), `sync.service.ts` (wiring)
 - **Customer setup guide**: `docs/defender-auto-resolve.md` (permission grant, dry-run audit, enable flow, troubleshooting)
 
+### Pre-execution notices
+Emails the security engineers before every `execute_test` run and holds the tests until the mail server accepts the notice for every recipient, plus a 0-5 minute lead. Off by default. User doc: `wiki/docs/user-guide/integrations/pre-execution-notices.md`.
+- **The hold lives in `getNextTask`** (`tasks.service.ts`): a pending task with a `notice_id` is only handed out when its `run_notices` row is `sent`/`overridden` and `release_at <= now < pickup_deadline`. Held tasks stay `status='pending'`; agents are unchanged. Compare JS-computed ISO strings, never `datetime('now')`.
+- **Backend-only.** `backend-serverless/` has no email stack and `GET /api/capabilities` reports `preExecutionNotices: false` there, which hides the Settings card, badges and banner.
+- **Per org, with legacy fallback (like alerts).** Settings live at `orgs[orgId].pre_execution_notices`, falling back to the legacy top-level `pre_execution_notices` when the org has no section (so `'default'` and unknown org ids use legacy). SMTP/Slack come from the same org's `alerts` (org section, else legacy). A notice's **owning org** is the `org_id` of the tasks it gates (`run_notices.org_id`; NULL on pre-R20 rows = legacy): Run Now/batch use the request's validated `org_id`, retry the original task's, the scheduler `schedule.org_id` (one shared run notice **per org** per tick). Every send, Finished email, bounded wait, Slack alert and release reads `new IntegrationsSettingsService(notice.org_id ?? undefined)`, never a global service. Routes are org-scoped: settings via the caller's org; `GET /`, `/status`, `/:id/release` see only the caller org's notices (another org's id is a 404), no-org callers see all (legacy mode) unless `REQUIRE_ORG_ISOLATION=true` (403). The daily SMTP check runs for the legacy section and each org with its own enabled section.
+- **Notice code ignores the alerts `configured` flag.** SMTP counts as usable when `smtp_host` + `from_address` are set and Slack when `webhook_url` + `enabled` are set (`services/notices/channels.ts`), because the Alerts UI never sends `configured` and `saveAlertSettings` keeps it false. The gate itself depends on `enabled` only, so a broken SMTP holds tests rather than letting them run unannounced.
+- **The gate fails closed.** `getPreExecutionNoticeSettings()` reads the notice section from the *raw* JSON (it holds no secrets), so an undecryptable credential elsewhere in `integrations.json` can't null the file and read as "off"; an unparseable file falls back to the last good read per org. Don't route it back through `getFileSettings()`.
+- **The run tag never reaches the hosts.** Telemetry shows the test UUID (binary names, `C:\F0\tasks` / `/opt/f0/tasks`); the notice email's "Finding this activity" section says so. Don't tell the SOC to search for `PA-RUN-…`.
+- **Trap: `migrateExecuteCommandType`** in `backend/src/services/agent/database.ts` recreates the `tasks` table and runs even on fresh DBs. Any new `tasks` column must be added to its `optionalCols`, and its index to the index recreation, or the column is silently dropped.
+- Code: `backend/src/services/notices/`, `backend/src/api/notices.routes.ts`. `services/notices/` must not import `tasks.service.ts` (import cycle); `tasks.service.ts` imports from `notices.repo.ts`.
+
 ### Alerting Service
 Threshold-based alerting dispatched when test results cross configured score thresholds. Hooked into the result ingestion pipeline.
 
@@ -456,5 +480,5 @@ Threshold-based alerting dispatched when test results cross configured score thr
 - **Frontend**: `AlertsConfig` settings component, `NotificationBell` in TopBar
 - **Dispatch trigger**: Called from `results.service.ts` after successful ES ingestion
 
-### Visual Themes
-Three selectable themes: Default (light/dark), Neobrutalism (hot pink accent, bold borders), Hacker Terminal (phosphor green/amber scanlines). Theme selector in settings. CSS variables drive all theme-specific styling via Tailwind CSS v4 `@theme` blocks.
+### Visual Theme
+A single theme: the f0 dark theme (since the f0 restyle). `useTheme` (`frontend/src/hooks/useTheme.tsx`) keeps the old provider/hook API so consumers and test mocks still work, but `theme` is always `'dark'` and there is no theme selector. CSS variables in `frontend/src/styles/index.css` drive all styling via Tailwind CSS v4 `@theme` blocks; print layouts (execution report, campaign evidence) re-point those tokens to a fixed light palette.

@@ -1,0 +1,96 @@
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+
+vi.mock('@/services/api/notices', () => ({
+  noticesApi: {
+    getSettings: vi.fn(),
+    saveSettings: vi.fn(),
+    sendTest: vi.fn(),
+    listPending: vi.fn().mockResolvedValue([]),
+  },
+}));
+
+import { noticesApi } from '@/services/api/notices';
+import { PreExecutionNoticesConfig } from '../PreExecutionNoticesConfig';
+
+const base = {
+  enabled: false,
+  recipients: [] as string[],
+  lead_minutes: 5,
+  max_wait_minutes: 60,
+  pickup_window_minutes: 120,
+  send_finished: true,
+  smtp_configured: true,
+};
+
+beforeEach(() => {
+  vi.clearAllMocks();
+});
+
+describe('PreExecutionNoticesConfig', () => {
+  it('disables the toggle with a hint when SMTP is not configured', async () => {
+    vi.mocked(noticesApi.getSettings).mockResolvedValue({ ...base, smtp_configured: false });
+    render(<PreExecutionNoticesConfig />);
+    expect(await screen.findByText('Configure SMTP email in Alerts first')).toBeInTheDocument();
+    expect(screen.getByLabelText(/enable pre-execution notices/i)).toBeDisabled();
+  });
+
+  it('enables the toggle when SMTP is configured', async () => {
+    vi.mocked(noticesApi.getSettings).mockResolvedValue(base);
+    render(<PreExecutionNoticesConfig />);
+    await screen.findByLabelText(/enable pre-execution notices/i);
+    expect(screen.getByLabelText(/enable pre-execution notices/i)).toBeEnabled();
+    expect(screen.queryByText('Configure SMTP email in Alerts first')).not.toBeInTheDocument();
+  });
+
+  it('saves parsed recipients and shows server 400 messages', async () => {
+    vi.mocked(noticesApi.getSettings).mockResolvedValue(base);
+    vi.mocked(noticesApi.saveSettings).mockRejectedValue(new Error('At least one recipient is required'));
+    render(<PreExecutionNoticesConfig />);
+    const box = await screen.findByLabelText(/recipients/i);
+    await userEvent.type(box, 'a@x.io, b@x.io{Enter}c@x.io');
+    await userEvent.click(screen.getByRole('button', { name: /save/i }));
+    await waitFor(() => expect(noticesApi.saveSettings).toHaveBeenCalled());
+    expect(vi.mocked(noticesApi.saveSettings).mock.calls[0][0].recipients).toEqual(['a@x.io', 'b@x.io', 'c@x.io']);
+    expect(await screen.findByText('At least one recipient is required')).toBeInTheDocument();
+  });
+
+  it('omits a cleared numeric field from the save instead of sending 0', async () => {
+    vi.mocked(noticesApi.getSettings).mockResolvedValue({ ...base, recipients: ['a@x.io'] });
+    vi.mocked(noticesApi.saveSettings).mockResolvedValue({ ...base, recipients: ['a@x.io'] });
+    render(<PreExecutionNoticesConfig />);
+    await userEvent.clear(await screen.findByLabelText(/lead time/i));
+    await userEvent.clear(screen.getByLabelText(/pickup window/i));
+    await userEvent.click(screen.getByRole('button', { name: /save/i }));
+    await waitFor(() => expect(noticesApi.saveSettings).toHaveBeenCalled());
+    const body = vi.mocked(noticesApi.saveSettings).mock.calls[0][0];
+    expect(body).not.toHaveProperty('lead_minutes');
+    expect(body).not.toHaveProperty('pickup_window_minutes');
+    expect(body.max_wait_minutes).toBe(60);
+  });
+
+  it('shows accepted/rejected after sending a test notice', async () => {
+    vi.mocked(noticesApi.getSettings).mockResolvedValue({ ...base, recipients: ['a@x.io'] });
+    vi.mocked(noticesApi.sendTest).mockResolvedValue({
+      accepted: ['a@x.io'],
+      rejected: ['b@x.io'],
+      fully_accepted: false,
+    });
+    render(<PreExecutionNoticesConfig />);
+    await userEvent.click(await screen.findByRole('button', { name: /send test notice/i }));
+    expect(await screen.findByText(/accepted: a@x\.io/i)).toBeInTheDocument();
+    expect(screen.getByText(/rejected: b@x\.io/i)).toBeInTheDocument();
+  });
+
+  it('shows the last SMTP check line', async () => {
+    vi.mocked(noticesApi.getSettings).mockResolvedValue({
+      ...base,
+      last_smtp_check_at: '2026-10-23T10:00:00.000Z',
+      last_smtp_check_ok: false,
+      last_smtp_check_message: 'connection refused',
+    });
+    render(<PreExecutionNoticesConfig />);
+    expect(await screen.findByText(/connection refused/)).toBeInTheDocument();
+  });
+});

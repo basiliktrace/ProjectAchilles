@@ -32,6 +32,9 @@ vi.mock('../../services/integrations/settings.js', () => ({
 
 const mockGenerate = vi.fn();
 const constructed: unknown[][] = [];
+vi.mock('../../services/sentinelone/settings.js', () => ({
+  SentinelOneSettingsService: class { isConfigured = () => false; },
+}));
 vi.mock('../../services/reports/executionReport.service.js', () => ({
   ExecutionReportService: class {
     constructor(...args: unknown[]) { constructed.push(args); }
@@ -72,7 +75,7 @@ describe('GET /api/reports/executions', () => {
       from: 'now-30d', hostnames: 'H1', result: 'unprotected', tz: 'UTC', includeAcceptedRisks: true,
     }));
     expect(mockHasPermission).toHaveBeenCalledWith(expect.anything(), 'analytics:risk:read');
-    expect(constructed[0][1]).toEqual({ vendors: { defender: true, crowdstrike: false } });
+    expect(constructed[0][1]).toEqual({ vendors: { defender: true, crowdstrike: false, sentinelone: false } });
   });
 
   it('does not default the org to the JWT org', async () => {

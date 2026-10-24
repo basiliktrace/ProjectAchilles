@@ -80,7 +80,10 @@ curl -H 'X-Agent-Key: <api-key>' -H 'X-Agent-ID: <agent-id>' https://backend.exa
 | `/api/agent/admin/*` | Clerk | Agent management |
 | `/api/agent/*` | Agent key | Device endpoints |
 | `/api/tests/*` | Clerk | Build system, certificates |
-| `/api/integrations/*` | Clerk | Defender, alerting config |
+| `/api/integrations/*` | Clerk | Defender, CrowdStrike, alerting config |
+| `/api/campaigns/*` | Clerk | [Campaigns](./campaigns): saved test plans, runs, evidence matrix, CSV (not on Vercel) |
+| `/api/notices/*` | Clerk | [Pre-execution notices](./alerting#pre-execution-notices): settings, status, list, release (not on Vercel) |
+| `/api/reports/*` | Clerk | Execution report and SB-PC-2026-001 export payloads |
 | `/api/analytics/risk-acceptances/*` | Clerk | Risk acceptance management |
 | `/api/users/*` | Clerk | User management, invitations |
 | `/api/api-keys/*` | Clerk (admin) | API key management — create, list, revoke |

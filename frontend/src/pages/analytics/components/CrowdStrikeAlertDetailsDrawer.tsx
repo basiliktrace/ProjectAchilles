@@ -3,6 +3,7 @@ import { X, AlertTriangle, ExternalLink, ShieldCheck } from 'lucide-react';
 import { Button } from '@/components/shared/ui/Button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { crowdstrikeApi, type CrowdStrikeAlertItem } from '@/services/api/crowdstrike';
+import { sentineloneAnalyticsApi } from '@/services/api/sentineloneAnalytics';
 import { getSeverityTokens } from '../utils/crowdstrikeSeverityTokens';
 import { formatCrowdStrikeProduct } from '../utils/crowdstrikeProduct';
 import {
@@ -25,6 +26,11 @@ interface CrowdStrikeAlertDetailsDrawerProps {
   title?: string;
   /** created_at window sent as from/to. Absent = unbounded (as before). */
   window?: TimeWindow;
+  /**
+   * Alert source. SentinelOne docs share the CrowdStrike alert shape, so the
+   * same drawer lists them from /analytics/sentinelone/alerts.
+   */
+  vendor?: 'crowdstrike' | 'sentinelone';
 }
 
 const PAGE_SIZE = 100;
@@ -47,7 +53,11 @@ export default function CrowdStrikeAlertDetailsDrawer({
   techniques,
   title,
   window,
+  vendor = 'crowdstrike',
 }: CrowdStrikeAlertDetailsDrawerProps) {
+  const isS1 = vendor === 'sentinelone';
+  const vendorName = isS1 ? 'SentinelOne' : 'CrowdStrike';
+  const consoleLabel = isS1 ? 'Open in SentinelOne console' : 'Open in Falcon console';
   const [alerts, setAlerts] = useState<CrowdStrikeAlertItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -101,7 +111,7 @@ export default function CrowdStrikeAlertDetailsDrawer({
   // Resolve the Falcon console base from the configured region once per open
   // (also warms the module-wide cache for the executions panel).
   useEffect(() => {
-    if (!open) return;
+    if (!open || isS1) return;
     let cancelled = false;
     resolveFalconConsoleBase().then((base) => {
       if (!cancelled) setConsoleBase(base);
@@ -109,7 +119,7 @@ export default function CrowdStrikeAlertDetailsDrawer({
     return () => {
       cancelled = true;
     };
-  }, [open]);
+  }, [open, isS1]);
 
   // Normalize to a single source-of-truth array. `techniques` takes precedence
   // when provided; otherwise wrap the legacy single-technique prop.
@@ -127,7 +137,7 @@ export default function CrowdStrikeAlertDetailsDrawer({
     let cancelled = false;
     setLoading(true);
     setError(null);
-    crowdstrikeApi
+    (isS1 ? sentineloneAnalyticsApi : crowdstrikeApi)
       .getAlerts({
         pageSize: PAGE_SIZE,
         sortField: 'created_at',
@@ -151,13 +161,13 @@ export default function CrowdStrikeAlertDetailsDrawer({
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, techniquesKey, window?.from, window?.to]);
+  }, [open, techniquesKey, window?.from, window?.to, isS1]);
 
   if (!open) return null;
 
   const defaultHeader =
     !effectiveTechniques
-      ? 'Recent CrowdStrike Alerts'
+      ? `Recent ${vendorName} Alerts`
       : effectiveTechniques.length === 1
       ? `Alerts for ${effectiveTechniques[0]}`
       : `Alerts for ${effectiveTechniques.join(', ')}`;
@@ -242,16 +252,18 @@ export default function CrowdStrikeAlertDetailsDrawer({
                           <div className="text-sm font-medium leading-tight break-words">
                             {alert.alert_title}
                           </div>
-                          <a
-                            href={falconAlertUrl(alert.portal_url, consoleBase)}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="shrink-0 p-1 -m-1 rounded hover:bg-raised text-muted-foreground hover:text-foreground transition-colors"
-                            aria-label="Open in Falcon console"
-                            title="Open in Falcon console"
-                          >
-                            <ExternalLink className="w-3.5 h-3.5" />
-                          </a>
+                          {(!isS1 || alert.portal_url) && (
+                            <a
+                              href={isS1 ? alert.portal_url : falconAlertUrl(alert.portal_url, consoleBase)}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="shrink-0 p-1 -m-1 rounded hover:bg-raised text-muted-foreground hover:text-foreground transition-colors"
+                              aria-label={consoleLabel}
+                              title={consoleLabel}
+                            >
+                              <ExternalLink className="w-3.5 h-3.5" />
+                            </a>
+                          )}
                         </div>
                         <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
                           <span className={`uppercase font-semibold ${tokens.text}`}>

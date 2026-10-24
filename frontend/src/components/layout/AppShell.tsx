@@ -3,6 +3,7 @@ import { Link, useLocation } from 'react-router-dom';
 import { useClerk } from '@clerk/clerk-react';
 import {
   BarChart3,
+  ClipboardList,
   Keyboard,
   LayoutDashboard,
   ListChecks,
@@ -16,9 +17,11 @@ import {
 import { CONSOLE_CAPTION, TAGLINE, splitWordmark } from '@/lib/brand';
 import { useAnalyticsAuth } from '@/hooks/useAnalyticsAuth';
 import { useCanAccessModule, useHasPermission } from '@/hooks/useAppRole';
+import { useCapabilities } from '@/hooks/useCapabilities';
 import { useOutdatedAgentCount } from '@/hooks/useOutdatedAgentCount';
 import { useAppHotkeys } from '@/hooks/useAppHotkeys';
 import { GlobalSearch } from '@/components/layout/GlobalSearch';
+import { NoticeDeliveryBanner } from '@/components/layout/NoticeDeliveryBanner';
 import { NotificationBell } from '@/components/layout/NotificationBell';
 import { ShortcutsDialog } from '@/components/layout/ShortcutsDialog';
 import { Button } from '@/components/ui/button';
@@ -156,6 +159,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   const canAccessSettings = useCanAccessModule('settings');
   const canSeeAgents = useHasPermission('endpoints:agents:read');
   const { outdatedCount } = useOutdatedAgentCount();
+  const capabilities = useCapabilities();
 
   const items = useMemo<NavItem[]>(() => {
     const nav: NavItem[] = [
@@ -169,11 +173,14 @@ export function AppShell({ children }: { children: ReactNode }) {
     if (canAccessEndpoints) {
       nav.push({ label: 'Tasks', to: '/tasks', icon: ListChecks });
     }
+    if (canAccessEndpoints && capabilities.campaigns) {
+      nav.push({ label: 'Campaigns', to: '/campaigns', icon: ClipboardList });
+    }
     if (canAccessSettings) {
       nav.push({ label: 'Settings', to: '/settings', icon: Settings });
     }
     return nav;
-  }, [analyticsConfigured, canAccessEndpoints, canSeeAgents, canAccessSettings, outdatedCount]);
+  }, [analyticsConfigured, canAccessEndpoints, canSeeAgents, canAccessSettings, outdatedCount, capabilities.campaigns]);
 
   const routes = useMemo(() => items.map((i) => i.to), [items]);
 
@@ -193,12 +200,12 @@ export function AppShell({ children }: { children: ReactNode }) {
   return (
     <div className="min-h-screen bg-background">
       {/* Fixed sidebar ≥lg */}
-      <aside className="fixed inset-y-0 left-0 z-40 hidden w-60 border-r border-border bg-surface lg:block">
+      <aside className="fixed inset-y-0 left-0 z-40 print:hidden hidden w-60 border-r border-border bg-surface lg:block">
         <SidebarBody {...sidebarProps} />
       </aside>
 
       {/* Mobile top strip <lg */}
-      <header className="flex items-center gap-3 border-b border-border bg-surface px-4 py-3 lg:hidden">
+      <header className="flex items-center gap-3 print:hidden border-b border-border bg-surface px-4 py-3 lg:hidden">
         <Sheet open={mobileOpen} onOpenChange={setMobileOpen}>
           <SheetTrigger asChild>
             <Button variant="ghost" size="icon-sm" aria-label="Open navigation">
@@ -213,8 +220,10 @@ export function AppShell({ children }: { children: ReactNode }) {
         <Wordmark />
       </header>
 
+      <NoticeDeliveryBanner />
+
       {/* Main */}
-      <main className="lg:pl-60">
+      <main className="lg:pl-60 print:pl-0">
         <div className="mx-auto max-w-7xl px-4 py-5 sm:px-6 sm:py-6">{children}</div>
       </main>
 

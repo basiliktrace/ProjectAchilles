@@ -104,6 +104,10 @@ export interface AlertThresholds {
   defense_score_min?: number;    // Alert if Defense Score < this (e.g., 70)
   error_rate_max?: number;       // Alert if Error Rate > this (e.g., 20)
   secure_score_min?: number;     // Alert if Secure Score < this (e.g., 60)
+  // SentinelOne agent health — alert if the latest /agents/count snapshot exceeds these.
+  s1_infected_agents_max?: number;
+  s1_detect_only_agents_max?: number;
+  s1_outdated_agents_max?: number;
   enabled: boolean;
 }
 
@@ -149,6 +153,7 @@ export interface OrgIntegrationSettings {
   defender?: DefenderIntegrationSettings;
   crowdstrike?: CrowdStrikeIntegrationSettings;
   alerts?: AlertSettings;
+  pre_execution_notices?: PreExecutionNoticeSettings;
 }
 
 /**
@@ -156,11 +161,31 @@ export interface OrgIntegrationSettings {
  * Legacy keys are kept for backward compat — they act as the fallback when no
  * org-specific settings exist.
  */
+/**
+ * Pre-execution notice settings. Per org (`orgs[orgId].pre_execution_notices`)
+ * with the legacy top level as the fallback, like alerts (Ruling R20).
+ */
+export interface PreExecutionNoticeSettings {
+  enabled: boolean;
+  recipients: string[];
+  /** Minutes between notice acceptance and task release (int 0-5). */
+  lead_minutes: number;
+  /** Max minutes a task is held waiting for delivery (15-1440). */
+  max_wait_minutes: number;
+  /** Minutes after release that hosts have to pick up tasks (30-1440). */
+  pickup_window_minutes: number;
+  send_finished: boolean;
+  last_smtp_check_at?: string;
+  last_smtp_check_ok?: boolean;
+  last_smtp_check_message?: string;
+}
+
 export interface IntegrationsSettings {
   azure?: AzureIntegrationSettings;
   defender?: DefenderIntegrationSettings;
   crowdstrike?: CrowdStrikeIntegrationSettings;
   alerts?: AlertSettings;
+  pre_execution_notices?: PreExecutionNoticeSettings;
   /** Per-org overrides. Key is the Clerk org_id. */
   orgs?: Record<string, OrgIntegrationSettings>;
 }
