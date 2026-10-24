@@ -7,6 +7,10 @@ vi.mock('../../agent/database.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../agent/database.js')>()),
   getDatabase: () => testDb,
 }));
+vi.mock('../edr.js', () => ({ fetchEdrDocs: async () => ({ status: 'not_configured', docs: new Map() }) }));
+vi.mock('../../integrations/settings.js', () => ({
+  IntegrationsSettingsService: class { isDefenderConfigured() { return false; } isCrowdStrikeConfigured() { return false; } },
+}));
 vi.mock('../../agent/test-catalog.service.js', () => ({
   getTestMetadata: (uuid: string) => (uuid.startsWith('bad-') ? null : { uuid, name: `Test ${uuid}` }),
 }));
@@ -112,13 +116,13 @@ describe('campaigns.service', () => {
     expectErr(() => svc.getCampaign(c.id, 'org-1'), 404, 'Campaign not found');
   });
 
-  it('lists filtered by org with last_run', () => {
+  it('lists filtered by org with last_run', async () => {
     const c1 = svc.createCampaign(base(), 'org-1', 'u');
     svc.createCampaign(base({ agent_ids: ['b1'] }), 'org-2', 'u');
-    expect(svc.listCampaigns('org-1').map((c) => c.id)).toEqual([c1.id]);
-    expect(svc.listCampaigns(undefined)).toHaveLength(2);
-    expect(svc.listCampaigns('org-1')[0].last_run).toBeNull();
+    expect((await svc.listCampaigns('org-1')).map((c) => c.id)).toEqual([c1.id]);
+    expect((await svc.listCampaigns(undefined))).toHaveLength(2);
+    expect((await svc.listCampaigns('org-1'))[0].last_run).toBeNull();
     testDb.prepare(`INSERT INTO campaign_runs (id, campaign_id, org_id, started_by, started_at, notice_id, snapshot, task_count) VALUES ('r1', ?, 'org-1', 'u', '2026-01-01T00:00:00.000Z', NULL, '{"campaign_name":"C","framework_label":null,"tests":[],"agents":[],"skipped":[]}', 1), ('r2', ?, 'org-1', 'u', '2026-02-01T00:00:00.000Z', NULL, '{"campaign_name":"C","framework_label":null,"tests":[],"agents":[],"skipped":[]}', 1)`).run(c1.id, c1.id);
-    expect(svc.listCampaigns('org-1')[0].last_run).toEqual({ id: 'r2', started_at: '2026-02-01T00:00:00.000Z', percent_protected: null });
+    expect((await svc.listCampaigns('org-1'))[0].last_run).toEqual({ id: 'r2', started_at: '2026-02-01T00:00:00.000Z', percent_protected: null });
   });
 });

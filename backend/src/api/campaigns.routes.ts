@@ -20,6 +20,7 @@ import {
 import { preflightCampaign } from '../services/campaigns/preflight.js';
 import { launchRun, PartialRunError } from '../services/campaigns/runs.service.js';
 import { getRunMatrix, listRuns, listAllRuns, runMatrixCsv } from '../services/campaigns/matrix.js';
+import { resolveUserLabel } from '../services/notices/userLabel.js';
 import {
   CreateCampaignSchema,
   UpdateCampaignSchema,
@@ -69,21 +70,21 @@ const READ = 'endpoints:tasks:read';
 const WRITE = 'endpoints:tasks:create';
 
 router.get('/', requirePermission(READ), asyncHandler(async (req, res) => {
-  res.json({ success: true, data: listCampaigns(callerOrg(req)) });
+  res.json({ success: true, data: await listCampaigns(callerOrg(req)) });
 }));
 
 // Run routes first: `/runs/:runId` must not be captured by `/:id`.
 router.get('/runs', requirePermission(READ), asyncHandler(async (req, res) => {
   const { limit, offset } = pageParams(req);
-  res.json({ success: true, data: listAllRuns(callerOrg(req), limit, offset) });
+  res.json({ success: true, data: await listAllRuns(callerOrg(req), limit, offset) });
 }));
 
 router.get('/runs/:runId', requirePermission(READ), asyncHandler(async (req, res) => {
-  res.json({ success: true, data: getRunMatrix(req.params.runId, callerOrg(req)) });
+  res.json({ success: true, data: await getRunMatrix(req.params.runId, callerOrg(req)) });
 }));
 
 router.get('/runs/:runId/export.csv', requirePermission(READ), asyncHandler(async (req, res) => {
-  const matrix = getRunMatrix(req.params.runId, callerOrg(req));
+  const matrix = await getRunMatrix(req.params.runId, callerOrg(req));
   // "As of" is the evidence snapshot time (spec 6.5.4): compact form for the filename.
   const compact = matrix.as_of.replace(/[-:]/g, '').replace(/\.\d+Z$/, 'Z').replace(/^(\d{8}T\d{4})\d{2}Z$/, '$1Z');
   res.setHeader('Content-Type', 'text/csv; charset=utf-8');
@@ -123,7 +124,7 @@ router.get('/:id/runs', requirePermission(READ), asyncHandler(async (req, res) =
   const org = callerOrg(req);
   getCampaign(req.params.id, org); // 404 for unknown / cross-org, not an empty list
   const { limit, offset } = pageParams(req);
-  res.json({ success: true, data: listRuns(req.params.id, org, limit, offset) });
+  res.json({ success: true, data: await listRuns(req.params.id, org, limit, offset) });
 }));
 
 router.post('/:id/runs', requirePermission(WRITE), validate(RunCampaignSchema), asyncHandler(async (req, res) => {
@@ -136,7 +137,8 @@ router.post('/:id/runs', requirePermission(WRITE), validate(RunCampaignSchema), 
       callerOrg: org,
       orgId: org_id,
       userId,
-      userDisplay: getUserDisplayName(req.auth) ?? userId,
+      // Session claims rarely carry a name; fall back to a Clerk directory lookup.
+      userDisplay: getUserDisplayName(req.auth) ?? await resolveUserLabel(userId),
       confirmPartial: confirm_partial === true,
     });
     res.status(201).json({ success: true, data });

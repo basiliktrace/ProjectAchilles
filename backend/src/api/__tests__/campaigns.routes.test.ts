@@ -10,6 +10,8 @@ vi.mock('../../services/agent/database.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../services/agent/database.js')>()),
   getDatabase: () => testDb,
 }));
+vi.mock('../../services/campaigns/edr.js', () => ({ fetchEdrDocs: async () => ({ status: 'not_configured', docs: new Map() }) }));
+vi.mock('../../services/notices/userLabel.js', () => ({ resolveUserLabel: async (id: string) => id }));
 vi.mock('../../services/agent/test-catalog.service.js', () => ({
   getTestMetadata: (uuid: string) => ({ uuid, name: `Test ${uuid}`, techniques: [] }),
 }));
@@ -307,8 +309,8 @@ describe('run matrix and CSV', () => {
     expect(new Date(asOf).toISOString()).toBe(asOf);
     const compact = asOf.replace(/[-:]/g, '').replace(/\.\d+Z$/, 'Z').replace(/^(\d{8}T\d{4})\d{2}Z$/, '$1Z');
     expect(csv.headers['content-disposition']).toBe(`attachment; filename="campaign-run-run-1-${compact}.csv"`);
-    expect(csv.text.split('\r\n')[0]).toBe('test,techniques,host,os,outcome,exit_code,reason,completed_at,as_of');
-    expect(csv.text.split('\r\n')[1]).toBe(`Test t1,,h1,windows,na,,not built,,${asOf}`);
+    expect(csv.text.split('\r\n')[0]).toBe('test,techniques,host,os,outcome,exit_code,reason,completed_at,as_of,stages,edr');
+    expect(csv.text.split("\r\n")[1]).toBe(`Test t1,,h1,windows,na,,not built,,${asOf},,`);
   });
 });
 

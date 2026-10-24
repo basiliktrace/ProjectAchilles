@@ -32,6 +32,8 @@ export type CellState =
   | 'waiting_for_notice'
   | 'running'
   | 'protected'
+  | 'prevented'
+  | 'detected'
   | 'unprotected'
   | 'error'
   | 'not_run'
