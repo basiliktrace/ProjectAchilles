@@ -125,6 +125,18 @@ export function buildNoticeEmail(d: NoticeEmailData): { subject: string; html: s
       ? `<div style="font-size:12px;color:#52525b;margin-top:6px;">and ${d.hosts.length - MAX_INLINE_HOSTS} more (see attached CSV)</div>`
       : '';
 
+  // What a SOC analyst can actually search for: the run tag never reaches the
+  // hosts, but every test binary is named after its test UUID and runs from
+  // the agent's task folder (agent config work_dir, these are the defaults).
+  const example = d.tests.find((t) => t.uuid)?.uuid;
+  const p = 'font-size:13px;color:#18181b;margin:0 0 6px;';
+  const finding = section(
+    'Finding this activity in your security tools',
+    `<p style="${p}">On the hosts above, between ${escapeHtml(formatDual(d.startNotBefore, d.timezone))} and ${escapeHtml(formatDual(d.windowEnd, d.timezone))}, the tests run from <code>C:\\F0\\tasks</code> (Windows) or <code>/opt/f0/tasks</code> (Linux, macOS). ` +
+      `Their files and processes are named after the test UUIDs listed above${example ? `, for example <code>${escapeHtml(example)}.exe</code>, or <code>${escapeHtml(example)}-T1105.exe</code> for a stage` : ''}.</p>` +
+      `<p style="${p}color:#52525b;">${escapeHtml(d.runTag)} identifies this run in ProjectAchilles only; it does not appear on the hosts.</p>`,
+  );
+
   const edr = d.edr.length
     ? section(
         'Security tooling',
@@ -137,6 +149,7 @@ export function buildNoticeEmail(d: NoticeEmailData): { subject: string; html: s
     `<tr><td style="padding:0 24px;"><table width="100%" cellpadding="0" cellspacing="0">${when.join('')}</table></td></tr>`,
     section(`Tests (${d.tests.length})`, `<table width="100%" cellpadding="0" cellspacing="0">${headerRow([['Test'], ['Stages', 'center'], ['Techniques & tactics']])}${testRows}</table>`),
     section(`Hosts (${d.hosts.length})`, `<table width="100%" cellpadding="0" cellspacing="0">${headerRow([['Host'], ['OS'], ['Status']])}${hostRows}</table>${more}`),
+    finding,
     edr,
     `<tr><td style="padding:12px 24px 20px;"><a href="${escapeHtml(d.uiUrl)}" style="color:#2563eb;font-size:13px;">Open ProjectAchilles</a></td></tr>`,
   ].join('\n');

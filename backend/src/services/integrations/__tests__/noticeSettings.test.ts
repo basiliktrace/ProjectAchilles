@@ -55,6 +55,31 @@ describe('pre-execution notice settings', () => {
     });
   });
 
+  it('stays enabled when an unrelated secret in the file cannot be decrypted (fails closed)', () => {
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    store = JSON.stringify({
+      alerts: { email: { smtp_host: 'h', smtp_user: 'enc:not-decryptable', smtp_pass: 'enc:not-decryptable', from_address: 'a@x.io' } },
+      pre_execution_notices: { enabled: true, recipients: ['soc@x.io'] },
+    });
+    const s = new IntegrationsSettingsService().getPreExecutionNoticeSettings();
+    expect(s.enabled).toBe(true);
+    expect(s.recipients).toEqual(['soc@x.io']);
+    errSpy.mockRestore();
+  });
+
+  it('keeps the last good notice settings for that org when the file becomes unreadable', () => {
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    store = JSON.stringify({ orgs: { 'org-k': { pre_execution_notices: { enabled: true, recipients: ['k@x.io'] } } } });
+    expect(new IntegrationsSettingsService('org-k').getPreExecutionNoticeSettings().enabled).toBe(true);
+    store = '{ this is not json';
+    const s = new IntegrationsSettingsService('org-k').getPreExecutionNoticeSettings();
+    expect(s).toMatchObject({ enabled: true, recipients: ['k@x.io'] });
+    // An org never read successfully has nothing to fall back on: defaults (off).
+    expect(new IntegrationsSettingsService('org-never-read').getPreExecutionNoticeSettings().enabled).toBe(false);
+    expect(errSpy).toHaveBeenCalled();
+    errSpy.mockRestore();
+  });
+
   it('returns defaults when there is no file at all', () => {
     expect(new IntegrationsSettingsService().getPreExecutionNoticeSettings().lead_minutes).toBe(5);
   });

@@ -66,7 +66,7 @@ Settings and status for [pre-execution notices](../user-guide/integrations/pre-e
 | `PUT` | `/api/notices/settings` | `integrations:write` | Update settings. Returns 400 if you enable without SMTP configured or without a recipient |
 | `POST` | `/api/notices/settings/test` | `integrations:write` | Send a sample notice to the recipients |
 | `GET` | `/api/notices/status` | `endpoints:tasks:read` | Banner data: overdue pending notices, not-delivered count (7 days), last SMTP check |
-| `GET` | `/api/notices?limit=&offset=` | `endpoints:tasks:read` | List notices, newest first (`limit` 1 to 100, default 25; `offset` 0 or more, default 0) |
+| `GET` | `/api/notices?state=&limit=&offset=` | `endpoints:tasks:read` | List notices, newest first (`limit` 1 to 100, default 25; `offset` 0 or more, default 0). Optional `state` (`pending`, `sent`, `not_delivered`, `overridden`, `skipped`; anything else is 400). Each item adds `run_tag` and `held_tasks` (its pending tasks) |
 | `POST` | `/api/notices/:id/release` | `endpoints:tasks:create` | Release a pending notice without delivery. Body: `{ "reason": "..." }` (required). Returns 400 if the notice is no longer pending |
 
 **Settings body (`PUT /api/notices/settings`):** all fields are optional.

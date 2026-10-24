@@ -26,11 +26,18 @@ import { resolveUserLabel } from './userLabel.js';
 import { getTestMetadata } from '../agent/test-catalog.service.js';
 import { fetchEdrDocs } from '../outcomes/edr.js';
 import { cellVerdict, controlsOf, resultDocIds } from '../outcomes/verdict.js';
-import type { NoticeRow, NoticeScope, NoticeSourceType } from './types.js';
+import type { NoticeRow, NoticeScope, NoticeSourceType, NoticeState } from './types.js';
 import type { TaskPayload, TaskResult, TaskStatus } from '../../types/agent.js';
 import type { PreExecutionNoticeSettings } from '../../types/integrations.js';
 
-export { listNotices, getNoticeSummaries } from './notices.repo.js';
+export { getNoticeSummaries } from './notices.repo.js';
+
+/** Notices newest first, optionally one state, each with its run tag and held-task count. */
+export function listNotices(limit: number, offset: number, scope: NoticeScope, state?: NoticeState) {
+  const rows = repo.listNotices(limit, offset, scope, state);
+  const held = repo.countHeldTasks(rows.map((r) => r.id));
+  return rows.map((r) => ({ ...r, run_tag: runTag(r.id), held_tasks: held.get(r.id) ?? 0 }));
+}
 export type { NoticeScope } from './types.js';
 
 const MIN = 60_000;
@@ -537,7 +544,7 @@ function buildNoticeMail(
     start: release.releaseAt,
     end: release.windowEnd,
     summary: `ProjectAchilles security testing ${tag}`,
-    description: `${trigger}. ${data.tests.length} test(s) on ${hostList.length} host(s). Search for ${tag} in your security tooling.`,
+    description: `${trigger}. ${data.tests.length} test(s) on ${hostList.length} host(s). In your security tools, look for files and processes named after the test UUID under C:\\F0\\tasks or /opt/f0/tasks on those hosts (${tag} itself does not appear on the hosts).`,
     stamp: now,
   });
   const attachments: NonNullable<OutgoingMail['attachments']> = [
@@ -869,7 +876,7 @@ async function sendFinished(n: NoticeRow, now: Date): Promise<boolean> {
     start: icsStart,
     end: new Date(Math.max(icsStart.getTime(), finishedAt.getTime())),
     summary: `ProjectAchilles security testing ${tag}`,
-    description: `Finished. Protected ${counts.protected}, prevented ${counts.prevented}, detected ${counts.detected}, unprotected ${counts.unprotected}, error ${counts.error}, not run ${counts.notRun}. Search for ${tag} in your security tooling.`,
+    description: `Finished. Protected ${counts.protected}, prevented ${counts.prevented}, detected ${counts.detected}, unprotected ${counts.unprotected}, error ${counts.error}, not run ${counts.notRun}. Reference ${tag}.`,
     stamp: now,
   });
 

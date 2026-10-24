@@ -270,6 +270,28 @@ describe('GET /api/notices/status and list', () => {
     const paged = await request(app()).get('/api/notices?limit=10&offset=115');
     expect(paged.body.data).toHaveLength(5);
   });
+
+  it('?state=pending lists only pending notices, with run_tag and the number of held tasks', async () => {
+    insertTestAgent(testDb, { id: 'agent-h' });
+    testDb.prepare(`
+      INSERT INTO run_notices (id, kind, state, source_type, timezone, created_by, created_at, recipients)
+      VALUES ('4f40a524-aaaa', 'run', 'pending', 'run_now', 'UTC', 'u1', '2026-10-23T10:00:00.000Z', '[]'),
+             ('sent-1', 'run', 'sent', 'run_now', 'UTC', 'u1', '2026-10-23T11:00:00.000Z', '[]')
+    `).run();
+    insertTestTask(testDb, { id: 'h1', agent_id: 'agent-h', status: 'pending' });
+    insertTestTask(testDb, { id: 'h2', agent_id: 'agent-h', status: 'pending' });
+    insertTestTask(testDb, { id: 'h3', agent_id: 'agent-h', status: 'expired' });
+    testDb.prepare(`UPDATE tasks SET notice_id = '4f40a524-aaaa' WHERE id IN ('h1','h2','h3')`).run();
+
+    const res = await request(app()).get('/api/notices?state=pending');
+    expect(res.status).toBe(200);
+    expect(res.body.data).toHaveLength(1);
+    expect(res.body.data[0]).toMatchObject({ id: '4f40a524-aaaa', state: 'pending', run_tag: 'PA-RUN-4f40a5', held_tasks: 2 });
+
+    const all = await request(app()).get('/api/notices');
+    expect(all.body.data).toHaveLength(2);
+    expect((await request(app()).get('/api/notices?state=bogus')).status).toBe(400);
+  });
 });
 
 describe('POST /api/notices/:id/release', () => {

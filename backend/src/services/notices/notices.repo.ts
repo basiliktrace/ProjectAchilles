@@ -564,11 +564,23 @@ export function countNotDeliveredSince(sinceIso: string, scope: NoticeScope): nu
 }
 
 /** Notices in `scope`, newest first. */
-export function listNotices(limit: number, offset: number, scope: NoticeScope): NoticeRow[] {
+export function listNotices(limit: number, offset: number, scope: NoticeScope, state?: NoticeState): NoticeRow[] {
   const f = scopeFilter(scope);
+  const byState = state ? ' AND state = ?' : '';
   return getDatabase()
-    .prepare(`SELECT * FROM run_notices WHERE 1 = 1${f.sql} ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?`)
-    .all(...f.params, limit, offset) as NoticeRow[];
+    .prepare(`SELECT * FROM run_notices WHERE 1 = 1${f.sql}${byState} ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?`)
+    .all(...f.params, ...(state ? [state] : []), limit, offset) as NoticeRow[];
+}
+
+/** Pending (held) tasks per notice id. */
+export function countHeldTasks(noticeIds: string[]): Map<string, number> {
+  const out = new Map<string, number>();
+  if (noticeIds.length === 0) return out;
+  const rows = getDatabase()
+    .prepare(`SELECT notice_id, COUNT(*) AS n FROM tasks WHERE status = 'pending' AND notice_id IN (${noticeIds.map(() => '?').join(', ')}) GROUP BY notice_id`)
+    .all(...noticeIds) as Array<{ notice_id: string; n: number }>;
+  for (const r of rows) out.set(r.notice_id, r.n);
+  return out;
 }
 
 const SUMMARY_CHUNK = 500;

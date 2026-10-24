@@ -7,6 +7,7 @@ vi.mock('@/services/api/notices', () => ({
     getSettings: vi.fn(),
     saveSettings: vi.fn(),
     sendTest: vi.fn(),
+    listPending: vi.fn().mockResolvedValue([]),
   },
 }));
 
