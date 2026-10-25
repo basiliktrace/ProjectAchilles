@@ -203,12 +203,14 @@ export class CrowdStrikeAnalyticsService {
                       minimum_should_match: 1,
                     },
                   },
+                  // Keeps the buckets disjoint: a receipt-carrying alert counts only as detected_only.
+                  kill_failed: { bool: { filter: [{ term: { prevention_action: 'kill_failed' } }], must_not: [ACHILLES_MITIGATED] } },
                 }
                 : {
                   prevented: { terms: { prevention_action: PREVENTED_ACTIONS } },
                   detected_only: { bool: { must_not: [{ exists: { field: 'prevention_action' } }] } },
+                  kill_failed: { term: { prevention_action: 'kill_failed' } },
                 }),
-              kill_failed: { term: { prevention_action: 'kill_failed' } },
             },
           },
         },
