@@ -1,20 +1,25 @@
 ---
 sidebar_position: 5.5
-title: On-Prem LAN (Windows fleet)
-description: Install ProjectAchilles on a LAN server with the achilles-installer wizard, a managed name-constrained CA, and GPO trust for a mostly-Windows agent fleet.
+title: Server Installer (On-Prem or Cloud)
+description: Install ProjectAchilles on one Linux server with the achilles-installer wizard, on your LAN (managed CA, GPO trust for a Windows fleet) or on a cloud server with a public IP (Let's Encrypt).
 ---
 
-# On-Prem LAN Deployment
+# Server Installer: On-Prem LAN or Cloud
 
-Install ProjectAchilles on a Linux server **on your LAN** with the
-`achilles-installer` wizard. The setup this page targets:
+Install ProjectAchilles on one Linux server with the `achilles-installer`
+wizard, in either of two setups. The wizard detects which one it is on from the
+server's IP address and adapts its questions and defaults.
 
-- a server with an **internal DNS name** (e.g. `achilles.corp.example.com`),
-  **outbound internet**, and **no public IP**;
-- HTTPS certificates from a **ProjectAchilles CA** that the installer creates and
-  manages, limited to your DNS zone;
-- a fleet of agents, **mostly Windows**, that trust that CA through **GPO** (or
-  Intune) and enroll with a fingerprint-pinned bootstrap script.
+| | **On-prem LAN** | **Cloud server** |
+|---|---|---|
+| Server | An **internal DNS name** (e.g. `achilles.corp.example.com`), outbound internet, **no public IP** | A **public IPv4** on its own interface (DigitalOcean, Hetzner and similar) and a public DNS A record |
+| HTTPS certificates | A **ProjectAchilles CA** that the installer creates and manages, limited to your DNS zone (or your Enterprise CA, or your own files) | **Let's Encrypt** HTTP-01 (default) or DNS-01, renewed automatically |
+| Agents | Mostly **Windows**; they trust the CA through **GPO** (or Intune) and enroll with a fingerprint-pinned bootstrap script | Any OS, anywhere on the internet; the standard enroll command, no extra trust setup |
+| Read | This page from the top | [Cloud servers](#cloud-servers-digitalocean-hetzner) first, then Before you start, Install and Day-2 |
+
+Both setups get the same platform, the same day-2 commands and the same Clerk
+sign-in, including the first admin the installer invites for you
+([The first admin and roles](#the-first-admin-and-roles)).
 
 It shares its engine (`scripts/deploy-server.sh`, `docker-compose.server.yml`,
 Caddy) with the other server installs. For SSH-driven installs, Let's Encrypt
@@ -87,7 +92,7 @@ flowchart LR
 
 | Item | Who | Why |
 |------|-----|-----|
-| **Linux server** | IT | Ubuntu 22.04 or 24.04 (Debian 12 and RHEL-family 9 are best-effort). At least 2 GiB RAM, **4 GiB for self-hosted Elasticsearch**; **20 GiB free disk** for a fresh install; root or sudo; ports 80 and 443 free; NTP-synchronised clock. |
+| **Linux server** | IT | Ubuntu 22.04, 24.04 or 26.04 (Debian 12 and RHEL-family 9 are best-effort). At least 2 GiB RAM, **4 GiB for self-hosted Elasticsearch**; **20 GiB free disk** for a fresh install; root or sudo; ports 80 and 443 free; NTP-synchronised clock. |
 | **Static IP** (or DHCP reservation) | Network | Caddy binds to this one address (`10.0.5.20`). A new IP needs a re-run of the installer. |
 | **DNS record** in internal DNS | DNS / AD | `achilles.corp.example.com A 10.0.5.20`. The installer prints the exact record and the AD DNS PowerShell line. |
 | **Network firewalls** | Network | Endpoints and browsers must reach **TCP 80, TCP 443 and UDP 443** on the server. Port 80 carries the root download and the HTTPS redirect. |
@@ -122,7 +127,7 @@ exclusion for exactly `C:\F0\achilles-agent.exe` before rollout. See
 
 The installer classifies the hostname as you type it on the **Network & name**
 screen. The class decides which Clerk keys it accepts and whether Let's Encrypt
-DNS-01 is offered.
+(DNS-01 or HTTP-01) is offered.
 
 | | **Under a public domain you own** | **Private-only name** |
 |---|---|---|
@@ -131,7 +136,7 @@ DNS-01 is offered.
 | Clerk keys | **Production** (`pk_live_` + `sk_live_`) expected. Development keys (`pk_test_`) work with a warning (a "Development mode" banner, lower limits). | **Development keys only** (`pk_test_` + `sk_test_`). A `pk_live_` key is an error. |
 | Clerk app domain | The key's Frontend API host must be `clerk.<D>`, where D is the hostname or one of its parents **down to and including the registrable domain**. For `achilles.corp.example.com`: `clerk.achilles.corp.example.com`, `clerk.corp.example.com` or `clerk.example.com`. | n/a (development instances use a `*.clerk.accounts.dev` host) |
 | DNS records | Add the records Clerk's dashboard lists to the **public** zone; sign-in fails until Clerk shows them verified. The server's own A record stays **internal-only**. | Only the internal A record. |
-| Certificates | ProjectAchilles CA (default), Enterprise CA, your own files, **or Let's Encrypt DNS-01** | ProjectAchilles CA (default), Enterprise CA or your own files. DNS-01 is not offered. |
+| Certificates | ProjectAchilles CA (default on a LAN IP), Enterprise CA, your own files, **or Let's Encrypt (DNS-01, or HTTP-01 with inbound port 80)** | ProjectAchilles CA (default), Enterprise CA or your own files. Let's Encrypt is not offered. |
 
 The publishable and secret keys must come from the same Clerk instance, and the
 installer checks that the Frontend API host is reachable from the server.
@@ -146,6 +151,53 @@ It is reserved for multicast DNS: macOS and many Linux clients resolve `.local`
 names over mDNS instead of your DNS server, which breaks browsers and agents. The
 installer warns about it. Prefer a name under a domain you own, or `.lan` /
 `.internal`.
+:::
+
+### The first admin and roles
+
+Every person signs in through Clerk. What they may do comes from a **role** in
+their Clerk user's **public metadata**, for example `{"role": "admin"}`. The
+roles are `admin`, `operator`, `analyst` and `explorer`; a signed-in user with
+no role gets read-only (`explorer`) access. So a new install needs at least one
+admin.
+
+**The installer creates it.** The Login screen asks for the **first admin
+email** (`ADMIN_EMAIL`). Once the stack is up, the installer uses the Clerk
+secret key to either:
+
+- **invite** the address: Clerk emails a link to `https://<hostname>/sign-up`,
+  and the account created from it has the admin role; or
+- **promote** an account that already exists in this Clerk app, by adding
+  `"role": "admin"` to its public metadata (other keys, such as `org_id`, stay).
+
+It leaves an existing admin or a pending admin invitation alone, so running the
+installer again doesn't send another email. The Done screen (or, unattended, the
+terminal) says which of these happened.
+
+**By hand**, when you left the field blank or the Clerk call failed: sign up at
+`https://<hostname>/sign-up`, then in the Clerk dashboard open **Users →** the
+user **→ Metadata** and set **Public** to:
+
+```json
+{ "role": "admin" }
+```
+
+**More people:** an admin invites them, with a role, from **Settings → Users**
+in the web UI.
+
+:::tip Session token claim (recommended)
+In the Clerk dashboard, open **Configure → Sessions → Customize session token**
+and set the claims to:
+
+```json
+{ "metadata": "{{user.public_metadata}}" }
+```
+
+This puts the role into every session token. Without it, the server looks each
+user's role up in Clerk instead (cached for a minute per user), so permissions
+still work; the claim saves those lookups. Clerk has no API for this setting, so
+the installer can't set it. Older releases required it: without it, every admin
+action failed with "Insufficient permissions".
 :::
 
 ## Install
@@ -209,7 +261,7 @@ secrets are kept).
 | Check | Fails when | Warns when |
 |-------|-----------|-----------|
 | Running as root | not root | |
-| Supported operating system | not Ubuntu 22.04/24.04, Debian 12 or RHEL-family 9 | Debian 12 or RHEL-family 9 |
+| Supported operating system | not Ubuntu 22.04/24.04/26.04, Debian 12 or RHEL-family 9 | Debian 12 or RHEL-family 9 |
 | Memory | < 2 GiB | < 4 GiB (self-hosted Elasticsearch is then disabled) |
 | Free disk space | < 20 GiB fresh; < 5 GiB existing | < 20 GiB existing |
 | Port 80 / 443 available | in use (our own Caddy is accepted on an existing install) | |
@@ -233,6 +285,13 @@ continue** (helps only the server itself; endpoints still need the DNS record),
 or **Continue without a record for now**. Finally set the **LAN subnets allowed to
 reach HTTPS** (`LAN_SUBNETS`), used only if ufw or firewalld is already active.
 
+A public address is marked `public` in the interface list. On it, the DNS check
+asks for the record at your DNS provider (no Active Directory form) and the
+LAN-subnets question is skipped. With a private interface address and a name
+that resolves to public addresses only, the screen explains that this is
+expected behind 1:1 NAT (AWS, Azure, Google Cloud, a DigitalOcean reserved IP):
+choose **Continue without a record for now**.
+
 ![Network & name screen (3/10): listening on 10.0.5.20 (eth0) as achilles.corp.example.com, LAN subnets 10.0.5.0/24](/img/screenshots/onprem-network.png)
 
 **4/10 Certificates.**
@@ -243,6 +302,10 @@ reach HTTPS** (`LAN_SUBNETS`), used only if ufw or firewalld is already active.
 | **Enterprise CA** | `byo` | The installer writes a key and a certificate request (`deploy/caddy/certs/request.csr`); your CA signs it as a serverAuth certificate, then you give the path to the signed PEM chain. |
 | **Bring your own certificate and key files** | `byo` | Paths to a PEM chain (server certificate first) and an unencrypted PEM key, validated and copied to `deploy/caddy/certs/`. |
 | **Let's Encrypt DNS-01** | `acme-dns` | Publicly trusted certificates; needs an email, the Caddy DNS plugin name and a TXT-capable API token. Offered only for names under a public domain. |
+| **Let's Encrypt HTTP-01** | `acme-http` | Publicly trusted certificates; needs an email only. The name must resolve publicly to the server and port 80 must be open to the internet. Offered only for names under a public domain. |
+
+On a LAN address the ProjectAchilles CA comes first and is recommended. On a
+public address the Let's Encrypt options come first, with HTTP-01 recommended.
 
 This page assumes the ProjectAchilles CA. With Enterprise CA or your own files,
 endpoints must already trust your CA and no bootstrap scripts are rendered. For
@@ -252,7 +315,7 @@ the ProjectAchilles CA the screen also asks:
   down to the registrable domain. The zone is fixed into the root and can't be
   widened later without a new root on every endpoint, so pick the narrowest zone
   (`CA_ZONE`).
-- **Also allow the LAN IP in certificates?** (`CA_INCLUDE_IP`) No (default) means
+- **Also allow the IP in certificates?** (`CA_INCLUDE_IP`) No (default) means
   no IP address can be certified; yes permits exactly the LAN IP. Neither makes
   the site reachable by IP.
 - **An existing CA that doesn't match:** **Keep** it, or **Rotate**
@@ -263,6 +326,9 @@ the ProjectAchilles CA the screen also asks:
 **5/10 Login (Clerk).** Paste the publishable and secret keys. The screen decodes
 the publishable key offline, checks it against the rules above, and probes the
 Frontend API host from the server. An error blocks Next; a warning does not.
+The third field, **First admin email**, is the person the installer makes an
+admin after the install ([The first admin and roles](#the-first-admin-and-roles));
+leave it blank if this Clerk app already has an admin.
 
 ![Login (Clerk) screen (5/10) with a pk_test_ publishable key, the secret key masked, and two warnings](/img/screenshots/onprem-login.png)
 
@@ -270,8 +336,13 @@ Frontend API host from the server. An error blocks Next; a warning does not.
 
 **6/10 Analytics.** Self-hosted Elasticsearch on this server (unavailable when the
 memory check did not pass) or Elastic Cloud (Cloud ID plus an API key with read
-and write access to the `achilles-*` indices). Optionally load demo data (about
-1000 synthetic results); leave it off for production.
+and write access to the `achilles-*` indices). With self-hosted Elasticsearch
+it then asks **Load demo data?** (`SEED_ES`, default **No**): about 1000
+synthetic results from the last 30 days, for a trial install. Leave it off for
+production. The data goes into its own index, `achilles-results-synthetic`, and
+is loaded once (running the installer again doesn't add another batch). To
+remove it later:
+`sudo docker exec achilles-server-elasticsearch-1 curl -s -X DELETE 'localhost:9200/achilles-results-synthetic'`.
 
 **7/10 Organisation.** Organisation name (`ORGANIZATION_NAME`, at most 56
 characters, printed on execution reports), test library repository and branch
@@ -294,11 +365,12 @@ stop or failure, **r** re-runs the whole install (every phase is idempotent) and
 
 *Recorded in render-only mode, so Docker, the firewall, the stack and the renewal timer show as skipped; a real install runs them. Exporting Caddy's internal root CA belongs to another TLS mode and stays skipped.*
 
-**10/10 Done.** The hand-over screen: the URL and LAN IP, the root CA files
+**10/10 Done.** The hand-over screen: the URL and IP, the root CA files
 (`/etc/projectachilles/ca/public/root.cer` for GPO and `root.crt`), the root's
 **SHA-256** fingerprint and its **Windows thumbprint** (SHA-1), the bootstrap
 scripts (`/opt/projectachilles/deploy/onprem/bootstrap-windows.ps1` and
-`bootstrap-unix.sh`) and the next steps.
+`bootstrap-unix.sh`) and the next steps, starting with the first admin's
+invitation (or what to do by hand).
 
 ![Done screen (10/10): URL, LAN IP, root CA files, SHA-256 fingerprint, Windows thumbprint and the bootstrap commands](/img/screenshots/onprem-done.png)
 
@@ -312,8 +384,9 @@ again at any time.
 
 ### First sign-in and agent version
 
-1. Open `https://achilles.corp.example.com` from a machine that trusts the root
-   and sign in through Clerk.
+1. Accept the invitation emailed to the first admin, or make the admin by hand
+   ([The first admin and roles](#the-first-admin-and-roles)). Use a machine that
+   trusts the root, then sign in at `https://achilles.corp.example.com`.
 2. Register an agent version under **Settings → Agent** (build or upload); it must
    appear under **Registered Versions**. Until then the agent download returns 404
    and the bootstrap fails at "Downloading agent".
@@ -758,9 +831,10 @@ The data and the hostname stay.
 - **Same name, publicly trusted certificate, still no inbound access:** if the name
   is under a public domain, run the wizard, choose **Reconfigure**, and pick
   **Let's Encrypt DNS-01**.
-- **Public IP with inbound 80/443:** edit `deploy.config.env`: set
-  `TLS_MODE=acme-http` and `ACME_EMAIL`, publish a public A record, keep the
-  internal A record pointing at the LAN IP, and run the unattended install. For
+- **Public IP with inbound 80/443:** publish a public A record, keep the
+  internal A record pointing at the LAN IP, then run the wizard, choose
+  **Reconfigure** and pick **Let's Encrypt HTTP-01** (or set `TLS_MODE=acme-http`
+  and `ACME_EMAIL` in `deploy.config.env` and run the unattended install). For
   `CADDY_BIND_IP`:
   - **Public address NATed or port-forwarded to the server** (the usual on-prem
     case): keep the LAN IP, where the forwarded traffic arrives, or leave it empty
@@ -799,9 +873,14 @@ CA_ROTATE='false'
 HOSTS_ENTRY='false'
 CLERK_PUBLISHABLE_KEY='pk_live_XXX'
 CLERK_SECRET_KEY='sk_live_XXX'
+ADMIN_EMAIL='it-admin@example.com'
 ES_MODE='self'
 SEED_ES='false'
 ```
+
+`ADMIN_EMAIL` is optional: after a successful install the command invites (or
+promotes) that address and prints the outcome. If the Clerk call fails, the
+install still exits 0 and prints a warning with the manual steps.
 
 ```bash
 cd /opt/projectachilles
@@ -849,6 +928,10 @@ active; it never enables an inactive firewall and never touches port 22.
 | Login screen: `This production key belongs to …` | The production app's domain doesn't fit the hostname: use an app on one of the listed `clerk.<D>` hosts. |
 | Login screen: `Production Clerk keys (pk_live_) need a public domain that you own …` | Private-only name: use development keys, or a name under a domain you own. |
 | Sign-in fails with production keys | Clerk's DNS records are not yet verified in the public zone. |
+| Signed in, but actions fail with `Insufficient permissions` (403) | The account has no role (read-only): give it `{"role": "admin"}` ([The first admin and roles](#the-first-admin-and-roles)), then sign out and in again. On older releases this also happened to admins until the session token claim was set. |
+| Done screen: `Could not make … an admin: Clerk API …` | The install itself succeeded. Fix what Clerk reports (for example a revoked secret key), then make the admin by hand or run the installer again (Reconfigure). |
+| No invitation email | Check spam, and the Clerk dashboard's **Users → Invitations**. A pending admin invitation is not sent again; revoke it there and re-run the installer to send a new one. |
+| Demo data: dashboards show results but **Analytics → All Executions** says `0 groups (N documents)` | Installs from releases that mapped the demo index wrongly. Delete it and load it again: `sudo docker exec achilles-server-elasticsearch-1 curl -s -X DELETE 'localhost:9200/achilles-results-synthetic,achilles-results-'`, then run the installer again (Reconfigure, demo data **Yes**). |
 | Server still presents the old intermediate after `ca renew` | Run `sudo systemctl start achilles-ca-renew.service` (clears Caddy's leaf cache, then restarts), or re-run the install. |
 | `upgrade`: `… has uncommitted changes; refusing to upgrade over them` | Commit, stash or discard the changes shown, then run it again. |
 | Engine: `Compose project '…' already belongs to <dir>` | Another checkout on this host (a dev clone, an earlier install) runs containers under the same project name, and `up` would take over its containers and volumes. Install from that directory, or set another `COMPOSE_PROJECT_NAME` in `deploy.config.env` and re-run. |
@@ -881,3 +964,46 @@ active; it never enables an inactive firewall and never touches port 22.
   constraints (see above), remove the old root from every endpoint, not only from
   the GPO ([Removing the old root from endpoints](#removing-the-old-root-from-endpoints)),
   and destroy the older backups, which hold the compromised keys.
+
+## Cloud servers (DigitalOcean, Hetzner)
+
+The wizard also installs on a cloud server whose public IP is on its own network
+interface, as on DigitalOcean Droplets and Hetzner Cloud servers. There is no
+LAN, no GPO and no private CA: browsers and agents reach the server over the
+internet and trust a Let's Encrypt certificate.
+
+**Before you start**
+
+| Item | Notes |
+|------|-------|
+| **Server** | Ubuntu 26.04, 24.04 or 22.04 with the usual minimums: 2 GiB RAM (4 GiB for self-hosted Elasticsearch; DigitalOcean 4 GB or Hetzner CX32 and up), 20 GiB free disk. |
+| **Public DNS name** | An A record pointing at the server's public IPv4, under a domain you own. Create it first, so the DNS check passes and Let's Encrypt can validate. Don't add an AAAA record: Caddy listens on the IPv4 address only, and Let's Encrypt validates over IPv6 when one exists. |
+| **Provider firewall** | A DigitalOcean Cloud Firewall or Hetzner Firewall must allow **TCP 80, TCP 443 and UDP 443** inbound from anywhere, plus SSH. The installer can't see these firewalls. |
+| **Clerk** | Production keys (`pk_live_`) for the public domain; development keys (`pk_test_`) work for a trial, with Clerk's "Development mode" banner. Decide who the [first admin](#the-first-admin-and-roles) is. |
+| **Outbound email** | DigitalOcean blocks SMTP ports 25, 465 and 587 on new accounts; Hetzner blocks 25 and 465. Use a relay on an open port (Hetzner: 587) or have the block lifted. With [pre-execution notices](../user-guide/integrations/pre-execution-notices) on, a server that can't send mail **holds every test run** until the maximum wait, then marks it Not run. |
+
+**Install.** Run the one-command bootstrap, then on the wizard pick the interface
+marked `public`, type the hostname (the DNS check should show the public IP), and
+keep **Let's Encrypt HTTP-01 (recommended)** on the Certificates screen. If port 80
+must stay closed, pick **Let's Encrypt DNS-01**; Caddy has plugins for both
+providers (`digitalocean`, `hetzner`). On the Login screen, give the first
+admin's email. Caddy fetches and renews the certificate on its own; the Done
+screen shows the first admin's invitation and the enroll command.
+
+**Enroll agents.** Sign in as the first admin, register an agent version, and
+create a token in the web UI. The certificate is publicly trusted, so no
+`ca_cert` is needed:
+
+```text
+achilles-agent --enroll <TOKEN> --server https://achilles.example.com --install
+```
+
+**Providers that NAT the public IP** (AWS, Azure, Google Cloud, a DigitalOcean
+reserved IP): pick the private interface, choose **Continue without a record for
+now** on the DNS check, and pick **Let's Encrypt HTTP-01** yourself (the
+ProjectAchilles CA is listed first on a private address).
+
+**Exposure.** The web UI and agent API are on the internet, behind Clerk and
+per-agent keys; Elasticsearch, the backend and the frontend publish no ports.
+Restrict the provider firewall to known source ranges when you can: a host
+firewall (ufw) does not filter Docker-published ports.

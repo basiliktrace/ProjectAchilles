@@ -10,6 +10,8 @@ export interface ClerkAuthLike {
   userId?: string;
   orgId?: string;
   sessionClaims?: unknown;
+  /** Clerk's token kind: 'session_token', 'api_key', 'oauth_token', 'm2m_token'. */
+  tokenType?: string;
   apiKeyPermissions?: ReadonlySet<string>;
 }
 

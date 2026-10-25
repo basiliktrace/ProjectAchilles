@@ -6,7 +6,7 @@
  
  ✓ Under a public domain: example.com has public name servers.
    Clerk: use production keys (pk_live_) and add the records Clerk lists to
-   your public zone. Let's Encrypt DNS-01 is available.                  
+   your public zone. Let's Encrypt certificates are available.           
 
 
 

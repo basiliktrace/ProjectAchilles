@@ -1,6 +1,6 @@
  ProjectAchilles installer                                      Welcome  1 / 10
 ────────────────────────────────────────────────────────────────────────────────
- This wizard sets up ProjectAchilles on this server for your LAN.
+ This wizard sets up ProjectAchilles on this server (LAN or cloud).
  
    1. Check that this server is ready (read-only)
    2. Pick the network interface and the server's DNS name

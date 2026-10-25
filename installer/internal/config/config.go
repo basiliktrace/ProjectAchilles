@@ -32,6 +32,7 @@ type Config struct {
 
 	ClerkPublishableKey string
 	ClerkSecretKey      string
+	AdminEmail          string // first admin: invited (or promoted) through the Clerk API
 
 	SessionSecret    string
 	EncryptionSecret string
@@ -98,6 +99,7 @@ var fields = []field{
 	str("CADDY_DNS_TOKEN", func(c *Config) *string { return &c.CaddyDNSToken }),
 	str("CLERK_PUBLISHABLE_KEY", func(c *Config) *string { return &c.ClerkPublishableKey }),
 	str("CLERK_SECRET_KEY", func(c *Config) *string { return &c.ClerkSecretKey }),
+	str("ADMIN_EMAIL", func(c *Config) *string { return &c.AdminEmail }),
 	str("SESSION_SECRET", func(c *Config) *string { return &c.SessionSecret }),
 	str("ENCRYPTION_SECRET", func(c *Config) *string { return &c.EncryptionSecret }),
 	str("CLI_AUTH_SECRET", func(c *Config) *string { return &c.CLIAuthSecret }),
@@ -333,6 +335,9 @@ func (c Config) Validate() []Problem {
 	req("ACHILLES_DOMAIN", c.AchillesDomain, "Public domain")
 	req("CLERK_PUBLISHABLE_KEY", c.ClerkPublishableKey, "Clerk publishable key")
 	req("CLERK_SECRET_KEY", c.ClerkSecretKey, "Clerk secret key")
+	if e := strings.TrimSpace(c.AdminEmail); e != "" && !strings.Contains(e, "@") {
+		ps = append(ps, Problem{"ADMIN_EMAIL", fmt.Sprintf("ADMIN_EMAIL %q is not an email address", e)})
+	}
 
 	switch tls := orDefault(c.TLSMode, "acme-http"); tls {
 	case "acme-http":

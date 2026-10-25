@@ -13,6 +13,7 @@ import { fileURLToPath } from 'url';
 import { getBuildInfo } from './lib/buildInfo.js';
 
 import { clerkAuth } from './middleware/clerk.middleware.js';
+import { hydrateClaimsFromClerk } from './middleware/clerkClaimsFallback.middleware.js';
 import { createBrowserRouter } from './api/browser.routes.js';
 import analyticsRoutes from './api/analytics.routes.js';
 import { createTestsRouter } from './api/tests.routes.js';
@@ -112,6 +113,11 @@ app.use(express.urlencoded({ extended: true }));
 
 // Clerk authentication middleware (parses JWT, populates req.auth — does NOT reject)
 app.use(clerkAuth);
+
+// Role/org from Clerk when the session token lacks the metadata claim (a new
+// Clerk instance has no session token customisation). Runs before CLI and API
+// key auth, so it only ever sees Clerk-verified users.
+app.use(hydrateClaimsFromClerk());
 
 // Rate-limit unverified Bearer tokens before acceptCliAuth runs jwt.verify
 // on them. HMAC is fast and not crackable in band, but defense-in-depth

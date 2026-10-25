@@ -34,6 +34,7 @@ type loginScreen struct {
 	form *huh.Form
 
 	pk, sk    string
+	admin     string // first admin's email (optional)
 	attempted bool   // the admin pressed enter on the secret key
 	dnsAnswer string // loginDNS: yes | later
 
@@ -59,7 +60,7 @@ func (l *loginScreen) Help() string {
 }
 
 func (l *loginScreen) Init() tea.Cmd {
-	l.pk, l.sk = l.s.cfg.ClerkPublishableKey, l.s.cfg.ClerkSecretKey
+	l.pk, l.sk, l.admin = l.s.cfg.ClerkPublishableKey, l.s.cfg.ClerkSecretKey, l.s.cfg.AdminEmail
 	l.attempted = false
 	return tea.Batch(l.toKeys(), l.maybeProbe())
 }
@@ -92,6 +93,17 @@ func (l *loginScreen) toKeys() tea.Cmd {
 					return errors.New("fix the problem shown below first")
 				}
 				return nil
+			}),
+		huh.NewInput().
+			// No description: at 80x24 a blocking key error must stay visible below.
+			Title("First admin email (optional: invited as admin)").
+			Placeholder("you@example.com, or blank if the Clerk app has an admin").
+			Value(&l.admin).
+			Validate(func(v string) error {
+				if strings.TrimSpace(v) == "" {
+					return nil
+				}
+				return validEmail(v)
 			}),
 	))
 	return cmd
@@ -182,7 +194,7 @@ func (l *loginScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 	switch l.step {
 	case loginKeys:
-		l.pk, l.sk = strings.TrimSpace(l.pk), strings.TrimSpace(l.sk)
+		l.pk, l.sk, l.admin = strings.TrimSpace(l.pk), strings.TrimSpace(l.sk), strings.TrimSpace(l.admin)
 		if k, ok := l.fapi(); ok && k.Live {
 			return l, tea.Batch(cmd, l.toDNS())
 		}
@@ -245,7 +257,7 @@ func (l *loginScreen) probeLine() string {
 	}
 }
 
-// Apply stores the keys.
+// Apply stores the keys and the first admin.
 func (l *loginScreen) Apply(c *config.Config) {
-	c.ClerkPublishableKey, c.ClerkSecretKey = l.pk, l.sk
+	c.ClerkPublishableKey, c.ClerkSecretKey, c.AdminEmail = l.pk, l.sk, l.admin
 }

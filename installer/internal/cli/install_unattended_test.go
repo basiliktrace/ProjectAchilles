@@ -3,12 +3,14 @@ package cli
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/projectachilles/ProjectAchilles/installer/internal/clerkadmin"
 	"github.com/projectachilles/ProjectAchilles/installer/internal/config"
 	"github.com/projectachilles/ProjectAchilles/installer/internal/engine"
 )
@@ -125,7 +127,8 @@ func TestNonInteractiveInstallSuccess(t *testing.T) {
 	if code := r.Run([]string{"install", "--config", cfg, "--yes", "--repo", t.TempDir()}, &out, &errb); code != 0 {
 		t.Fatalf("exit code = %d (stderr %q)", code, errb.String())
 	}
-	if want := "==> Loading configuration\n  ✓ config\nProjectAchilles is installed: https://achilles.corp.example.com\n"; b.out.String() != want {
+	if want := "==> Loading configuration\n  ✓ config\nProjectAchilles is installed: https://achilles.corp.example.com\n" +
+		"First admin: " + clerkadmin.ManualSteps("achilles.corp.example.com") + "\n"; b.out.String() != want {
 		t.Fatalf("stdout = %q, want %q", b.out.String(), want)
 	}
 }
@@ -211,5 +214,49 @@ func TestNonInteractiveMissingConfigFile(t *testing.T) {
 	}
 	if len(*calls) != 0 {
 		t.Fatal("engine started")
+	}
+}
+
+// With ADMIN_EMAIL set, a successful install invites the first admin; a Clerk
+// failure only warns (the stack is up) and prints the manual steps.
+func TestNonInteractiveInvitesFirstAdmin(t *testing.T) {
+	p := validConfig(t)
+	c, _ := config.Load(p)
+	c.AdminEmail = "ops@corp.example.com"
+	if err := c.Write(p); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		err      error
+		code     int
+		out, ser string
+	}{
+		{nil, 0, "First admin: Invitation sent to ops@corp.example.com", ""},
+		{errors.New("HTTP 401: invalid key"), 0, "", "warning: could not make ops@corp.example.com an admin: HTTP 401: invalid key"},
+	} {
+		r, b := NewRegistry("dev"), &ioBufs{}
+		var got config.Config
+		registerInstall(r, installIO{
+			stdin: strings.NewReader(""), stdout: &b.out, stderr: &b.err,
+			getenv:    func(string) string { return "" },
+			newRunner: func(string, string, string) (engine.Starter, error) { return scripted{}, nil },
+			admin: func(_ context.Context, c config.Config) (clerkadmin.Result, error) {
+				got = c
+				return clerkadmin.Result{Outcome: clerkadmin.Invited, Email: c.AdminEmail}, tc.err
+			},
+		})
+		var out, errb bytes.Buffer
+		if code := r.Run([]string{"install", "--config", p, "--yes", "--repo", t.TempDir()}, &out, &errb); code != tc.code {
+			t.Fatalf("exit code = %d (stderr %q)", code, b.err.String())
+		}
+		if got.AdminEmail != "ops@corp.example.com" || got.ClerkSecretKey != "sk_test_x" {
+			t.Errorf("admin got config %+v", got)
+		}
+		if !strings.Contains(b.out.String(), tc.out) || !strings.Contains(b.err.String(), tc.ser) {
+			t.Errorf("stdout %q stderr %q", b.out.String(), b.err.String())
+		}
+		if tc.err != nil && !strings.Contains(b.err.String(), `{"role": "admin"}`) {
+			t.Errorf("failure should print the manual steps: %q", b.err.String())
+		}
 	}
 }

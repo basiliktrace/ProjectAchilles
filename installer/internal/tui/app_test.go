@@ -204,6 +204,7 @@ func (d *driver) press(code rune) { d.tm.Send(tea.KeyPressMsg{Code: code}) }
 func (d *driver) enter()          { d.press(tea.KeyEnter) }
 func (d *driver) esc()            { d.press(tea.KeyEscape) }
 func (d *driver) down()           { d.press(tea.KeyDown) }
+func (d *driver) up()             { d.press(tea.KeyUp) }
 func (d *driver) typ(s string)    { d.tm.Type(s) }
 func (d *driver) ctrlC()          { d.tm.Send(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl}) }
 func (d *driver) final() *App {
@@ -303,7 +304,7 @@ func TestWizardHappyPathThroughCerts(t *testing.T) {
 	d.enter() // ProjectAchilles CA (default)
 	d.waitText("corp.example.com", "name-constrained")
 	d.enter() // zone: nearest candidate (default)
-	d.waitText("LAN IP")
+	d.waitText("the IP " + testIP)
 	d.enter() // include IP: No (default)
 
 	c := d.afterCerts()
@@ -387,7 +388,7 @@ func TestLetsEncryptHiddenForPrivateZone(t *testing.T) {
 	d.passPreflight()
 	d.passNetwork("achilles.corp.lan", 0)
 	f := d.waitText("Certificates", "ProjectAchilles CA", "Bring your own")
-	if strings.Contains(f, "Let's Encrypt") {
+	if strings.Contains(f, "DNS-01") || strings.Contains(f, "HTTP-01") {
 		t.Fatalf("Let's Encrypt offered for a private-only name:\n%s", f)
 	}
 	d.quit()
@@ -497,7 +498,7 @@ func TestEnterpriseCSRFlow(t *testing.T) {
 	d.toCerts(testHost)
 	d.down() // Enterprise CA
 	d.enter()
-	d.waitText("LAN IP")
+	d.waitText("the IP " + testIP)
 	d.enter() // no IP SAN
 	f := d.waitText("BEGIN CERTIFICATE REQUEST", "Signed certificate chain")
 	if testing.Verbose() {
@@ -558,7 +559,7 @@ func TestEnterpriseKeepsLivePairUntilImport(t *testing.T) {
 	d.toCerts(testHost)
 	d.down()
 	d.enter()
-	d.waitText("LAN IP")
+	d.waitText("the IP " + testIP)
 	d.enter()
 	d.waitText("BEGIN CERTIFICATE REQUEST")
 	if b, _ := os.ReadFile(filepath.Join(certs, "key.pem")); string(b) != string(liveKey) {
@@ -594,13 +595,13 @@ func TestEnterpriseCSRReusedOnReentry(t *testing.T) {
 	d.toCerts(testHost)
 	d.down()
 	d.enter()
-	d.waitText("LAN IP")
+	d.waitText("the IP " + testIP)
 	d.enter()
 	d.waitText("BEGIN CERTIFICATE REQUEST")
 	certs := filepath.Join(deps.RepoRoot, "deploy", "caddy", "certs")
 	first, _ := os.ReadFile(filepath.Join(certs, "key.pem"))
 	d.esc() // back to the IP question
-	d.waitText("LAN IP")
+	d.waitText("the IP " + testIP)
 	d.enter()
 	d.waitText("BEGIN CERTIFICATE REQUEST", "existing request")
 	if again, _ := os.ReadFile(filepath.Join(certs, "key.pem")); string(again) != string(first) {
@@ -712,7 +713,7 @@ func TestCADriftKeepExisting(t *testing.T) {
 	d.enter()
 	d.waitText("name-constrained")
 	d.enter() // corp.example.com (differs from the CA's example.com)
-	d.waitText("LAN IP")
+	d.waitText("the IP " + testIP)
 	d.enter()
 	f := d.waitText("existing ProjectAchilles CA", "Keep the existing CA", "Rotate")
 	if !strings.Contains(f, "every endpoint") {
@@ -733,7 +734,7 @@ func TestCADriftRotate(t *testing.T) {
 	d.enter()
 	d.waitText("name-constrained")
 	d.enter()
-	d.waitText("LAN IP")
+	d.waitText("the IP " + testIP)
 	d.enter()
 	d.waitText("Keep the existing CA")
 	d.down()
@@ -755,7 +756,7 @@ func TestCADriftOutsideZoneEnterDoesNotRotate(t *testing.T) {
 	d.enter()
 	d.waitText("name-constrained")
 	d.enter()
-	d.waitText("LAN IP")
+	d.waitText("the IP " + testIP)
 	d.enter()
 	f := d.waitText("Rotate the root CA?", "outside lab.example.com")
 	checkGolden(t, "13-certs-ca-rotate-confirm", f)
@@ -786,7 +787,7 @@ func TestCADriftOutsideZoneExplicitYesRotates(t *testing.T) {
 	d.enter()
 	d.waitText("name-constrained")
 	d.enter()
-	d.waitText("LAN IP")
+	d.waitText("the IP " + testIP)
 	d.enter()
 	d.waitText("Rotate the root CA?")
 	d.press(tea.KeyLeft) // move to "Yes"
@@ -805,7 +806,7 @@ func TestCANoDriftWhenMatching(t *testing.T) {
 	d.enter()
 	d.waitText("existing CA")
 	d.enter()
-	d.waitText("LAN IP")
+	d.waitText("the IP " + testIP)
 	d.enter()
 	c := d.afterCerts()
 	if c.CAZone != "corp.example.com" || c.CARotate {
@@ -888,7 +889,7 @@ func TestFramesFit80x24(t *testing.T) {
 	d.enter()
 	checkGolden(t, "08-certs-zone", d.waitText("name-constrained"))
 	d.enter()
-	checkGolden(t, "26-certs-ip", d.waitText("LAN IP", "reachable by IP"))
+	checkGolden(t, "26-certs-ip", d.waitText("the IP "+testIP, "reachable by IP"))
 	d.enter()
 	checkGolden(t, "09-certs-ca-drift", d.waitText("Keep the existing CA"))
 	d.quit()
@@ -902,7 +903,7 @@ func TestFramesCertsIPWording(t *testing.T) {
 	d.toCerts(testHost)
 	d.down() // Enterprise CA
 	d.enter()
-	f := d.waitText("LAN IP", "reachable by IP")
+	f := d.waitText("the IP "+testIP, "reachable by IP")
 	checkGolden(t, "27-certs-enterprise-ip", f)
 	flat := strings.Join(strings.Fields(strings.ReplaceAll(f, "┃", "")), " ")
 	if !strings.Contains(flat, "it does not make the server reachable by IP") || strings.Contains(flat, "connect by IP") {

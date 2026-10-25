@@ -9,6 +9,7 @@
 package tui
 
 import (
+	"context"
 	"fmt"
 	"image/color"
 	"strings"
@@ -20,6 +21,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/projectachilles/ProjectAchilles/installer/internal/clerkadmin"
 	"github.com/projectachilles/ProjectAchilles/installer/internal/config"
 	"github.com/projectachilles/ProjectAchilles/installer/internal/dnsclass"
 	"github.com/projectachilles/ProjectAchilles/installer/internal/engine"
@@ -39,6 +41,8 @@ type Deps struct {
 	Runner     func(config.Config) engine.Starter // a fresh engine run for the confirmed answers
 	Now        func() time.Time
 	CADir      string // an existing ProjectAchilles CA is read from here (default DefaultCADir)
+	// Admin makes ADMIN_EMAIL an admin through Clerk once installed; nil skips it.
+	Admin func(context.Context, config.Config) (clerkadmin.Result, error)
 }
 
 // Screen is one wizard step. It is a tea.Model; Init runs every time the

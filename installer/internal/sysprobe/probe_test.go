@@ -85,6 +85,16 @@ func TestPreflightUnsupportedOSFails(t *testing.T) {
 	if find(t, Preflight(context.Background(), s, PreflightOptions{}), "os").Status != Warn {
 		t.Error("expected Warn for rocky 9")
 	}
+	for _, v := range []string{"22.04", "24.04", "26.04"} {
+		s.osID, s.osVr = "ubuntu", v
+		if c := find(t, Preflight(context.Background(), s, PreflightOptions{}), "os"); c.Status != Pass {
+			t.Errorf("ubuntu %s: %v %q, want Pass", v, c.Status, c.Detail)
+		}
+	}
+	s.osID, s.osVr = "ubuntu", "25.10" // interim release
+	if find(t, Preflight(context.Background(), s, PreflightOptions{}), "os").Status != Fail {
+		t.Error("expected Fail for a non-LTS Ubuntu")
+	}
 }
 
 func TestPreflightPortsBusyOnExistingInstallPass(t *testing.T) {

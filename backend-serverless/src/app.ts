@@ -8,6 +8,7 @@ import dotenv from 'dotenv';
 import path from 'path';
 
 import { clerkAuth } from './middleware/clerk.middleware.js';
+import { hydrateClaimsFromClerk } from './middleware/clerkClaimsFallback.middleware.js';
 import { uiLimiterKey } from './middleware/rateLimitKeys.js';
 import { createBrowserRouter } from './api/browser.routes.js';
 import analyticsRoutes from './api/analytics.routes.js';
@@ -78,6 +79,10 @@ app.use(express.urlencoded({ extended: true }));
 
 // Clerk authentication middleware
 app.use(clerkAuth);
+
+// Role/org from Clerk when the session token lacks the metadata claim (a new
+// Clerk instance has no session token customisation).
+app.use(hydrateClaimsFromClerk());
 
 // Global API rate limiter (dashboard/UI traffic only). Keyed on the Clerk
 // user id (uiLimiterKey), NOT the IP: every analyst at a customer shares one
