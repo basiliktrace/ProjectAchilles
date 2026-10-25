@@ -302,7 +302,7 @@ export class IntegrationsSettingsService {
   saveAzureSettings(settings: Partial<AzureIntegrationSettings>): void {
     this.ensureSettingsDir();
 
-    const existing = this.getRawFileSettings() ?? {};
+    const existing = this.getRawFileSettingsForWrite();
 
     // Resolve current values (from org section or legacy)
     const decrypted = this.getFileSettings() ?? {};
@@ -455,7 +455,7 @@ export class IntegrationsSettingsService {
   saveDefenderSettings(settings: Partial<DefenderIntegrationSettings>): void {
     this.ensureSettingsDir();
 
-    const existing = this.getRawFileSettings() ?? {};
+    const existing = this.getRawFileSettingsForWrite();
     const decrypted = this.getFileSettings() ?? {};
     const orgSection = this.getOrgSection(decrypted);
     const current = orgSection?.defender ?? decrypted.defender ?? {
@@ -539,7 +539,7 @@ export class IntegrationsSettingsService {
    */
   saveDefenderSyncTimestamps(timestamps: { last_alert_sync?: string; last_score_sync?: string; sync_version?: number }): void {
     this.ensureSettingsDir();
-    const existing = this.getRawFileSettings() ?? {};
+    const existing = this.getRawFileSettingsForWrite();
 
     // Write timestamps into the correct section (org-specific or top-level)
     // but ONLY if that section already exists — never create a defender entry
@@ -753,7 +753,7 @@ export class IntegrationsSettingsService {
   saveCrowdStrikeSettings(settings: Partial<CrowdStrikeIntegrationSettings>): void {
     this.ensureSettingsDir();
 
-    const existing = this.getRawFileSettings() ?? {};
+    const existing = this.getRawFileSettingsForWrite();
     const decrypted = this.getFileSettings() ?? {};
     const orgSection = this.getOrgSection(decrypted);
     const current = orgSection?.crowdstrike ?? decrypted.crowdstrike ?? {
@@ -914,7 +914,7 @@ export class IntegrationsSettingsService {
    */
   saveCrowdStrikeSyncTimestamps(timestamps: { last_alert_sync?: string; last_zta_sync?: string; zta_status?: CrowdStrikeZtaStatus; sync_version?: number }): void {
     this.ensureSettingsDir();
-    const existing = this.getRawFileSettings() ?? {};
+    const existing = this.getRawFileSettingsForWrite();
 
     // Write timestamps into the correct section (org-specific or top-level)
     // but ONLY if that section already exists — never create a crowdstrike
@@ -1391,7 +1391,7 @@ export class IntegrationsSettingsService {
     }
 
     // PA-018: Write to org section when orgId is set
-    const raw = this.getRawFileSettings() ?? {};
+    const raw = this.getRawFileSettingsForWrite();
     if (this.orgId) {
       raw.orgs ??= {};
       raw.orgs[this.orgId] ??= {};
@@ -1448,7 +1448,7 @@ export class IntegrationsSettingsService {
       base = rest;
     }
     const merged = clampNoticeSettings({ ...base, ...patch });
-    const raw = this.getRawFileSettings() ?? {};
+    const raw = this.getRawFileSettingsForWrite();
     if (this.orgId) {
       raw.orgs ??= {};
       raw.orgs[this.orgId] ??= {};
