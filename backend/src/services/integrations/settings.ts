@@ -1060,6 +1060,10 @@ export class IntegrationsSettingsService {
     // integration to read-only switches it off (fail closed).
     const currentMitigation = normalizeAutoMitigation(current?.auto_mitigation);
     const autoMitigation = permissionMode === 'response' ? currentMitigation : { ...currentMitigation, mode: 'disabled' as const };
+    // Same for auto-resolve 'enabled' (it writes incident status); dry_run is
+    // read-only and survives the downgrade.
+    const currentResolve = current?.auto_resolve_mode ?? S1_DEFAULT_AUTO_RESOLVE_MODE;
+    const autoResolveMode = permissionMode !== 'response' && currentResolve === 'enabled' ? 'disabled' : currentResolve;
 
     const merged: SentinelOneIntegrationSettings = {
       base_url: baseUrl,
@@ -1075,7 +1079,7 @@ export class IntegrationsSettingsService {
       last_threat_sync: scopeChanged ? undefined : current?.last_threat_sync,
       last_alert_sync: scopeChanged ? undefined : current?.last_alert_sync,
       sync_version: scopeChanged ? undefined : current?.sync_version,
-      auto_resolve_mode: current?.auto_resolve_mode ?? S1_DEFAULT_AUTO_RESOLVE_MODE,
+      auto_resolve_mode: autoResolveMode,
       auto_mitigation: autoMitigation,
       last_posture_sync: scopeChanged ? undefined : current?.last_posture_sync,
     };

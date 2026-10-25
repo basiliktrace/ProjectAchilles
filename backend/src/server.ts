@@ -341,7 +341,7 @@ async function startServer() {
   // User management - RBAC role assignment (admin-only)
   app.use('/api/users', usersRoutes);
 
-  // SentinelOne integration (settings, alert sync, response actions)
+  // SentinelOne integration (settings, background sync, auto-resolve / automatic mitigation)
   app.use('/api/integrations/sentinelone', sentinelOneRoutes);
 
   // Integrations - external service credentials (Azure, etc.)

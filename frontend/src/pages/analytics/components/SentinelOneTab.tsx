@@ -47,6 +47,8 @@ export default function SentinelOneTab({ dateRange }: SentinelOneTabProps) {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [drawerTechniques, setDrawerTechniques] = useState<string[] | undefined>(undefined);
   const loadSeq = useRef(0);
+  const mounted = useRef(true);
+  useEffect(() => () => { mounted.current = false; }, []);
   const closeDrawer = useCallback(() => setDrawerOpen(false), []);
 
   function openDrawerForTechnique(t: string) {
@@ -100,13 +102,16 @@ export default function SentinelOneTab({ dateRange }: SentinelOneTabProps) {
     setSyncError(null);
     try {
       await sentinelOneApi.triggerSync();
-      refresh();
+      // The sync runs in the background (202): refresh the cards once it finishes.
+      const done = await sentinelOneApi.waitForSync({ isCancelled: () => !mounted.current });
+      if (!mounted.current) return;
+      if (done) refresh();
       await loadSyncStatus();
     } catch (err) {
       const apiError = (err as { response?: { data?: { error?: string } } }).response?.data?.error;
-      setSyncError(apiError ?? (err instanceof Error ? err.message : 'Sync failed'));
+      if (mounted.current) setSyncError(apiError ?? (err instanceof Error ? err.message : 'Sync failed'));
     } finally {
-      setSyncing(false);
+      if (mounted.current) setSyncing(false);
     }
   }
 

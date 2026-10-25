@@ -13,6 +13,9 @@ import type { ZtaScoreSummary, ZtaScoreTrendPoint } from '../crowdstrike/analyti
 import { SENTINELONE_INDEX } from './index-management.js';
 
 export class SentinelOneAnalyticsService extends CrowdStrikeAnalyticsService {
+  /** Our own automatic mitigation is detection, never SentinelOne prevention. */
+  protected override readonly ignoreAchillesMitigated = true;
+
   constructor() {
     super(SENTINELONE_INDEX, 'sentinelone');
   }

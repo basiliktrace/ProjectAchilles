@@ -153,6 +153,26 @@ export const sentinelOneApi = {
     return response.data;
   },
 
+  /**
+   * Poll /sync/status until the background sync started by triggerSync()
+   * finishes (a backfill can take minutes). Resolves with the last status,
+   * or null when `isCancelled()` turns true (e.g. the component unmounted).
+   */
+  async waitForSync(opts: { intervalMs?: number; maxMs?: number; isCancelled?: () => boolean; onStatus?: (s: SentinelOneSyncStatus) => void } = {}): Promise<SentinelOneSyncStatus | null> {
+    const { intervalMs = 3000, maxMs = 30 * 60_000, isCancelled = () => false, onStatus } = opts;
+    const deadline = Date.now() + maxMs;
+    let status: SentinelOneSyncStatus | null = null;
+    while (Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, intervalMs));
+      if (isCancelled()) return null;
+      status = await sentinelOneApi.getSyncStatus();
+      if (isCancelled()) return null;
+      onStatus?.(status);
+      if (!status.inProgress) break;
+    }
+    return status;
+  },
+
   async getAutoResolveStatus(): Promise<SentinelOneAutoResolveStatus> {
     const response = await apiClient.get('/integrations/sentinelone/auto-resolve/status');
     return response.data.data;

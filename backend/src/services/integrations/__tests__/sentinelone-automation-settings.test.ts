@@ -79,6 +79,18 @@ describe('SentinelOne auto-resolve / automatic-mitigation settings', () => {
     expect(svc.getSentinelOneAutoMitigation().mode).toBe('disabled');
   });
 
+  it('downgrading to read-only turns auto-resolve "enabled" off but keeps dry_run', () => {
+    const svc = new IntegrationsSettingsService();
+    svc.saveSentinelOneSettings({ base_url: 'https://acme.sentinelone.net', api_token: TOKEN, permission_mode: 'response' });
+    svc.setSentinelOneAutoResolveMode('enabled');
+    svc.saveSentinelOneSettings({ permission_mode: 'read_only' });
+    expect(svc.getSentinelOneAutoResolveMode()).toBe('disabled');
+
+    svc.setSentinelOneAutoResolveMode('dry_run');
+    svc.saveSentinelOneSettings({ permission_mode: 'read_only' });
+    expect(svc.getSentinelOneAutoResolveMode()).toBe('dry_run');
+  });
+
   it('settings saves preserve the toggles and never put the token in plain text', () => {
     const svc = new IntegrationsSettingsService();
     svc.saveSentinelOneSettings({ base_url: 'https://acme.sentinelone.net', api_token: TOKEN, permission_mode: 'response' });

@@ -35,9 +35,6 @@ const STATUS_OPTIONS: SentinelOneIncidentStatus[] = ['unresolved', 'in_progress'
 const parseIds = (value: string): string[] => value.split(/[\s,]+/).map((s) => s.trim()).filter(Boolean);
 const toggle = <T,>(list: T[], value: T): T[] => (list.includes(value) ? list.filter((v) => v !== value) : [...list, value]);
 const fmt = (iso: string | null | undefined) => (iso ? new Date(iso).toLocaleString() : 'never');
-const SYNC_POLL_MS = 3000;
-const SYNC_POLL_MAX_MS = 30 * 60_000;
-const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 interface SentinelOneConfigProps {
   onStatusChange?: (configured: boolean) => void;
@@ -181,14 +178,7 @@ export function SentinelOneConfig({ onStatusChange }: SentinelOneConfigProps) {
       const started = await sentinelOneApi.triggerSync(reset);
       if (!started.started && reset) setError('A sync is already running; re-backfill was not started. Try again when it finishes.');
       // The sync runs in the background (a backfill can take minutes): poll its status.
-      const deadline = Date.now() + SYNC_POLL_MAX_MS;
-      while (mounted.current && Date.now() < deadline) {
-        await sleep(SYNC_POLL_MS);
-        const status = await sentinelOneApi.getSyncStatus();
-        if (!mounted.current) return;
-        setSyncStatus(status);
-        if (!status.inProgress) break;
-      }
+      await sentinelOneApi.waitForSync({ isCancelled: () => !mounted.current, onStatus: setSyncStatus });
     } catch (err) {
       if (mounted.current) setError(err instanceof Error ? err.message : 'Sync failed');
     } finally {

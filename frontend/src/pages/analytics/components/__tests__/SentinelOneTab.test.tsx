@@ -15,6 +15,7 @@ const s1 = {
 };
 const mockGetSyncStatus = vi.fn();
 const mockTriggerSync = vi.fn();
+const mockWaitForSync = vi.fn();
 const csSpy = vi.fn();
 
 vi.mock('@/services/api/sentineloneAnalytics', () => ({
@@ -32,6 +33,7 @@ vi.mock('@/services/api/sentinelone', () => ({
   sentinelOneApi: {
     getSyncStatus: () => mockGetSyncStatus(),
     triggerSync: () => mockTriggerSync(),
+    waitForSync: (...a: unknown[]) => mockWaitForSync(...a),
   },
 }));
 // The S1 tab must never hit the CrowdStrike endpoints.
@@ -77,7 +79,8 @@ describe('SentinelOneTab', () => {
     s1.getTechniqueCoverage.mockResolvedValue(null);
     s1.getAlerts.mockResolvedValue({ data: [], total: 0, page: 1, pageSize: 10, counts });
     mockGetSyncStatus.mockResolvedValue({ lastThreatSync: '2026-10-11T03:00:00.000Z', lastAlertSync: null, lastError: null });
-    mockTriggerSync.mockResolvedValue({ success: true });
+    mockTriggerSync.mockResolvedValue({ started: true, inProgress: true });
+    mockWaitForSync.mockResolvedValue({ inProgress: false });
     s1.getAgentHealth.mockResolvedValue({
       latest: { timestamp: '2026-10-22T00:00:00.000Z', counts: { total: 12, active: 11, infected: 1, outdated: 4, detect_only: 2, disconnected: 0 } },
       trend: [],
@@ -135,10 +138,16 @@ describe('SentinelOneTab', () => {
     expect(screen.queryByLabelText('Agent health counts')).toBeNull();
   });
 
-  it('Sync now triggers a SentinelOne sync', async () => {
+  it('Sync now starts a background sync and reloads the cards only once it has finished', async () => {
     renderTab();
-    const btn = await screen.findByRole('button', { name: /sync/i });
-    await userEvent.click(btn);
+    await waitFor(() => expect(s1.getAlertSummary).toHaveBeenCalled());
+    const loadsBefore = s1.getAlertSummary.mock.calls.length;
+    let finish: (v: unknown) => void = () => {};
+    mockWaitForSync.mockReturnValueOnce(new Promise((r) => { finish = r; }));
+    await userEvent.click(await screen.findByRole('button', { name: /sync/i }));
     await waitFor(() => expect(mockTriggerSync).toHaveBeenCalledTimes(1));
+    expect(s1.getAlertSummary.mock.calls.length).toBe(loadsBefore);
+    finish({ inProgress: false });
+    await waitFor(() => expect(s1.getAlertSummary.mock.calls.length).toBeGreaterThan(loadsBefore));
   });
 });
