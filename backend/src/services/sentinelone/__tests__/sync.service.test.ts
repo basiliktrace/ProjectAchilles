@@ -332,7 +332,7 @@ describe('SentinelOneSyncService', () => {
   it('runs the correlation pass after the poll against achilles-sentinelone with sentinelone_* flags', async () => {
     mockRunEnrichment.mockResolvedValueOnce({ scanned: 4, detected: 1, stageDetected: 1, skipped: 0, batches: 1, alertsMarkedCorrelated: 2, errors: [], durationMs: 5 });
     const result = await new SentinelOneSyncService().syncAll();
-    expect(enrichmentCtor).toHaveBeenCalledWith(expect.anything(), undefined, { alertIndex: 'achilles-sentinelone', flagPrefix: 'sentinelone' });
+    expect(enrichmentCtor).toHaveBeenCalledWith(expect.anything(), undefined, { alertIndex: 'achilles-sentinelone', flagPrefix: 'sentinelone', ignoreAchillesMitigated: true });
     expect(mockRunEnrichment).toHaveBeenCalledWith({ lookbackDays: 90 });
     expect(result.enrichment).toMatchObject({ detected: 1, alertsMarkedCorrelated: 2 });
     // Enrichment runs after both sources were polled.

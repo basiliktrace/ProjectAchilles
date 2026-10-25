@@ -447,6 +447,7 @@ export class SentinelOneSyncService {
       const service = new CrowdStrikeEnrichmentService(client, indexPattern, {
         alertIndex: SENTINELONE_INDEX,
         flagPrefix: 'sentinelone',
+        ignoreAchillesMitigated: true,
       });
       const result = await service.runEnrichmentPass({ lookbackDays: 90 });
       console.log(

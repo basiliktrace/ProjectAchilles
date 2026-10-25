@@ -50,6 +50,19 @@ const PREVENTION_ACTIONS = new Set(['quarantined', 'process_killed', 'blocked'])
 export interface EnrichmentVendorTarget {
   alertIndex: string;
   flagPrefix: 'crowdstrike' | 'sentinelone';
+  /**
+   * Ignore the prevention action of alerts that ProjectAchilles itself
+   * mitigated (SentinelOne automatic mitigation writes an
+   * `f0rtika.auto_mitigated` receipt). Our own kill / quarantine is not the
+   * EDR preventing the test, so it must never turn into `<vendor>_prevented`.
+   */
+  ignoreAchillesMitigated?: boolean;
+}
+
+/** True when the alert's prevention action came from Achilles automatic mitigation. */
+function mitigatedByAchilles(source: any): boolean {
+  const f = source?.f0rtika;
+  return f?.auto_mitigated === true && f.auto_mitigation_mode === 'enabled' && !f.auto_mitigation_error;
 }
 
 const CROWDSTRIKE_TARGET: EnrichmentVendorTarget = { alertIndex: CROWDSTRIKE_INDEX, flagPrefix: 'crowdstrike' };
@@ -149,7 +162,10 @@ export class CrowdStrikeEnrichmentService {
         const searches: unknown[] = [];
         for (const q of queries) {
           searches.push({ index: this.target.alertIndex });
-          searches.push({ size: ALERT_HITS_PER_SUBQUERY, _source: ['prevention_action'], query: q.body });
+          const source = this.target.ignoreAchillesMitigated
+            ? ['prevention_action', 'f0rtika.auto_mitigated', 'f0rtika.auto_mitigation_mode', 'f0rtika.auto_mitigation_error']
+            : ['prevention_action'];
+          searches.push({ size: ALERT_HITS_PER_SUBQUERY, _source: source, query: q.body });
         }
 
         let msearchResponse;
@@ -204,6 +220,7 @@ export class CrowdStrikeEnrichmentService {
           //     alert that killed a later stage (prod: Falcon killed T1486 while
           //     stages 1–4 had already exited 101).
           const preventionActions = alertHits
+            .filter((h) => !(this.target.ignoreAchillesMitigated && mitigatedByAchilles(h._source)))
             .map((h) => h._source?.prevention_action)
             .filter((a): a is string => typeof a === 'string' && PREVENTION_ACTIONS.has(a));
 

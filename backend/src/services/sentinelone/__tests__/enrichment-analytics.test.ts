@@ -64,6 +64,32 @@ describe('SentinelOne enrichment (shared pass, sentinelone target)', () => {
     expect(ops[3].doc.f0rtika).toMatchObject({ achilles_correlated: true, achilles_test_uuid: 'b1' });
   });
 
+  it('a kill done by Achilles automatic mitigation is detection, never SentinelOne prevention', async () => {
+    const receipt = { auto_mitigated: true, auto_mitigation_mode: 'enabled', auto_mitigation_action: 'kill' };
+    const hits = [{ _id: 'threat-1', _source: { prevention_action: 'process_killed', f0rtika: receipt } }];
+    search.mockResolvedValueOnce({ hits: { hits: [doc] } });
+    msearch.mockResolvedValueOnce({ responses: [{ hits: { total: { value: 1 }, hits } }, { hits: { total: { value: 1 }, hits } }] });
+    bulk.mockResolvedValueOnce({ items: [{ update: {} }, { update: {} }] });
+
+    const svc = new CrowdStrikeEnrichmentService(client, 'achilles-results-*', { alertIndex: 'achilles-sentinelone', flagPrefix: 'sentinelone', ignoreAchillesMitigated: true });
+    await svc.runEnrichmentPass({ batchSize: 200 });
+
+    expect(msearch.mock.calls[0][0].searches[1]._source).toContain('f0rtika.auto_mitigated');
+    expect(bulk.mock.calls[0][0].operations[1]).toEqual({ doc: { f0rtika: { sentinelone_detected: true, sentinelone_stage_detected: true } } });
+  });
+
+  it('a dry-run or failed auto-mitigation receipt does not hide a real SentinelOne prevention', async () => {
+    const hits = [{ _id: 'threat-1', _source: { prevention_action: 'quarantined', f0rtika: { auto_mitigated: true, auto_mitigation_mode: 'dry_run' } } }];
+    search.mockResolvedValueOnce({ hits: { hits: [doc] } });
+    msearch.mockResolvedValueOnce({ responses: [{ hits: { total: { value: 1 }, hits } }, { hits: { total: { value: 1 }, hits } }] });
+    bulk.mockResolvedValueOnce({ items: [{ update: {} }, { update: {} }] });
+
+    const svc = new CrowdStrikeEnrichmentService(client, 'achilles-results-*', { alertIndex: 'achilles-sentinelone', flagPrefix: 'sentinelone', ignoreAchillesMitigated: true });
+    await svc.runEnrichmentPass({ batchSize: 200 });
+
+    expect(bulk.mock.calls[0][0].operations[1].doc.f0rtika).toMatchObject({ sentinelone_prevented: true, sentinelone_prevention_action: 'quarantined' });
+  });
+
   it('keeps CrowdStrike as the default target', async () => {
     search.mockResolvedValueOnce({ hits: { hits: [] } });
     await new CrowdStrikeEnrichmentService(client, 'achilles-results-*').runEnrichmentPass();
