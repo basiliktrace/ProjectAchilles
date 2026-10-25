@@ -41,6 +41,31 @@ except ImportError:
     HAS_REQUESTS = False
 
 
+DEFAULT_RESULTS_INDEX = 'achilles-results-'
+
+
+def indices_in_bulk_file(file_path):
+    """The distinct _index names the bulk file's action lines write to, in order."""
+    seen = []
+    with open(file_path, 'r') as f:
+        lines = [l for l in f.read().split('\n') if l.strip()]
+    for action_line in lines[0::2]:
+        index_name = json.loads(action_line).get('index', {}).get('_index', DEFAULT_RESULTS_INDEX)
+        if index_name not in seen:
+            seen.append(index_name)
+    return seen
+
+
+def indices_to_create(index_flag, file_path):
+    """Results indices that --create-index maps: --index plus every index the file
+    writes to. Each document goes to its action line's _index, so mapping only
+    --index would leave the seeded index dynamically mapped (text, not keyword)."""
+    names = [index_flag]
+    if file_path:
+        names += [i for i in indices_in_bulk_file(file_path) if i != index_flag]
+    return names
+
+
 def upload_with_es_client(file_path, es_client, chunk_size=500):
     """Upload using the official Elasticsearch Python client."""
     print("Using Elasticsearch Python client...")
@@ -639,7 +664,8 @@ def main():
                 if not args.file:
                     return
             elif args.create_index:
-                create_index_mapping(es, args.index)
+                for name in indices_to_create(args.index, args.file):
+                    create_index_mapping(es, name)
             upload_with_es_client(args.file, es, args.chunk_size)
         else:
             print("Error: elasticsearch-py not installed. Install with: pip install elasticsearch")
@@ -663,7 +689,8 @@ def main():
                 if not args.file:
                     return
             elif args.create_index:
-                create_index_mapping(es, args.index)
+                for name in indices_to_create(args.index, args.file):
+                    create_index_mapping(es, name)
             upload_with_es_client(args.file, es, args.chunk_size)
 
         elif HAS_REQUESTS:
@@ -676,8 +703,9 @@ def main():
                     return
             elif args.create_index:
                 mapping = get_results_index_mapping()
-                _, msg = create_index_with_requests(session, args.host, args.index, mapping, args.api_key)
-                print(msg)
+                for name in indices_to_create(args.index, args.file):
+                    _, msg = create_index_with_requests(session, args.host, name, mapping, args.api_key)
+                    print(msg)
 
             upload_with_requests(args.file, args.host, auth_header, args.chunk_size)
         else:
