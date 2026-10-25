@@ -13,6 +13,10 @@
 // The only actions are 'kill' and 'quarantine' (configured). Remediate,
 // rollback and network isolation stay manual-only.
 //
+// The ES copy is only as fresh as the last poll, so each candidate is
+// re-read from the console right before acting: it must still be
+// unresolved and unmitigated. Anything that can't be confirmed is skipped.
+//
 // Guards (server-side): the settings layer refuses any non-disabled mode
 // unless permission_mode is 'response' and reads as disabled otherwise; this
 // pass re-checks the permission mode, and the client refuses writes in
@@ -22,6 +26,8 @@
 import type { Client } from '@elastic/elasticsearch';
 import { SENTINELONE_INDEX } from './index-management.js';
 import { scopeFilters } from './scope-filter.js';
+import { normalizeToken, threatPreventionAction } from './normalize.js';
+import type { SentinelOneClient } from './s1-client.js';
 import type { ResponseActionOutcome } from './response.service.js';
 import type {
   AutoMitigationPassResult,
@@ -43,6 +49,9 @@ interface Candidate {
   testUuid: string;
 }
 
+/** Reads the live threat state (the S1 client). */
+export type ThreatReader = Pick<SentinelOneClient, 'listThreats'>;
+
 /** The one method of SentinelOneResponseService this pass needs. */
 export interface ResponseExecutor {
   execute(action: SentinelOneResponseAction, actor: { userId: string; orgId?: string }): Promise<ResponseActionOutcome>;
@@ -58,6 +67,7 @@ export class SentinelOneAutoMitigationService {
       permissionMode: SentinelOnePermissionMode;
       scope?: SentinelOneScope;
     },
+    private readonly reader: ThreatReader,
   ) {}
 
   async runAutoMitigationPass(options: { maxPerPass?: number; maxDurationMs?: number } = {}): Promise<AutoMitigationPassResult> {
@@ -76,10 +86,13 @@ export class SentinelOneAutoMitigationService {
       const candidates = await this.findCandidates(options.maxPerPass ?? DEFAULT_MAX_PER_PASS, mode);
       result.candidates = candidates.length;
       const maxDurationMs = options.maxDurationMs ?? DEFAULT_MAX_DURATION_MS;
+      const stillOpen = await this.stillUnmitigated(candidates, result.errors);
 
       for (const c of candidates) {
         if (Date.now() - startedAt > maxDurationMs) break;
         if (!c.threatId || !c.testUuid) { result.skipped += 1; continue; }
+        // Fail closed: only act on what the console still reports as open and unmitigated.
+        if (!stillOpen.has(c.threatId)) { result.skipped += 1; continue; }
 
         if (mode === 'dry_run') {
           console.log(`[SentinelOne-AutoMitigation-DryRun] would_${action} threat id=${c.threatId} test_uuid=${c.testUuid}`);
@@ -114,6 +127,25 @@ export class SentinelOneAutoMitigationService {
 
     result.durationMs = Date.now() - startedAt;
     return result;
+  }
+
+  /** Ids the console still reports as unresolved with no mitigation (one GET). */
+  private async stillUnmitigated(candidates: Candidate[], errors: string[]): Promise<Set<string>> {
+    const out = new Set<string>();
+    const ids = candidates.map((c) => c.threatId).filter((id) => /^\d{1,24}$/.test(id));
+    if (ids.length === 0) return out;
+    try {
+      const res = await this.reader.listThreats({ ids, limit: ids.length, skipCount: 'true' });
+      for (const t of res.data) {
+        const open = normalizeToken(t.threatInfo?.incidentStatus) === 'unresolved'
+          && t.threatInfo?.mitigationStatus === 'not_mitigated'
+          && threatPreventionAction(t) === undefined;
+        if (t.id && open) out.add(t.id);
+      }
+    } catch (err) {
+      errors.push(`live status: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    return out;
   }
 
   private async findCandidates(size: number, mode: AutoResolveMode): Promise<Candidate[]> {

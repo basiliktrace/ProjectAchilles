@@ -236,7 +236,7 @@ describe('SentinelOneSyncService', () => {
     const result = await new SentinelOneSyncService().syncAll();
     expect(autoMitigationCtor).toHaveBeenCalledWith(expect.anything(), expect.anything(), {
       mode: 'dry_run', action: 'quarantine', permissionMode: 'response', scope: { account_ids: ['111'] },
-    });
+    }, expect.objectContaining({ listThreats: expect.any(Function) }));
     expect(autoResolveCtor).toHaveBeenCalledWith(expect.anything(), expect.anything(), 'dry_run', { account_ids: ['111'] });
     expect(mockRunEnrichment.mock.invocationCallOrder[0]).toBeLessThan(mockAutoMitigationPass.mock.invocationCallOrder[0]);
     expect(mockAutoMitigationPass.mock.invocationCallOrder[0]).toBeLessThan(mockAutoResolvePass.mock.invocationCallOrder[0]);

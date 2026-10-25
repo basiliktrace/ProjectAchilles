@@ -12,7 +12,7 @@ import { SentinelOneClient } from './s1-client.js';
 import { IntegrationsSettingsService } from '../integrations/settings.js';
 import { S1_DEFAULT_BACKFILL_DAYS, S1_DEFAULT_POLL_INTERVAL_MINUTES, S1_DEFAULT_SOURCES, S1_MAX_BACKFILL_DAYS } from './defaults.js';
 import { ensureSentinelOneIndex, SENTINELONE_INDEX } from './index-management.js';
-import { normalizeToken } from './normalize.js';
+import { normalizeToken, threatPreventionAction } from './normalize.js';
 import { SettingsService } from '../analytics/settings.js';
 import { createEsClient } from '../analytics/client.js';
 import { CrowdStrikeEnrichmentService } from '../crowdstrike/enrichment.service.js';
@@ -57,7 +57,7 @@ function extractTechniques(values: Array<string | undefined>): string[] {
   return Array.from(out);
 }
 
-export { normalizeToken };
+export { normalizeToken, threatPreventionAction };
 
 /** File name of a Windows (`\device\...`, `C:\...`) or POSIX path. */
 function basename(path: string | undefined): string | undefined {
@@ -98,24 +98,6 @@ function threatSeverity(t: S1Threat): SentinelOneSeverity {
     case 'n/a': return 'low';
     default: return 'unknown';
   }
-}
-
-/** Mitigation-report actions that are an attempt to stop the threat (not rollback / un-quarantine / network). */
-const STOP_ACTIONS = new Set(['kill', 'quarantine', 'remediate']);
-
-export function threatPreventionAction(t: S1Threat): string | undefined {
-  const report = t.mitigationStatus ?? [];
-  const done = (action: string) => report.some((m) => m.action === action && m.status === 'success');
-  if (done('quarantine')) return 'quarantined';
-  if (done('kill')) return 'process_killed';
-  // Remediation (file removed / changes reverted) maps onto the shared
-  // vocabulary like Defender's 'remediated' → 'quarantined'.
-  if (done('remediate')) return 'quarantined';
-  // 'kill_failed' only when the mitigation report shows a stop attempt
-  // (kill / quarantine / remediate) that failed — not for any failed entry.
-  if (report.some((m) => STOP_ACTIONS.has(m.action ?? '') && m.status === 'failed')) return 'kill_failed';
-  if (t.threatInfo?.mitigationStatus === 'mitigated') return 'blocked';
-  return undefined;
 }
 
 export function transformThreat(t: S1Threat, baseUrl: string): SentinelOneAlertDoc {
@@ -314,7 +296,7 @@ export class SentinelOneSyncService {
       result.enrichment = await this.runEnrichmentPass(es);
       // Then the opt-in write passes (both no-ops by default): mitigation
       // first (it only acts on unresolved threats), then auto-resolve.
-      result.autoMitigation = await this.runAutoMitigationPass(es, settings);
+      result.autoMitigation = await this.runAutoMitigationPass(es, client, settings);
       result.autoResolve = await this.runAutoResolvePass(es, client, settings);
       // Posture (exclusions, policies, agents) on its own, slower cadence.
       const lastPosture = svc.getSentinelOneSyncTimestamps().last_posture_sync;
@@ -488,7 +470,7 @@ export class SentinelOneSyncService {
   }
 
   /** Opt-in automatic mitigation (Response mode only — see auto-mitigation.service.ts). Never throws. */
-  async runAutoMitigationPass(es: Client, settings: SentinelOneIntegrationSettings): Promise<AutoMitigationPassResult> {
+  async runAutoMitigationPass(es: Client, client: SentinelOneClient, settings: SentinelOneIntegrationSettings): Promise<AutoMitigationPassResult> {
     let cfg: { mode: AutoMitigationPassResult['mode']; action: AutoMitigationPassResult['action'] } = { mode: 'disabled', action: 'kill' };
     try {
       cfg = this.settingsService().getSentinelOneAutoMitigation();
@@ -497,7 +479,7 @@ export class SentinelOneSyncService {
         action: cfg.action,
         permissionMode: settings.permission_mode === 'response' ? 'response' : 'read_only',
         scope: settings.scope,
-      });
+      }, client);
       const r = await service.runAutoMitigationPass();
       if (r.mode !== 'disabled') {
         console.log(`[SentinelOne-AutoMitigation] mode=${r.mode} action=${r.action} candidates=${r.candidates} mitigated=${r.mitigated} wouldMitigate=${r.wouldMitigate} errors=${r.errors.length}`);

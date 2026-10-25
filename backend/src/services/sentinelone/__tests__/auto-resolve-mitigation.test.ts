@@ -109,6 +109,27 @@ describe('SentinelOneAutoResolveService', () => {
     expect(r).toMatchObject({ wouldPatch: 1, skipped: 1 });
   });
 
+  it('HTTP 200 with affected: 0 is not a resolve: not_applied receipt, no note, no local status change', async () => {
+    const es = mockEs([threatHit('1')]);
+    const s1 = mockS1();
+    s1.updateThreatIncidentStatus.mockResolvedValueOnce({ affected: 0 });
+    const r = await new SentinelOneAutoResolveService(es as never, s1 as never, 'enabled', {}).runAutoResolvePass();
+    expect(r).toMatchObject({ patched: 0, errors: ['1: not_applied'] });
+    expect(s1.addThreatNote).not.toHaveBeenCalled();
+    const receipt = es.update.mock.calls[0][0].doc;
+    expect(receipt.f0rtika.auto_resolve_error).toBe('not_applied');
+    expect(receipt.status).toBeUndefined();
+  });
+
+  it('a malformed id is shelved with an invalid_id receipt and kept out of the live lookup', async () => {
+    const es = mockEs([threatHit('abc;rm'), threatHit('2')]);
+    const s1 = mockS1();
+    const r = await new SentinelOneAutoResolveService(es as never, s1 as never, 'enabled', {}).runAutoResolvePass();
+    expect(s1.listThreats).toHaveBeenCalledWith(expect.objectContaining({ ids: ['2'] }));
+    expect(r).toMatchObject({ patched: 1, skipped: 1 });
+    expect(es.update.mock.calls[0][0]).toMatchObject({ id: 'doc-abc;rm', doc: { f0rtika: { auto_resolve_error: 'invalid_id' } } });
+  });
+
   it('a failed note does not undo the resolve; 403 halts; 404 writes a not_found receipt; transient errors retry', async () => {
     const es = mockEs([threatHit('1'), threatHit('2'), threatHit('3'), threatHit('4')]);
     const s1 = mockS1();
@@ -129,8 +150,12 @@ describe('SentinelOneAutoResolveService', () => {
 describe('SentinelOneAutoMitigationService', () => {
   const ok = { success: true, statusCode: 200, affected: 1, audit: {} as never };
   const exec = () => ({ execute: vi.fn().mockResolvedValue(ok) });
-  const svc = (es: unknown, ex: unknown, over: Record<string, unknown> = {}) =>
-    new SentinelOneAutoMitigationService(es as never, ex as never, { mode: 'enabled', action: 'kill', permissionMode: 'response', scope: {}, ...over } as never);
+  /** Console state: every threat asked about is still unresolved and not mitigated. */
+  const openReader = () => ({
+    listThreats: vi.fn(async (p: { ids: string[] }) => ({ data: p.ids.map((id) => ({ id, threatInfo: { incidentStatus: 'unresolved', mitigationStatus: 'not_mitigated' } })) })),
+  });
+  const svc = (es: unknown, ex: unknown, over: Record<string, unknown> = {}, reader: unknown = openReader()) =>
+    new SentinelOneAutoMitigationService(es as never, ex as never, { mode: 'enabled', action: 'kill', permissionMode: 'response', scope: {}, ...over } as never, reader as never);
 
   it('off by default semantics: disabled, or not in Response mode → no ES / no action', async () => {
     for (const over of [{ mode: 'disabled' }, { permissionMode: 'read_only' }, { permissionMode: 'read_only', mode: 'dry_run' }]) {
@@ -186,6 +211,32 @@ describe('SentinelOneAutoMitigationService', () => {
     expect(ex.execute).toHaveBeenCalledTimes(1);
     expect(r.errors[0]).toMatch(/^403/);
     expect(es.update).not.toHaveBeenCalled();
+  });
+
+  it('re-reads the console first: a threat S1 mitigated, or an analyst resolved, since the last poll is left alone', async () => {
+    const hits = ['1', '2', '3'].map((id) => hit(id, { alert_id: id, source_type: 'threats', f0rtika: { achilles_test_uuid: 'uuid-1' } }));
+    const es = mockEs(hits);
+    const ex = exec();
+    const reader = { listThreats: vi.fn().mockResolvedValue({ data: [
+      { id: '1', threatInfo: { incidentStatus: 'unresolved', mitigationStatus: 'not_mitigated' } },
+      { id: '2', threatInfo: { incidentStatus: 'unresolved', mitigationStatus: 'mitigated' }, mitigationStatus: [{ action: 'kill', status: 'success' }] },
+      { id: '3', threatInfo: { incidentStatus: 'in_progress', mitigationStatus: 'not_mitigated' } },
+    ] }) };
+    const r = await svc(es, ex, {}, reader).runAutoMitigationPass();
+    expect(reader.listThreats).toHaveBeenCalledWith(expect.objectContaining({ ids: ['1', '2', '3'] }));
+    expect(r).toMatchObject({ candidates: 3, mitigated: 1, skipped: 2 });
+    expect(ex.execute).toHaveBeenCalledTimes(1);
+    expect(ex.execute.mock.calls[0][0]).toMatchObject({ threatIds: ['1'] });
+  });
+
+  it('fails closed when the live lookup fails: nothing is killed', async () => {
+    const es = mockEs([hit('1', { alert_id: '1', source_type: 'threats', f0rtika: { achilles_test_uuid: 'uuid-1' } })]);
+    const ex = exec();
+    const reader = { listThreats: vi.fn().mockRejectedValue(new Error('HTTP 503')) };
+    const r = await svc(es, ex, {}, reader).runAutoMitigationPass();
+    expect(ex.execute).not.toHaveBeenCalled();
+    expect(r).toMatchObject({ mitigated: 0, skipped: 1 });
+    expect(r.errors).toEqual(['live status: HTTP 503']);
   });
 });
 

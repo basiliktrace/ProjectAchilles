@@ -36,6 +36,8 @@ const DEFAULT_MAX_DURATION_MS = 30_000;
 
 /** Incident statuses auto-resolve may act on. Anything else (in_progress, resolved, future values) is left alone. */
 const ELIGIBLE_STATUS = 'unresolved';
+/** S1 object ids are numeric strings (the client refuses anything else). */
+const S1_ID_RE = /^\d{1,24}$/;
 
 interface Candidate {
   s1Id: string;
@@ -86,6 +88,12 @@ export class SentinelOneAutoResolveService {
       for (const c of candidates) {
         if (Date.now() - startedAt > maxDurationMs) break;
         if (!c.s1Id || !c.testUuid) { result.skipped += 1; continue; }
+        if (!S1_ID_RE.test(c.s1Id)) {
+          // Would fail the same way on every pass: shelve it.
+          result.skipped += 1;
+          await this.writeReceipt(c, mode, 'invalid_id');
+          continue;
+        }
 
         // Fail closed: act only on what the console still reports as unresolved.
         const current = live.get(`${c.sourceType}:${c.s1Id}`);
@@ -103,12 +111,17 @@ export class SentinelOneAutoResolveService {
         }
 
         try {
-          if (c.sourceType === 'threats') {
-            await this.s1Client.updateThreatIncidentStatus([c.s1Id], 'resolved');
-            await this.addNoteBestEffort(c);
-          } else {
-            await this.s1Client.updateAlertIncidentStatus([c.s1Id], 'resolved');
+          const { affected } = c.sourceType === 'threats'
+            ? await this.s1Client.updateThreatIncidentStatus([c.s1Id], 'resolved')
+            : await this.s1Client.updateAlertIncidentStatus([c.s1Id], 'resolved');
+          if (affected < 1) {
+            // HTTP 200 but nothing changed (e.g. the id is outside the token's
+            // scope): not resolved. Shelve it rather than claim success.
+            await this.writeReceipt(c, 'enabled', 'not_applied');
+            result.errors.push(`${c.s1Id}: not_applied`);
+            continue;
           }
+          if (c.sourceType === 'threats') await this.addNoteBestEffort(c);
           result.patched += 1;
           await this.writeReceipt(c, 'enabled', undefined, true);
         } catch (err) {
@@ -187,8 +200,10 @@ export class SentinelOneAutoResolveService {
    */
   private async liveStatuses(candidates: Candidate[], errors: string[]): Promise<Map<string, string>> {
     const out = new Map<string, string>();
-    const threatIds = candidates.filter((c) => c.sourceType === 'threats' && c.s1Id).map((c) => c.s1Id);
-    const alertIds = candidates.filter((c) => c.sourceType === 'cloud_detection_alerts' && c.s1Id).map((c) => c.s1Id);
+    // Malformed ids are shelved by the caller; keep them out so one can't fail the whole lookup.
+    const valid = candidates.filter((c) => S1_ID_RE.test(c.s1Id));
+    const threatIds = valid.filter((c) => c.sourceType === 'threats').map((c) => c.s1Id);
+    const alertIds = valid.filter((c) => c.sourceType === 'cloud_detection_alerts').map((c) => c.s1Id);
     if (threatIds.length > 0) {
       try {
         const res = await this.s1Client.listThreats({ ids: threatIds, limit: threatIds.length, skipCount: 'true' });
