@@ -4,13 +4,13 @@
  Certificates  ProjectAchilles CA · zone corp.example.com · no IP addresses
  Clerk         pk_test_ key for happy-cat-12.clerk.accounts.dev (development)
                secret key ••••abcd
+               first admin admin@example.com (invited after the install)
  Analytics     Self-hosted Elasticsearch · demo data: no
  Organisation  Acme Corp
  Test library  https://github.com/ubercylon8/f0_library.git (main)
                GitHub token ••••9876
  Secrets       session, encryption, CLI: generated during the install
- Settings file /opt/projectachilles/deploy.config.env (mode 600)
- 
+ ↓ more below · ↑/↓ scroll
  Unattended equivalent, once this is saved:
    sudo /opt/projectachilles/achilles-installer install --config \
      /opt/projectachilles/deploy.config.env --yes
@@ -21,4 +21,4 @@
  ┃                                                                             
  ┃                        Yes, install     Go back                            
 ────────────────────────────────────────────────────────────────────────────────
- ←/→ choose · enter confirm · esc back · ctrl+c quit
+ ↑/↓ scroll · ←/→ choose · enter confirm · esc back · ctrl+c quit

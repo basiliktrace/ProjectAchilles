@@ -157,3 +157,22 @@ func TestValidateOrgNameTooLong(t *testing.T) {
 		t.Fatalf("got %q", got)
 	}
 }
+
+// ADMIN_EMAIL is optional (configs from before it existed stay valid) but must
+// look like an address when set.
+func TestValidateAdminEmail(t *testing.T) {
+	c := base()
+	c.AdminEmail = "admin@example.com"
+	if len(c.Validate()) != 0 {
+		t.Fatal("a real address should pass")
+	}
+	c.AdminEmail = "admin"
+	if got := keys(c.Validate()); got != "ADMIN_EMAIL" {
+		t.Fatalf("got %q", got)
+	}
+	p := filepath.Join(t.TempDir(), "c.env")
+	os.WriteFile(p, []byte("ADMIN_EMAIL=ops@example.com\n"), 0o600)
+	if l, err := Load(p); err != nil || l.AdminEmail != "ops@example.com" || l.Extra("ADMIN_EMAIL") != "" {
+		t.Fatalf("load: %+v %v", l.AdminEmail, err)
+	}
+}

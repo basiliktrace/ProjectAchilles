@@ -140,6 +140,9 @@ func (r *reviewScreen) rows() []string {
 	}
 	row("Clerk", clerk)
 	row("", "secret key "+mask(c.ClerkSecretKey))
+	if c.AdminEmail != "" {
+		row("", "first admin "+c.AdminEmail+" (invited after the install)")
+	}
 
 	if c.ESMode == "cloud" {
 		row("Analytics", "Elastic Cloud · "+c.ElasticsearchCloudID)

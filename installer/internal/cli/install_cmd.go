@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"syscall"
 
+	"github.com/projectachilles/ProjectAchilles/installer/internal/clerkadmin"
 	"github.com/projectachilles/ProjectAchilles/installer/internal/config"
 	"github.com/projectachilles/ProjectAchilles/installer/internal/engine"
 	"github.com/projectachilles/ProjectAchilles/installer/internal/tui"
@@ -29,12 +30,16 @@ type installIO struct {
 	// newRunner returns an engine run of scripts/deploy-server.sh in root
 	// for cfgPath (absolute). Tests fake it.
 	newRunner func(root, cfgPath, caDir string) (engine.Starter, error)
+	// admin makes the config's ADMIN_EMAIL an admin through Clerk after a
+	// successful install; nil skips it. Tests fake it.
+	admin func(context.Context, config.Config) (clerkadmin.Result, error)
 }
 
 func init() {
 	registerInstall(defaultRegistry, installIO{
 		stdin: os.Stdin, stdout: os.Stdout, stderr: os.Stderr, getenv: os.Getenv,
 		newRunner: engineRunner,
+		admin:     clerkadmin.ForConfig,
 	})
 }
 
@@ -190,8 +195,24 @@ func unattended(ctx context.Context, sio installIO, root, cfgFile string, yes bo
 	}
 	if sio.getenv("ACHILLES_RENDER_ONLY") != "1" { // render-only says so itself
 		fmt.Fprintf(sio.stdout, "ProjectAchilles is installed: https://%s\n", c.AchillesDomain)
+		firstAdmin(ctx, sio, c)
 	}
 	return nil
+}
+
+// firstAdmin invites (or promotes) ADMIN_EMAIL. The stack is already up, so a
+// failure only warns, with the manual steps.
+func firstAdmin(ctx context.Context, sio installIO, c config.Config) {
+	if c.AdminEmail == "" || sio.admin == nil {
+		fmt.Fprintln(sio.stdout, "First admin: "+clerkadmin.ManualSteps(c.AchillesDomain))
+		return
+	}
+	r, err := sio.admin(ctx, c)
+	if err != nil {
+		fmt.Fprintf(sio.stderr, "warning: could not make %s an admin: %v\n%s\n", c.AdminEmail, err, clerkadmin.ManualSteps(c.AchillesDomain))
+		return
+	}
+	fmt.Fprintln(sio.stdout, "First admin: "+r.Message())
 }
 
 // driveEngine runs one engine run to completion, printing its events as

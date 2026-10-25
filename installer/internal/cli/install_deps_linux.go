@@ -6,6 +6,7 @@ import (
 	"net"
 	"time"
 
+	"github.com/projectachilles/ProjectAchilles/installer/internal/clerkadmin"
 	"github.com/projectachilles/ProjectAchilles/installer/internal/config"
 	"github.com/projectachilles/ProjectAchilles/installer/internal/engine"
 	"github.com/projectachilles/ProjectAchilles/installer/internal/sysprobe"
@@ -26,6 +27,7 @@ func hostDeps(root, cfgPath, caDir string, newRunner func() (engine.Starter, err
 		ConfigPath: cfgPath,
 		CADir:      caDir,
 		Now:        time.Now,
+		Admin:      clerkadmin.ForConfig,
 		Runner: func(config.Config) engine.Starter {
 			r, err := newRunner()
 			if err != nil {

@@ -10,6 +10,9 @@
                                                                                
  ┃ Clerk secret key                                                            
  ┃ > ************************                                                  
+                                                                               
+   First admin email (optional: invited as admin)                              
+   > you@example.com, or blank if the Clerk app has an admin                   
  
  ✗ fix the problem shown below first
  
@@ -17,8 +20,5 @@
  ✗ This production key belongs to clerk.other.example.org, but the server name
    achilles.corp.example.com needs a Clerk app on one of:
    clerk.achilles.corp.example.com, clerk.corp.example.com, clerk.example.com.
-
-
-
 ────────────────────────────────────────────────────────────────────────────────
  enter next field · shift+tab previous · esc back · ctrl+c quit

@@ -7,6 +7,7 @@ package tui
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -17,6 +18,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/projectachilles/ProjectAchilles/installer/internal/ca"
+	"github.com/projectachilles/ProjectAchilles/installer/internal/clerkadmin"
 	"github.com/projectachilles/ProjectAchilles/installer/internal/config"
 	"github.com/projectachilles/ProjectAchilles/installer/internal/engine"
 )
@@ -193,6 +195,13 @@ func (d *driver) passLogin(pk, sk string) {
 	d.enter()
 }
 
+// passAdmin leaves the optional first admin email blank.
+func (d *driver) passAdmin() {
+	d.t.Helper()
+	d.focus("First admin email (optional: invited as admin)")
+	d.enter()
+}
+
 func (d *driver) passAnalyticsSelf() {
 	d.t.Helper()
 	d.waitText("Where should Elasticsearch run?")
@@ -222,6 +231,7 @@ func (d *driver) toReview() string {
 	d.toCerts(testHost)
 	d.passCertsCA()
 	d.passLogin(devPK, testSK)
+	d.passAdmin()
 	d.passAnalyticsSelf()
 	d.passOrg("Acme Corp", testGHPA)
 	return d.waitText("Review", "Yes, install")
@@ -258,6 +268,7 @@ func TestLoginLiveKeyAsksAboutClerkDNS(t *testing.T) {
 	d.toCerts(testHost)
 	d.passCertsCA()
 	d.passLogin(pkFor(true, "clerk.corp.example.com"), "sk_live_abcdefghijklmnop")
+	d.passAdmin()
 	f := d.waitText("Have you published the DNS records Clerk lists?")
 	if !strings.Contains(f, "clerk.corp.example.com") {
 		t.Errorf("FAPI host not shown:\n%s", f)
@@ -283,6 +294,8 @@ func TestLoginProbeWarnsButDoesNotBlock(t *testing.T) {
 	d.focus("Clerk secret key")
 	d.typ(testSK)
 	d.enter()
+	d.focus("First admin email (optional: invited as admin)")
+	d.enter()
 	d.waitText("Where should Elasticsearch run?")
 	d.quit()
 }
@@ -301,6 +314,7 @@ func TestAnalyticsSelfDisabledLowRAM(t *testing.T) {
 	d.passNetwork(testHost, 0)
 	d.passCertsCA()
 	d.passLogin(devPK, testSK)
+	d.passAdmin()
 	f := d.waitText("Where should Elasticsearch run?", "isn't available")
 	if !strings.Contains(f, "3.0 GiB RAM") {
 		t.Errorf("RAM reason missing:\n%s", f)
@@ -327,6 +341,7 @@ func TestAnalyticsSelfWithSeed(t *testing.T) {
 	d.toCerts(testHost)
 	d.passCertsCA()
 	d.passLogin(devPK, testSK)
+	d.passAdmin()
 	d.waitText("Where should Elasticsearch run?", "Self-hosted on this server")
 	d.enter()
 	d.waitText("Load demo data?")
@@ -347,6 +362,7 @@ func TestOrgNameCounterBlocksAt57(t *testing.T) {
 	d.toCerts(testHost)
 	d.passCertsCA()
 	d.passLogin(devPK, testSK)
+	d.passAdmin()
 	d.passAnalyticsSelf()
 	d.waitText("0 / 56")
 	d.focus("Organisation name")
@@ -443,6 +459,8 @@ func TestReviewMasksExistingSecrets(t *testing.T) {
 	d.focus("Clerk publishable key")
 	d.enter() // keys pre-filled
 	d.focus("Clerk secret key")
+	d.enter()
+	d.focus("First admin email (optional: invited as admin)")
 	d.enter()
 	d.passAnalyticsSelf()
 	for _, f := range []string{"Organisation name", "Test library repository", "Test library branch", "GitHub token"} {
@@ -698,6 +716,53 @@ func TestDoneNonCAModesExplainTrust(t *testing.T) {
 	}
 }
 
+// The done screen makes ADMIN_EMAIL an admin through Clerk and says what
+// happened; without an address (or on failure) it gives the manual steps.
+func TestDoneFirstAdmin(t *testing.T) {
+	for _, tc := range []struct {
+		name, email string
+		err         error
+		want        []string
+	}{
+		{"invited", "ops@example.com", nil, []string{"Invitation sent to ops@example.com", "Then sign in at https://" + testHost}},
+		{"failed", "ops@example.com", errors.New("HTTP 401: bad key"), []string{"Could not make ops@example.com an admin", "HTTP 401: bad key", `{"role": "admin"}`}},
+		{"no email", "", nil, []string{"Sign up at https://" + testHost + "/sign-up", `{"role": "admin"}`}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			calls := 0
+			deps := Deps{RepoRoot: "/opt/projectachilles", CADir: DefaultCADir,
+				Admin: func(_ context.Context, c config.Config) (clerkadmin.Result, error) {
+					calls++
+					return clerkadmin.Result{Outcome: clerkadmin.Invited, Email: c.AdminEmail}, tc.err
+				}}
+			s := &shared{deps: deps, theme: newTheme(true), width: 100, height: 40,
+				cfg: &config.Config{TLSMode: "acme-http", AchillesDomain: testHost, AdminEmail: tc.email}}
+			dn := newDone(s)
+			cmd := dn.Init()
+			if tc.email != "" {
+				if !strings.Contains(dn.plain(), "Inviting "+tc.email) {
+					t.Errorf("no progress line before the result:\n%s", dn.plain())
+				}
+				dn.Update(cmd())
+			} else if cmd != nil {
+				t.Fatal("no ADMIN_EMAIL: nothing to run")
+			}
+			txt := strings.Join(strings.Fields(dn.plain()), " ")
+			for _, w := range tc.want {
+				if !strings.Contains(txt, w) {
+					t.Errorf("missing %q:\n%s", w, dn.plain())
+				}
+			}
+			if s.summary != dn.plain() {
+				t.Error("the terminal summary must carry the result")
+			}
+			if want := map[bool]int{true: 1, false: 0}[tc.email != ""]; calls != want {
+				t.Errorf("admin calls = %d, want %d", calls, want)
+			}
+		})
+	}
+}
+
 // The enroll command must stay on one line at any width: word-wrap breaks at
 // hyphens, and a split "--server" can't be copied. Found on a 100-column
 // terminal in the Hetzner test.
@@ -739,6 +804,9 @@ func TestFramesLaterScreens(t *testing.T) {
 	d.typ(testSK)
 	checkGolden(t, "14-login", d.waitText("reachable from this server", "This is a Clerk development key"))
 	d.enter()
+	d.focus("First admin email (optional: invited as admin)")
+	d.typ("admin@example.com")
+	d.enter()
 	checkGolden(t, "15-analytics", d.waitText("Where should Elasticsearch run?"))
 	d.enter()
 	checkGolden(t, "16-analytics-seed", d.waitText("Load demo data?"))
@@ -771,6 +839,7 @@ func TestFramesLoginLiveAndBlocked(t *testing.T) {
 	d.toCerts(testHost)
 	d.passCertsCA()
 	d.passLogin(pkFor(true, "clerk.corp.example.com"), "sk_live_abcdefghijklmnop")
+	d.passAdmin()
 	checkGolden(t, "20-login-clerk-dns", d.waitText("Have you published the DNS records Clerk lists?"))
 	d.quit()
 }
