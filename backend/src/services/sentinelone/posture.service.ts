@@ -27,6 +27,7 @@ export const POSTURE_INTERVAL_MS = 6 * 60 * 60 * 1000; // like Defender's score/
 const MAX_SITES = 100;
 const MAX_GROUP_POLICIES = 200;
 const MAX_AGENTS = 50_000;
+const AGENT_PAGE_SIZE = 5_000;
 const BULK_CHUNK = 500;
 
 type Raw = Record<string, unknown>;
@@ -461,6 +462,37 @@ export class SentinelOnePostureService {
   }
 
   /**
+   * Every stored agent (up to MAX_AGENTS), keyed by upper-cased computer
+   * name. Paged with search_after: a single search stops at
+   * max_result_window (10,000), which would count managed hosts in larger
+   * fleets as "not S1-managed".
+   */
+  private async loadAgentsByHostname(): Promise<Map<string, Raw>> {
+    const agents = new Map<string, Raw>();
+    let searchAfter: unknown[] | undefined;
+    for (let loaded = 0; loaded < MAX_AGENTS;) {
+      const res = await this.es.search({
+        index: SENTINELONE_POSTURE_INDEX,
+        size: AGENT_PAGE_SIZE,
+        query: { term: { doc_type: 'agent' } },
+        _source: ['computer_name', 'os_type', 'account_id', 'site_id', 'group_id'],
+        sort: [{ agent_id: 'asc' }],
+        ...(searchAfter ? { search_after: searchAfter } : {}),
+      } as any).catch(missingIndex);
+      const page = ((res as any)?.hits?.hits ?? []) as Array<{ _source?: Raw; sort?: unknown[] }>;
+      for (const h of page) {
+        const name = str(h._source?.computer_name);
+        if (name && h._source) agents.set(name.toUpperCase(), h._source);
+      }
+      loaded += page.length;
+      if (page.length < AGENT_PAGE_SIZE) break;
+      searchAfter = page[page.length - 1].sort;
+      if (!searchAfter) break;
+    }
+    return agents;
+  }
+
+  /**
    * Tests SentinelOne missed (exit 101, no S1 detection) on S1-managed hosts
    * whose on-disk path is covered by a path exclusion that applies to the host.
    */
@@ -470,17 +502,7 @@ export class SentinelOnePostureService {
     for (const x of exclusions) byType[x.exclusion_type] = (byType[x.exclusion_type] ?? 0) + 1;
     const pathExclusions = exclusions.filter((x) => x.exclusion_type === 'path');
 
-    const agentsRes = await this.es.search({
-      index: SENTINELONE_POSTURE_INDEX,
-      size: 10_000,
-      query: { term: { doc_type: 'agent' } },
-      _source: ['computer_name', 'os_type', 'account_id', 'site_id', 'group_id'],
-    } as any).catch(missingIndex);
-    const agents = new Map<string, Raw>();
-    for (const a of hitsOf(agentsRes)) {
-      const name = str(a.computer_name);
-      if (name) agents.set(name.toUpperCase(), a);
-    }
+    const agents = await this.loadAgentsByHostname();
 
     const range = windowRange('routing.event_time', window);
     const must: QueryDslQueryContainer[] = [{ term: { 'event.ERROR': 101 } }];

@@ -163,6 +163,22 @@ describe('SentinelOnePostureService.getExclusionGaps', () => {
     expect(resultsQuery).toContain('"f0rtika.sentinelone_detected":true');
   });
 
+  it('pages through more agents than one search can return (max_result_window is 10,000)', async () => {
+    const fleet = Array.from({ length: 12_001 }, (_, i) => ({ _source: { computer_name: `host-${i}`, os_type: 'windows' }, sort: [String(i).padStart(6, '0')] }));
+    const search = vi.fn().mockImplementation(async (req: { index: string; query: unknown; size: number; search_after?: string[] }) => {
+      if (req.index === 'achilles-results-*') {
+        return { hits: { hits: [{ _source: { routing: { hostname: 'host-12000' }, f0rtika: { test_uuid: 'aaa' } } }] } };
+      }
+      if (JSON.stringify(req.query).includes('"exclusion"')) return { hits: { hits: [] } };
+      const start = req.search_after ? Number(req.search_after[0]) + 1 : 0;
+      return { hits: { hits: fleet.slice(start, start + req.size) } };
+    });
+    const r = await new SentinelOnePostureService({ search } as never, {} as never).getExclusionGaps('achilles-results-*', null);
+    expect(r).toMatchObject({ s1Agents: 12_001, missedOnS1Hosts: 1, missedOnOtherHosts: 0 });
+    const agentCalls = search.mock.calls.filter((c) => JSON.stringify(c[0].query).includes('"agent"'));
+    expect(agentCalls.every((c) => c[0].size <= 10_000)).toBe(true);
+  });
+
   it('a missing posture index reads as empty', async () => {
     const search = vi.fn().mockRejectedValue(Object.assign(new Error('index_not_found'), { meta: { statusCode: 404 } }));
     const svc = new SentinelOnePostureService({ search } as never, {} as never);
