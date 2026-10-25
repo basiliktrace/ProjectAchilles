@@ -106,6 +106,9 @@ export function SentinelOneConfig({ onStatusChange }: SentinelOneConfigProps) {
         } else {
           onStatusChange?.(false);
         }
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Failed to load SentinelOne settings');
+        onStatusChange?.(false);
       } finally {
         setLoading(false);
       }

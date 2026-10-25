@@ -18,7 +18,7 @@ import { sentinelOneApi } from '@/services/api/sentinelone';
 
 export function IntegrationsTab() {
   const { configured: analyticsConfigured } = useAnalyticsAuth();
-  const { preExecutionNotices } = useCapabilities();
+  const { preExecutionNotices, sentinelone } = useCapabilities();
   const [noticesStatus, setNoticesStatus] = useState<IntegrationStatus>('not-configured');
   const handleNoticesStatusChange = useCallback((enabled: boolean) => {
     setNoticesStatus(enabled ? 'connected' : 'not-configured');
@@ -72,14 +72,17 @@ export function IntegrationsTab() {
       setCrowdStrikeStatus(settings.configured ? 'connected' : 'not-configured');
     }).catch(() => {});
 
-    sentinelOneApi.getSettings().then((settings) => {
-      setSentinelOneStatus(settings.configured ? 'connected' : 'not-configured');
-    }).catch(() => {});
-
     alertsApi.getAlertSettings().then((settings) => {
       setAlertsStatus(settings.configured ? 'connected' : 'not-configured');
     }).catch(() => {});
   }, []);
+
+  useEffect(() => {
+    if (!sentinelone) return;
+    sentinelOneApi.getSettings().then((settings) => {
+      setSentinelOneStatus(settings.configured ? 'connected' : 'not-configured');
+    }).catch(() => {});
+  }, [sentinelone]);
 
   return (
     <div className="grid gap-4 [grid-template-columns:repeat(auto-fit,minmax(280px,1fr))]">
@@ -119,14 +122,16 @@ export function IntegrationsTab() {
         <CrowdStrikeConfig onStatusChange={handleCrowdStrikeStatusChange} />
       </IntegrationGridCard>
 
-      <IntegrationGridCard
-        icon={SentinelOneLogo}
-        title="SentinelOne"
-        description="Threats and detection alerts via the SentinelOne API, with optional response actions"
-        status={sentinelOneStatus}
-      >
-        <SentinelOneConfig onStatusChange={handleSentinelOneStatusChange} />
-      </IntegrationGridCard>
+      {sentinelone && (
+        <IntegrationGridCard
+          icon={SentinelOneLogo}
+          title="SentinelOne"
+          description="Threats and detection alerts via the SentinelOne API, with opt-in auto-resolve"
+          status={sentinelOneStatus}
+        >
+          <SentinelOneConfig onStatusChange={handleSentinelOneStatusChange} />
+        </IntegrationGridCard>
+      )}
 
       <IntegrationGridCard
         icon={Bell}

@@ -311,6 +311,7 @@ async function startServer() {
       agentBuild: true,
       preExecutionNotices: true,
       campaigns: true,
+      sentinelone: true,
       platform: 'docker',
     });
   });
