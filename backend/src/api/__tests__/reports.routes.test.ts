@@ -27,14 +27,11 @@ vi.mock('../../services/analytics/settings.js', () => ({
   SettingsService: class { getSettings = mockGetSettings; },
 }));
 vi.mock('../../services/integrations/settings.js', () => ({
-  IntegrationsSettingsService: class { isDefenderConfigured = () => true; isCrowdStrikeConfigured = () => false; },
+  IntegrationsSettingsService: class { isDefenderConfigured = () => true; isCrowdStrikeConfigured = () => false; isSentinelOneConfigured = () => false; },
 }));
 
 const mockGenerate = vi.fn();
 const constructed: unknown[][] = [];
-vi.mock('../../services/sentinelone/settings.js', () => ({
-  SentinelOneSettingsService: class { isConfigured = () => false; },
-}));
 vi.mock('../../services/reports/executionReport.service.js', () => ({
   ExecutionReportService: class {
     constructor(...args: unknown[]) { constructed.push(args); }

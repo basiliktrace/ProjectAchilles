@@ -6,6 +6,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const mockGetAlertSettings = vi.fn().mockReturnValue(null);
 const mockIsAlertingConfigured = vi.fn().mockReturnValue(false);
 const mockIsDefenderConfigured = vi.fn().mockReturnValue(false);
+const mockS1Configured = vi.fn().mockReturnValue(false);
 const mockSaveAlertSettings = vi.fn();
 
 vi.mock('../../integrations/settings.js', () => ({
@@ -14,6 +15,7 @@ vi.mock('../../integrations/settings.js', () => ({
       getAlertSettings: mockGetAlertSettings,
       isAlertingConfigured: mockIsAlertingConfigured,
       isDefenderConfigured: mockIsDefenderConfigured,
+      isSentinelOneConfigured: mockS1Configured,
       saveAlertSettings: mockSaveAlertSettings,
     };
   },
@@ -96,12 +98,6 @@ vi.mock('../email.service.js', () => ({
 // ---------------------------------------------------------------------------
 // Mock: SentinelOne settings + posture snapshot (agent health counts)
 // ---------------------------------------------------------------------------
-const mockS1Configured = vi.fn().mockReturnValue(false);
-vi.mock('../../sentinelone/settings.js', () => ({
-  SentinelOneSettingsService: function () {
-    return { isConfigured: mockS1Configured };
-  },
-}));
 const mockGetLatestAgentHealth = vi.fn().mockResolvedValue(null);
 vi.mock('../../sentinelone/posture.service.js', () => ({
   SentinelOnePostureService: function () {

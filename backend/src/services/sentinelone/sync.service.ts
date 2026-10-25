@@ -9,7 +9,8 @@
 
 import type { Client } from '@elastic/elasticsearch';
 import { SentinelOneClient } from './s1-client.js';
-import { SentinelOneSettingsService, S1_DEFAULT_BACKFILL_DAYS, S1_DEFAULT_POLL_INTERVAL_MINUTES, S1_DEFAULT_SOURCES, S1_MAX_BACKFILL_DAYS } from './settings.js';
+import { IntegrationsSettingsService } from '../integrations/settings.js';
+import { S1_DEFAULT_BACKFILL_DAYS, S1_DEFAULT_POLL_INTERVAL_MINUTES, S1_DEFAULT_SOURCES, S1_MAX_BACKFILL_DAYS } from './defaults.js';
 import { ensureSentinelOneIndex, SENTINELONE_INDEX } from './index-management.js';
 import { SettingsService } from '../analytics/settings.js';
 import { createEsClient } from '../analytics/client.js';
@@ -252,8 +253,8 @@ export class SentinelOneSyncService {
     inProgress: false,
   };
 
-  private settingsService(): SentinelOneSettingsService {
-    return new SentinelOneSettingsService();
+  private settingsService(): IntegrationsSettingsService {
+    return new IntegrationsSettingsService();
   }
 
   private getEsClient(): Client {
@@ -265,7 +266,7 @@ export class SentinelOneSyncService {
   /** True when the configured polling interval has elapsed since the last attempt. */
   isDue(now = Date.now()): boolean {
     if (this.status.inProgress) return false;
-    const settings = this.settingsService().getSettings();
+    const settings = this.settingsService().getSentinelOneSettings();
     if (!settings?.configured) return false;
     const intervalMs = Math.max(1, settings.poll_interval_minutes ?? S1_DEFAULT_POLL_INTERVAL_MINUTES) * 60_000;
     if (!this.status.lastAttemptAt) return true;
@@ -282,15 +283,15 @@ export class SentinelOneSyncService {
     this.status.lastAttemptAt = timestamp;
     try {
       const svc = this.settingsService();
-      const settings = svc.getSettings();
-      const creds = svc.getCredentials();
+      const settings = svc.getSentinelOneSettings();
+      const creds = svc.getSentinelOneCredentials();
       if (!settings || !creds) throw new Error('SentinelOne integration is not configured');
 
       const client = new SentinelOneClient(creds);
       const es = this.getEsClient();
       await ensureSentinelOneIndex();
 
-      const checkpoints = svc.getCheckpoints();
+      const checkpoints = svc.getSentinelOneSyncTimestamps();
       const versionOk = checkpoints.sync_version === SENTINELONE_SYNC_VERSION;
       this.status.lastThreatSync = versionOk ? checkpoints.last_threat_sync ?? null : null;
       this.status.lastAlertSync = versionOk ? checkpoints.last_alert_sync ?? null : null;
@@ -305,7 +306,7 @@ export class SentinelOneSyncService {
         result.cloud_detection_alerts = await this.syncSource('cloud_detection_alerts', client, es, settings, this.status.lastAlertSync);
       }
 
-      svc.saveCheckpoints({
+      svc.saveSentinelOneSyncTimestamps({
         last_threat_sync: this.status.lastThreatSync ?? undefined,
         last_alert_sync: this.status.lastAlertSync ?? undefined,
         sync_version: SENTINELONE_SYNC_VERSION,
@@ -318,13 +319,13 @@ export class SentinelOneSyncService {
       result.autoMitigation = await this.runAutoMitigationPass(es, settings);
       result.autoResolve = await this.runAutoResolvePass(es, client, settings);
       // Posture (exclusions, policies, agents) on its own, slower cadence.
-      const lastPosture = svc.getCheckpoints().last_posture_sync;
+      const lastPosture = svc.getSentinelOneSyncTimestamps().last_posture_sync;
       if (!lastPosture || Date.now() - Date.parse(lastPosture) >= POSTURE_INTERVAL_MS) {
         result.posture = await this.runPosturePass(es, client, settings);
         // Permission errors (403 on a scope) don't heal within minutes, so only a
         // pass that couldn't start (index unavailable / pass threw) retries next sync.
         if (!result.posture.errors.some((e) => e.startsWith('index:') || e.startsWith('pass:'))) {
-          svc.saveCheckpoints({ last_posture_sync: new Date().toISOString() });
+          svc.saveSentinelOneSyncTimestamps({ last_posture_sync: new Date().toISOString() });
         }
       }
 
@@ -448,7 +449,7 @@ export class SentinelOneSyncService {
       scanned: 0, detected: 0, stageDetected: 0, skipped: 0, batches: 0, alertsMarkedCorrelated: 0, errors, durationMs: 0,
     });
     try {
-      if (!this.settingsService().getSettings()?.configured) return empty();
+      if (!this.settingsService().getSentinelOneSettings()?.configured) return empty();
       const client = es ?? this.getEsClient();
       const indexPattern = new SettingsService().getSettings().indexPattern;
       const service = new CrowdStrikeEnrichmentService(client, indexPattern, {
@@ -474,7 +475,7 @@ export class SentinelOneSyncService {
   async runAutoMitigationPass(es: Client, settings: SentinelOneIntegrationSettings): Promise<AutoMitigationPassResult> {
     let cfg: { mode: AutoMitigationPassResult['mode']; action: AutoMitigationPassResult['action'] } = { mode: 'disabled', action: 'kill' };
     try {
-      cfg = this.settingsService().getAutoMitigation();
+      cfg = this.settingsService().getSentinelOneAutoMitigation();
       const service = new SentinelOneAutoMitigationService(es, new SentinelOneResponseService(), {
         mode: cfg.mode,
         action: cfg.action,
@@ -495,7 +496,7 @@ export class SentinelOneSyncService {
   async runAutoResolvePass(es: Client, client: SentinelOneClient, settings: SentinelOneIntegrationSettings): Promise<AutoResolvePassResult> {
     let mode: AutoResolvePassResult['mode'] = 'disabled';
     try {
-      mode = this.settingsService().getAutoResolveMode();
+      mode = this.settingsService().getSentinelOneAutoResolveMode();
       const r = await new SentinelOneAutoResolveService(es, client, mode, settings.scope).runAutoResolvePass();
       if (r.mode !== 'disabled') {
         console.log(`[SentinelOne-AutoResolve] mode=${r.mode} candidates=${r.candidates} resolved=${r.patched} wouldResolve=${r.wouldPatch} errors=${r.errors.length}`);
@@ -523,7 +524,7 @@ export class SentinelOneSyncService {
 
   /** Force the next run to redo the initial backfill. */
   resetCheckpoints(): void {
-    this.settingsService().resetCheckpoints();
+    this.settingsService().resetSentinelOneSyncTimestamps();
     this.status.lastThreatSync = null;
     this.status.lastAlertSync = null;
   }

@@ -22,7 +22,7 @@ import {
   SentinelOneAutoResolveModeSchema,
   SentinelOneAutoMitigationSchema,
 } from '../schemas/sentinelone.schemas.js';
-import { SentinelOneSettingsService } from '../services/sentinelone/settings.js';
+import { IntegrationsSettingsService } from '../services/integrations/settings.js';
 import { SentinelOneClient, normalizeSentinelOneBaseUrl } from '../services/sentinelone/s1-client.js';
 import { SentinelOneSyncService } from '../services/sentinelone/sync.service.js';
 import { SentinelOneResponseService } from '../services/sentinelone/response.service.js';
@@ -36,8 +36,8 @@ router.use(requireClerkAuth());
 export const sentinelOneSyncService = new SentinelOneSyncService();
 export const sentinelOneResponseService = new SentinelOneResponseService();
 
-function getSettingsService(req: Request): SentinelOneSettingsService {
-  return new SentinelOneSettingsService(getUserOrgId((req as any).auth));
+function getSettingsService(req: Request): IntegrationsSettingsService {
+  return new IntegrationsSettingsService(getUserOrgId((req as any).auth));
 }
 
 function actorOf(req: Request): { userId: string; orgId?: string } {
@@ -63,21 +63,21 @@ async function checkBaseUrl(raw: string): Promise<string> {
 
 /** GET /api/integrations/sentinelone — masked settings (token never returned). */
 router.get('/', requirePermission('integrations:read'), (req, res) => {
-  res.json(getSettingsService(req).getMasked());
+  res.json(getSettingsService(req).getSentinelOneSettingsMasked());
 });
 
 /** POST /api/integrations/sentinelone — save settings (partial update). */
 router.post('/', requirePermission('integrations:write'), validate(SentinelOneSettingsSchema), asyncHandler(async (req, res) => {
   const svc = getSettingsService(req);
   const body = req.body as Record<string, any>;
-  const isEdit = svc.isConfigured();
+  const isEdit = svc.isSentinelOneConfigured();
   if (!isEdit && (!body.base_url || !body.api_token)) {
     throw new AppError('base_url and api_token are required for initial setup', 400);
   }
   if (body.base_url) body.base_url = await checkBaseUrl(body.base_url);
 
   try {
-    svc.saveSettings(body);
+    svc.saveSentinelOneSettings(body);
   } catch (err) {
     throw new AppError(err instanceof Error ? err.message : String(err), 400);
   }
@@ -93,7 +93,7 @@ router.post('/', requirePermission('integrations:write'), validate(SentinelOneSe
 /** DELETE /api/integrations/sentinelone — remove stored settings. */
 router.delete('/', requirePermission('integrations:write'), asyncHandler(async (req, res) => {
   try {
-    getSettingsService(req).deleteSettings();
+    getSettingsService(req).deleteSentinelOneSettings();
   } catch (err) {
     throw new AppError(err instanceof Error ? err.message : String(err), 400);
   }
@@ -103,7 +103,7 @@ router.delete('/', requirePermission('integrations:write'), asyncHandler(async (
 /** POST /api/integrations/sentinelone/test — authenticated read against the console. */
 router.post('/test', requirePermission('integrations:write'), validate(SentinelOneTestSchema), asyncHandler(async (req, res) => {
   const { base_url, api_token, scope } = req.body as { base_url?: string; api_token?: string; scope?: { account_ids?: string[]; site_ids?: string[] } };
-  const stored = getSettingsService(req).getCredentials();
+  const stored = getSettingsService(req).getSentinelOneCredentials();
   const effectiveUrl = base_url || stored?.base_url;
   const effectiveToken = api_token || stored?.api_token;
   if (!effectiveUrl || !effectiveToken) {
@@ -128,7 +128,7 @@ router.post('/test', requirePermission('integrations:write'), validate(SentinelO
 
 /** POST /api/integrations/sentinelone/sync — manual sync ({ reset: true } re-runs the backfill). */
 router.post('/sync', requirePermission('integrations:write'), validate(SentinelOneSyncSchema), asyncHandler(async (req, res) => {
-  if (!new SentinelOneSettingsService().isConfigured()) {
+  if (!new IntegrationsSettingsService().isSentinelOneConfigured()) {
     throw new AppError('SentinelOne integration is not configured', 400);
   }
   if (req.body?.reset) sentinelOneSyncService.resetCheckpoints();
@@ -251,8 +251,8 @@ router.get('/auto-resolve/status', requirePermission('integrations:read'), async
   res.json({
     success: true,
     data: {
-      mode: svc.getAutoResolveMode(),
-      permission_mode: svc.getPermissionMode(),
+      mode: svc.getSentinelOneAutoResolveMode(),
+      permission_mode: svc.getSentinelOnePermissionMode(),
       counts: await receiptCounts('auto_resolved', 'auto_resolved_at'),
       lastAutoResolve: sentinelOneSyncService.getSyncStatus().lastSyncResult?.autoResolve ?? null,
     },
@@ -263,7 +263,7 @@ router.get('/auto-resolve/status', requirePermission('integrations:read'), async
 router.put('/auto-resolve/mode', requirePermission('integrations:write'), validate(SentinelOneAutoResolveModeSchema), asyncHandler(async (req, res) => {
   const { mode } = req.body as { mode: 'disabled' | 'dry_run' | 'enabled' };
   try {
-    getSettingsService(req).setAutoResolveMode(mode);
+    getSettingsService(req).setSentinelOneAutoResolveMode(mode);
   } catch (err) {
     throw new AppError(err instanceof Error ? err.message : String(err), 400);
   }
@@ -281,8 +281,8 @@ router.get('/auto-mitigation/status', requirePermission('integrations:read'), as
   res.json({
     success: true,
     data: {
-      ...svc.getAutoMitigation(),
-      permission_mode: svc.getPermissionMode(),
+      ...svc.getSentinelOneAutoMitigation(),
+      permission_mode: svc.getSentinelOnePermissionMode(),
       counts: await receiptCounts('auto_mitigated', 'auto_mitigated_at'),
       lastAutoMitigation: sentinelOneSyncService.getSyncStatus().lastSyncResult?.autoMitigation ?? null,
     },
@@ -297,7 +297,7 @@ router.get('/auto-mitigation/status', requirePermission('integrations:read'), as
 router.put('/auto-mitigation', requirePermission('integrations:write'), validate(SentinelOneAutoMitigationSchema), asyncHandler(async (req, res) => {
   let data;
   try {
-    data = getSettingsService(req).setAutoMitigation(req.body);
+    data = getSettingsService(req).setSentinelOneAutoMitigation(req.body);
   } catch (err) {
     throw new AppError(err instanceof Error ? err.message : String(err), 400);
   }

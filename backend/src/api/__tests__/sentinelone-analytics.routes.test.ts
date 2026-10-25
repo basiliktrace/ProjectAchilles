@@ -8,8 +8,8 @@ vi.mock('../../middleware/clerk.middleware.js', () => ({
 }));
 
 let configured = true;
-vi.mock('../../services/sentinelone/settings.js', () => ({
-  SentinelOneSettingsService: class { isConfigured = () => configured; },
+vi.mock('../../services/integrations/settings.js', () => ({
+  IntegrationsSettingsService: class { isSentinelOneConfigured = () => configured; },
 }));
 
 const mocks = {

@@ -5,7 +5,6 @@ import { IntegrationsSettingsService } from '../integrations/settings.js';
 import { SettingsService } from '../analytics/settings.js';
 import { ElasticsearchService } from '../analytics/elasticsearch.js';
 import { DefenderAnalyticsService } from '../defender/analytics.service.js';
-import { SentinelOneSettingsService } from '../sentinelone/settings.js';
 import { SentinelOnePostureService } from '../sentinelone/posture.service.js';
 import { createEsClient } from '../analytics/client.js';
 import { sendSlackAlert } from './slack.service.js';
@@ -150,7 +149,7 @@ export class AlertsService {
       [t.s1_detect_only_agents_max, 'detect_only', 'SentinelOne detect-only agents'],
       [t.s1_outdated_agents_max, 'outdated', 'SentinelOne outdated agents'],
     ];
-    if (s1Checks.some(([max]) => max != null) && new SentinelOneSettingsService().isConfigured()) {
+    if (s1Checks.some(([max]) => max != null) && new IntegrationsSettingsService().isSentinelOneConfigured()) {
       try {
         const counts = await new SentinelOnePostureService(createEsClient(esSettings), {} as never).getLatestAgentHealth();
         for (const [max, key, metric] of s1Checks) {

@@ -2,6 +2,7 @@
 
 import type { AutoResolveMode } from './defender.js';
 import type { CrowdStrikeRegion, CrowdStrikeZtaStatus } from './crowdstrike.js';
+import type { SentinelOneIntegrationSettings, SentinelOneSyncState } from './sentinelone.js';
 export type { AutoResolveMode };
 export type { CrowdStrikeRegion };
 
@@ -152,6 +153,7 @@ export interface OrgIntegrationSettings {
   azure?: AzureIntegrationSettings;
   defender?: DefenderIntegrationSettings;
   crowdstrike?: CrowdStrikeIntegrationSettings;
+  sentinelone?: SentinelOneIntegrationSettings;
   alerts?: AlertSettings;
   pre_execution_notices?: PreExecutionNoticeSettings;
 }
@@ -184,6 +186,9 @@ export interface IntegrationsSettings {
   azure?: AzureIntegrationSettings;
   defender?: DefenderIntegrationSettings;
   crowdstrike?: CrowdStrikeIntegrationSettings;
+  sentinelone?: SentinelOneIntegrationSettings;
+  /** SentinelOne checkpoints and toggles when the credentials come from env vars. */
+  sentinelone_sync?: SentinelOneSyncState;
   alerts?: AlertSettings;
   pre_execution_notices?: PreExecutionNoticeSettings;
   /** Per-org overrides. Key is the Clerk org_id. */

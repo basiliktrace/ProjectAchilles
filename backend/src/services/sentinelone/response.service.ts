@@ -7,7 +7,7 @@
 // (best-effort) and logged.
 
 import { SentinelOneClient, SentinelOnePermissionError, SentinelOneApiError } from './s1-client.js';
-import { SentinelOneSettingsService } from './settings.js';
+import { IntegrationsSettingsService } from '../integrations/settings.js';
 import { ensureSentinelOneIndex, SENTINELONE_INDEX } from './index-management.js';
 import { SettingsService } from '../analytics/settings.js';
 import { createEsClient } from '../analytics/client.js';
@@ -32,8 +32,7 @@ export class SentinelOneResponseService {
     action: SentinelOneResponseAction,
     actor: { userId: string; orgId?: string },
   ): Promise<ResponseActionOutcome> {
-    const settingsSvc = new SentinelOneSettingsService(actor.orgId);
-    const creds = settingsSvc.getCredentials();
+    const creds = new IntegrationsSettingsService(actor.orgId).getSentinelOneCredentials();
     const targetIds = action.threatIds;
 
     const audit: SentinelOneResponseAuditDoc = {

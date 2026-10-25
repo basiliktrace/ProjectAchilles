@@ -23,19 +23,15 @@ vi.mock('../s1-client.js', () => ({
 let mockSettings: Record<string, unknown> | null;
 let mockCheckpoints: Record<string, unknown>;
 const mockSaveCheckpoints = vi.fn();
-vi.mock('../settings.js', () => ({
-  S1_DEFAULT_BACKFILL_DAYS: 365,
-  S1_DEFAULT_POLL_INTERVAL_MINUTES: 5,
-  S1_DEFAULT_SOURCES: ['threats', 'cloud_detection_alerts'],
-  S1_MAX_BACKFILL_DAYS: 365,
-  SentinelOneSettingsService: class {
-    getSettings = () => mockSettings;
-    getCredentials = () => mockSettings ? { base_url: 'https://acme.sentinelone.net', api_token: 't'.repeat(30), permission_mode: 'read_only' } : null;
-    getCheckpoints = () => mockCheckpoints;
-    saveCheckpoints = mockSaveCheckpoints;
-    resetCheckpoints = vi.fn();
-    getAutoMitigation = () => mockAutoMitigation;
-    getAutoResolveMode = () => mockAutoResolveMode;
+vi.mock('../../integrations/settings.js', () => ({
+  IntegrationsSettingsService: class {
+    getSentinelOneSettings = () => mockSettings;
+    getSentinelOneCredentials = () => mockSettings ? { base_url: 'https://acme.sentinelone.net', api_token: 't'.repeat(30), permission_mode: 'read_only' } : null;
+    getSentinelOneSyncTimestamps = () => mockCheckpoints;
+    saveSentinelOneSyncTimestamps = mockSaveCheckpoints;
+    resetSentinelOneSyncTimestamps = vi.fn();
+    getSentinelOneAutoMitigation = () => mockAutoMitigation;
+    getSentinelOneAutoResolveMode = () => mockAutoResolveMode;
   },
 }));
 

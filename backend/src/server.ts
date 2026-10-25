@@ -524,12 +524,21 @@ function startBackgroundJobs(httpServer?: http.Server) {
   const logSentinelOneError = (err: unknown) => {
     console.warn('⚠ SentinelOne sync failed:', err instanceof Error ? err.message : err);
   };
-  if (sentinelOneSyncService.isDue()) {
+  // A throw here would be an uncaught exception inside setInterval.
+  const isSentinelOneDue = () => {
+    try {
+      return sentinelOneSyncService.isDue();
+    } catch (err) {
+      logSentinelOneError(err);
+      return false;
+    }
+  };
+  if (isSentinelOneDue()) {
     console.log('🛡  SentinelOne integration configured — starting background sync');
     sentinelOneSyncService.syncAll().catch(logSentinelOneError);
   }
   const sentinelOneInterval = setInterval(() => {
-    if (!sentinelOneSyncService.isDue()) return;
+    if (!isSentinelOneDue()) return;
     sentinelOneSyncService.syncAll().catch(logSentinelOneError);
   }, 60_000);
 

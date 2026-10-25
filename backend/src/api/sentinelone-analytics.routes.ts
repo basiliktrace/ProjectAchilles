@@ -6,7 +6,7 @@
 import { Router } from 'express';
 import { requireClerkAuth, requirePermission } from '../middleware/clerk.middleware.js';
 import { asyncHandler, AppError } from '../middleware/error.middleware.js';
-import { SentinelOneSettingsService } from '../services/sentinelone/settings.js';
+import { IntegrationsSettingsService } from '../services/integrations/settings.js';
 import { SentinelOneAnalyticsService } from '../services/sentinelone/analytics.service.js';
 import {
   parseAlertSource,
@@ -35,7 +35,7 @@ router.use(requireClerkAuth());
 const analyticsService = new SentinelOneAnalyticsService();
 
 router.use((_req, _res, next) => {
-  if (!new SentinelOneSettingsService().isConfigured()) {
+  if (!new IntegrationsSettingsService().isSentinelOneConfigured()) {
     next(new AppError('SentinelOne integration is not configured', 400));
     return;
   }

@@ -3,7 +3,6 @@ import { requireClerkAuth, requirePermission, getUserOrgId, validateRequestOrgId
 import { asyncHandler, AppError } from '../middleware/error.middleware.js';
 import { SettingsService } from '../services/analytics/settings.js';
 import { IntegrationsSettingsService } from '../services/integrations/settings.js';
-import { SentinelOneSettingsService } from '../services/sentinelone/settings.js';
 import { ExecutionReportService } from '../services/reports/executionReport.service.js';
 import { SbReportService, parseSbReportWindow } from '../services/reports/sbReport.service.js';
 
@@ -86,7 +85,7 @@ router.get('/executions', requirePermission('analytics:dashboards:read'), asyncH
     vendors: {
       defender: integrations.isDefenderConfigured(),
       crowdstrike: integrations.isCrowdStrikeConfigured(),
-      sentinelone: new SentinelOneSettingsService().isConfigured(),
+      sentinelone: integrations.isSentinelOneConfigured(),
     },
   });
 

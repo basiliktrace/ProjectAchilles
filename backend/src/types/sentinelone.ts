@@ -10,8 +10,8 @@ export type { AutoResolveMode };
  * Permission mode for a SentinelOne integration.
  *  - read_only: only GET extraction of threats/alerts. Every non-GET request
  *    is refused by the client itself (server-side), not just hidden in the UI.
- *  - response:  read_only + response actions (threat mitigation, network
- *    isolation) triggered from the ProjectAchilles console.
+ *  - response:  read_only + the writes of the opt-in auto-resolve (incident
+ *    status / notes) and automatic-mitigation (kill / quarantine) passes.
  */
 export type SentinelOnePermissionMode = 'read_only' | 'response';
 
@@ -77,6 +77,24 @@ export interface SentinelOneIntegrationSettings {
   auto_mitigation?: SentinelOneAutoMitigationSettings;
   /** Last posture pass (exclusions, policies, agents) — ISO timestamp. */
   last_posture_sync?: string;
+}
+
+/** Sync checkpoints (never credentials). */
+export interface SentinelOneSyncCheckpoints {
+  last_threat_sync?: string;
+  last_alert_sync?: string;
+  sync_version?: number;
+  last_posture_sync?: string;
+}
+
+/**
+ * Standalone `sentinelone_sync` key in integrations.json, used when the
+ * credentials come from env vars so the file never holds a section that would
+ * shadow them: checkpoints plus the non-secret automation toggles.
+ */
+export interface SentinelOneSyncState extends SentinelOneSyncCheckpoints {
+  auto_resolve_mode?: AutoResolveMode;
+  auto_mitigation?: SentinelOneAutoMitigationSettings;
 }
 
 /** Raw credentials handed to the client. */

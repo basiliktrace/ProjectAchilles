@@ -10,6 +10,25 @@ import type { AutoResolveMode } from '../../types/defender.js';
 import type { CrowdStrikeRegion, CrowdStrikeZtaStatus } from '../../types/crowdstrike.js';
 import { CROWDSTRIKE_REGION_BASE_URLS, DEFAULT_CROWDSTRIKE_REGION } from '../crowdstrike/falcon-client.js';
 import { isMaskedSecret } from '../alerts/testEmailSettings.js';
+import type {
+  SentinelOneIntegrationSettings,
+  SentinelOneCredentials,
+  SentinelOnePermissionMode,
+  SentinelOneSettingsMasked,
+  SentinelOneAutoMitigationSettings,
+  SentinelOneSyncCheckpoints,
+  SentinelOneSyncState,
+} from '../../types/sentinelone.js';
+import { normalizeSentinelOneBaseUrl } from '../sentinelone/s1-client.js';
+import {
+  S1_DEFAULT_POLL_INTERVAL_MINUTES,
+  S1_DEFAULT_BACKFILL_DAYS,
+  S1_DEFAULT_SOURCES,
+  S1_AUTO_RESOLVE_MODES,
+  S1_DEFAULT_AUTO_RESOLVE_MODE,
+  S1_AUTO_MITIGATION_ACTIONS,
+  normalizeAutoMitigation,
+} from '../sentinelone/defaults.js';
 
 const AUTO_RESOLVE_MODES: ReadonlyArray<AutoResolveMode> = ['disabled', 'dry_run', 'enabled'] as const;
 const DEFAULT_AUTO_RESOLVE_MODE: AutoResolveMode = 'disabled';
@@ -229,11 +248,21 @@ export class IntegrationsSettingsService {
       };
 
       decryptCrowdStrike(settings.crowdstrike);
+
+      // Decrypt a single SentinelOne section in place (top-level or per-org).
+      const decryptSentinelOne = (s1: SentinelOneIntegrationSettings | undefined) => {
+        if (s1?.api_token?.startsWith('enc:')) {
+          s1.api_token = this.decrypt(s1.api_token.slice(4));
+        }
+      };
+      decryptSentinelOne(settings.sentinelone);
+
       // Per-org sections are decrypted too (the Defender/Azure org sections
       // predate this and are only decrypted at top level — decrypting here
       // keeps the CrowdStrike per-org round-trip correct).
       for (const org of Object.values(settings.orgs ?? {})) {
         decryptCrowdStrike(org.crowdstrike);
+        decryptSentinelOne(org.sentinelone);
         // Org alert sections are written encrypted by saveAlertSettings; without
         // this, org-scoped SMTP/Slack would be used with ciphertext credentials
         // and re-encrypted on the next partial save.
@@ -552,6 +581,22 @@ export class IntegrationsSettingsService {
     try {
       return JSON.parse(fs.readFileSync(SETTINGS_FILE, 'utf8'));
     } catch { return null; }
+  }
+
+  /**
+   * Raw JSON as the base of a read-modify-write. A missing file is an empty
+   * object, but a file that exists and cannot be parsed throws: writing `{}`
+   * plus one section over it would silently drop every other integration's
+   * settings (and the pre-execution notice gate).
+   */
+  private getRawFileSettingsForWrite(): IntegrationsSettings {
+    if (!fs.existsSync(SETTINGS_FILE)) return {};
+    const data = fs.readFileSync(SETTINGS_FILE, 'utf8');
+    try {
+      return JSON.parse(data) as IntegrationsSettings;
+    } catch {
+      throw new Error(`Refusing to overwrite ${SETTINGS_FILE}: the file exists but is not valid JSON. Fix or remove it, then retry.`);
+    }
   }
 
   /** Remove Defender integration credentials from settings file. */
@@ -936,6 +981,307 @@ export class IntegrationsSettingsService {
 
     // Partial update preserves credentials (encrypted) and existing sync timestamps.
     this.saveCrowdStrikeSettings({ auto_resolve_mode: mode });
+  }
+
+  // ---------------------------------------------------------------------------
+  // SentinelOne Singularity
+  // ---------------------------------------------------------------------------
+
+  private getEnvSentinelOneSettings(): SentinelOneIntegrationSettings | null {
+    const baseUrl = process.env.SENTINELONE_BASE_URL;
+    const token = process.env.SENTINELONE_API_TOKEN;
+    if (!baseUrl || !token) return null;
+    let normalized: string;
+    try {
+      normalized = normalizeSentinelOneBaseUrl(baseUrl);
+    } catch (err) {
+      console.warn(`[integrations] Ignoring invalid SENTINELONE_BASE_URL: ${err instanceof Error ? err.message : String(err)}`);
+      return null;
+    }
+    return {
+      base_url: normalized,
+      api_token: token,
+      configured: true,
+      label: process.env.SENTINELONE_LABEL || undefined,
+      permission_mode: process.env.SENTINELONE_PERMISSION_MODE === 'response' ? 'response' : 'read_only',
+    };
+  }
+
+  /** Check if SentinelOne credentials are provided via environment variables. */
+  isEnvSentinelOneConfigured(): boolean {
+    return this.getEnvSentinelOneSettings() !== null;
+  }
+
+  /** Returns decrypted SentinelOne settings. Org-specific > legacy file > env vars. */
+  getSentinelOneSettings(): SentinelOneIntegrationSettings | null {
+    const fileSettings = this.getFileSettings();
+
+    const orgSection = this.getOrgSection(fileSettings);
+    if (orgSection?.sentinelone?.configured) {
+      return orgSection.sentinelone;
+    }
+
+    if (fileSettings?.sentinelone?.configured) {
+      return fileSettings.sentinelone;
+    }
+
+    const env = this.getEnvSentinelOneSettings();
+    // Env-var credentials keep their non-secret toggles in the standalone key.
+    if (env && fileSettings?.sentinelone_sync) {
+      const { auto_resolve_mode, auto_mitigation } = fileSettings.sentinelone_sync;
+      return { ...env, auto_resolve_mode, auto_mitigation };
+    }
+    return env;
+  }
+
+  /**
+   * Save SentinelOne settings (encrypts the API token). Supports partial
+   * update; the token is only replaced when a new one is given. With an org
+   * id, only that org's own section is used as the base, so a partial save
+   * never copies the legacy credentials into an org.
+   */
+  saveSentinelOneSettings(update: Partial<SentinelOneIntegrationSettings>): void {
+    this.ensureSettingsDir();
+
+    const existing = this.getRawFileSettingsForWrite();
+    const decrypted = this.getFileSettings() ?? {};
+    const current = this.orgId ? this.getOrgSection(decrypted)?.sentinelone : decrypted.sentinelone;
+
+    const baseUrl = update.base_url ? normalizeSentinelOneBaseUrl(update.base_url) : current?.base_url;
+    const token = update.api_token || current?.api_token;
+    if (!baseUrl || !token) throw new Error('base_url and api_token are required for initial setup');
+
+    // A changed console or scope invalidates the incremental checkpoints.
+    const scopeChanged = (update.base_url && baseUrl !== current?.base_url)
+      || (update.scope !== undefined && JSON.stringify(update.scope) !== JSON.stringify(current?.scope));
+
+    const permissionMode = update.permission_mode ?? current?.permission_mode ?? 'read_only';
+    // Automatic mitigation only exists in Response mode: downgrading the
+    // integration to read-only switches it off (fail closed).
+    const currentMitigation = normalizeAutoMitigation(current?.auto_mitigation);
+    const autoMitigation = permissionMode === 'response' ? currentMitigation : { ...currentMitigation, mode: 'disabled' as const };
+
+    const merged: SentinelOneIntegrationSettings = {
+      base_url: baseUrl,
+      api_token: 'enc:' + this.encrypt(token),
+      configured: true,
+      label: update.label !== undefined ? update.label : current?.label,
+      permission_mode: permissionMode,
+      poll_interval_minutes: update.poll_interval_minutes ?? current?.poll_interval_minutes ?? S1_DEFAULT_POLL_INTERVAL_MINUTES,
+      backfill_days: update.backfill_days ?? current?.backfill_days ?? S1_DEFAULT_BACKFILL_DAYS,
+      sources: update.sources ?? current?.sources ?? S1_DEFAULT_SOURCES,
+      scope: update.scope ?? current?.scope ?? {},
+      filters: update.filters ?? current?.filters ?? {},
+      last_threat_sync: scopeChanged ? undefined : current?.last_threat_sync,
+      last_alert_sync: scopeChanged ? undefined : current?.last_alert_sync,
+      sync_version: scopeChanged ? undefined : current?.sync_version,
+      auto_resolve_mode: current?.auto_resolve_mode ?? S1_DEFAULT_AUTO_RESOLVE_MODE,
+      auto_mitigation: autoMitigation,
+      last_posture_sync: scopeChanged ? undefined : current?.last_posture_sync,
+    };
+
+    if (this.orgId) {
+      existing.orgs ??= {};
+      existing.orgs[this.orgId] ??= {};
+      existing.orgs[this.orgId].sentinelone = merged;
+    } else {
+      existing.sentinelone = merged;
+    }
+
+    fs.writeFileSync(SETTINGS_FILE, JSON.stringify(existing, null, 2), { mode: 0o600 });
+  }
+
+  /** Check if SentinelOne integration is configured (file or env). */
+  isSentinelOneConfigured(): boolean {
+    const settings = this.getSentinelOneSettings();
+    return !!(settings?.configured && settings.base_url && settings.api_token);
+  }
+
+  getSentinelOnePermissionMode(): SentinelOnePermissionMode {
+    return this.getSentinelOneSettings()?.permission_mode === 'response' ? 'response' : 'read_only';
+  }
+
+  /** Returns raw decrypted credentials for the SentinelOne client. */
+  getSentinelOneCredentials(): SentinelOneCredentials | null {
+    const settings = this.getSentinelOneSettings();
+    if (!settings?.configured || !settings.base_url || !settings.api_token) return null;
+    return {
+      base_url: settings.base_url,
+      api_token: settings.api_token,
+      permission_mode: settings.permission_mode === 'response' ? 'response' : 'read_only',
+    };
+  }
+
+  /** Masked view for API responses — the token is never returned, only whether it is set. */
+  getSentinelOneSettingsMasked(): SentinelOneSettingsMasked {
+    const settings = this.getSentinelOneSettings();
+    const envConfigured = this.isEnvSentinelOneConfigured();
+    if (!settings?.configured) return { configured: false, env_configured: envConfigured };
+    return {
+      configured: true,
+      env_configured: envConfigured,
+      base_url: settings.base_url,
+      label: settings.label,
+      api_token_set: !!settings.api_token,
+      permission_mode: settings.permission_mode === 'response' ? 'response' : 'read_only',
+      poll_interval_minutes: settings.poll_interval_minutes ?? S1_DEFAULT_POLL_INTERVAL_MINUTES,
+      backfill_days: settings.backfill_days ?? S1_DEFAULT_BACKFILL_DAYS,
+      sources: settings.sources ?? S1_DEFAULT_SOURCES,
+      scope: settings.scope ?? {},
+      filters: settings.filters ?? {},
+      auto_resolve_mode: this.getSentinelOneAutoResolveMode(),
+      auto_mitigation: this.getSentinelOneAutoMitigation(),
+    };
+  }
+
+  /**
+   * Remove SentinelOne credentials from the settings file. Refuses when the
+   * credentials come from environment variables, like CrowdStrike.
+   */
+  deleteSentinelOneSettings(): void {
+    if (this.isEnvSentinelOneConfigured()) {
+      throw new Error(
+        'Cannot disconnect: SentinelOne credentials are set via environment variables (SENTINELONE_BASE_URL, SENTINELONE_API_TOKEN). Remove these env vars to disconnect.',
+      );
+    }
+
+    const raw = this.getRawFileSettings();
+    if (!raw) return;
+    if (this.orgId && raw.orgs?.[this.orgId]?.sentinelone) {
+      delete raw.orgs[this.orgId].sentinelone;
+    } else if (!this.orgId && raw.sentinelone) {
+      delete raw.sentinelone;
+      delete raw.sentinelone_sync;
+    } else {
+      return;
+    }
+    this.ensureSettingsDir();
+    fs.writeFileSync(SETTINGS_FILE, JSON.stringify(raw, null, 2), { mode: 0o600 });
+  }
+
+  /**
+   * Write non-credential keys into this caller's own SentinelOne section, or
+   * into the standalone `sentinelone_sync` key when the credentials come from
+   * env vars. An org caller never writes the legacy section: an org that has
+   * no SentinelOne settings of its own gets an error instead.
+   */
+  private patchSentinelOneSection(patch: Partial<SentinelOneSyncState>): void {
+    this.ensureSettingsDir();
+    const existing = this.getRawFileSettingsForWrite();
+    if (this.orgId) {
+      const section = existing.orgs?.[this.orgId]?.sentinelone;
+      if (!section) throw new Error('SentinelOne is not configured for this organization');
+      Object.assign(section, patch);
+    } else if (existing.sentinelone) {
+      Object.assign(existing.sentinelone, patch);
+    } else {
+      existing.sentinelone_sync = { ...existing.sentinelone_sync, ...patch };
+    }
+    fs.writeFileSync(SETTINGS_FILE, JSON.stringify(existing, null, 2), { mode: 0o600 });
+  }
+
+  /** Current auto-resolve mode; unknown / missing values fail closed to 'disabled'. */
+  getSentinelOneAutoResolveMode(): AutoResolveMode {
+    const mode = this.getSentinelOneSettings()?.auto_resolve_mode;
+    if (mode && S1_AUTO_RESOLVE_MODES.includes(mode)) return mode;
+    return S1_DEFAULT_AUTO_RESOLVE_MODE;
+  }
+
+  /**
+   * Set the auto-resolve mode. 'enabled' writes incident status + notes to
+   * the console, so it requires Response mode (the client refuses writes in
+   * read-only mode anyway). 'dry_run' never writes and is allowed in both.
+   */
+  setSentinelOneAutoResolveMode(mode: AutoResolveMode): void {
+    if (!S1_AUTO_RESOLVE_MODES.includes(mode)) {
+      throw new Error(`Invalid auto_resolve_mode: ${mode}. Must be one of: ${S1_AUTO_RESOLVE_MODES.join(', ')}`);
+    }
+    if (!this.getSentinelOneSettings()?.configured) {
+      throw new Error('Cannot set auto_resolve_mode: SentinelOne integration is not configured');
+    }
+    if (mode === 'enabled' && this.getSentinelOnePermissionMode() !== 'response') {
+      throw new Error('Auto-resolve "enabled" writes incident status to SentinelOne and requires the integration to be in Response mode. Use dry_run in read-only mode.');
+    }
+    this.patchSentinelOneSection({ auto_resolve_mode: mode });
+  }
+
+  /** Automatic mitigation settings; anything other than Response mode reads as disabled. */
+  getSentinelOneAutoMitigation(): SentinelOneAutoMitigationSettings {
+    const settings = this.getSentinelOneSettings();
+    const cfg = normalizeAutoMitigation(settings?.auto_mitigation);
+    if (settings?.permission_mode !== 'response') return { ...cfg, mode: 'disabled' };
+    return cfg;
+  }
+
+  /**
+   * Opt in/out of automatic mitigation. Any mode other than 'disabled' is
+   * refused unless the integration is in Response mode — enforced here,
+   * server-side, not only in the UI.
+   */
+  setSentinelOneAutoMitigation(update: Partial<SentinelOneAutoMitigationSettings>): SentinelOneAutoMitigationSettings {
+    const settings = this.getSentinelOneSettings();
+    if (!settings?.configured) throw new Error('Cannot configure automatic mitigation: SentinelOne integration is not configured');
+    if (update.mode !== undefined && !S1_AUTO_RESOLVE_MODES.includes(update.mode)) {
+      throw new Error(`Invalid automatic mitigation mode: ${update.mode}`);
+    }
+    if (update.action !== undefined && !S1_AUTO_MITIGATION_ACTIONS.includes(update.action)) {
+      throw new Error(`Invalid automatic mitigation action: ${update.action}. Allowed: ${S1_AUTO_MITIGATION_ACTIONS.join(', ')}`);
+    }
+    const next = { ...normalizeAutoMitigation(settings.auto_mitigation), ...update };
+    if (next.mode !== 'disabled' && settings.permission_mode !== 'response') {
+      throw new Error('Automatic mitigation can only be turned on when the SentinelOne integration is in Response mode.');
+    }
+    this.patchSentinelOneSection({ auto_mitigation: next });
+    return next;
+  }
+
+  /**
+   * Read persisted SentinelOne sync checkpoints from the sentinelone section
+   * (file-based credentials) or the standalone sentinelone_sync key (env var
+   * credentials).
+   */
+  getSentinelOneSyncTimestamps(): SentinelOneSyncCheckpoints {
+    const raw = this.getRawFileSettings();
+    const section = (this.orgId ? raw?.orgs?.[this.orgId]?.sentinelone : undefined) ?? raw?.sentinelone ?? raw?.sentinelone_sync;
+    if (!section) return {};
+    return {
+      last_threat_sync: section.last_threat_sync,
+      last_alert_sync: section.last_alert_sync,
+      sync_version: section.sync_version,
+      last_posture_sync: section.last_posture_sync,
+    };
+  }
+
+  /**
+   * Save only SentinelOne sync checkpoints without touching credentials (raw
+   * file write, no decrypt/re-encrypt cycle). Never creates a sentinelone
+   * section: with env var credentials they go to the standalone key.
+   */
+  saveSentinelOneSyncTimestamps(cp: SentinelOneSyncCheckpoints): void {
+    this.ensureSettingsDir();
+    const existing = this.getRawFileSettingsForWrite();
+    const section: SentinelOneSyncCheckpoints = (this.orgId ? existing.orgs?.[this.orgId]?.sentinelone : undefined)
+      ?? existing.sentinelone
+      ?? (existing.sentinelone_sync ??= {});
+    if (cp.last_threat_sync !== undefined) section.last_threat_sync = cp.last_threat_sync;
+    if (cp.last_alert_sync !== undefined) section.last_alert_sync = cp.last_alert_sync;
+    if (cp.sync_version !== undefined) section.sync_version = cp.sync_version;
+    if (cp.last_posture_sync !== undefined) section.last_posture_sync = cp.last_posture_sync;
+    fs.writeFileSync(SETTINGS_FILE, JSON.stringify(existing, null, 2), { mode: 0o600 });
+  }
+
+  /** Clear the alert checkpoints so the next sync re-runs the initial backfill. */
+  resetSentinelOneSyncTimestamps(): void {
+    const raw = this.getRawFileSettings();
+    if (!raw) return;
+    for (const section of [raw.sentinelone, raw.sentinelone_sync, this.orgId ? raw.orgs?.[this.orgId]?.sentinelone : undefined]) {
+      if (!section) continue;
+      delete section.last_threat_sync;
+      delete section.last_alert_sync;
+      delete section.sync_version;
+    }
+    this.ensureSettingsDir();
+    fs.writeFileSync(SETTINGS_FILE, JSON.stringify(raw, null, 2), { mode: 0o600 });
   }
 
   // ---------------------------------------------------------------------------
