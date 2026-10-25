@@ -10,7 +10,7 @@ vi.mock('@clerk/express', () => ({
 const { hydrateClaimsFromClerk, resetClaimsFallbackCache } = await import('../clerkClaimsFallback.middleware.js');
 const { getUserRole, getUserOrgId } = await import('../clerk.middleware.js');
 
-type Auth = { userId?: string; sessionClaims?: Record<string, unknown> };
+type Auth = { userId?: string; tokenType?: string; name?: string; sessionClaims?: Record<string, unknown> };
 
 async function run(auth: unknown, load: (id: string) => Promise<Record<string, unknown>>) {
   const req = { auth } as unknown as Request;
@@ -19,10 +19,15 @@ async function run(auth: unknown, load: (id: string) => Promise<Record<string, u
   return { req, next };
 }
 
-/** Clerk's v1 shape: req.auth is callable and also exposes the fields. */
+/**
+ * Clerk's v1 shape: req.auth is callable and also exposes the fields. A
+ * session token unless a.tokenType says otherwise (api_key, oauth_token…).
+ */
 function clerkAuth(a: Auth) {
-  const fn = () => a;
-  return Object.assign(fn, a);
+  const auth = { tokenType: 'session_token', ...a };
+  const fn = function () { return auth; };
+  for (const [k, v] of Object.entries(auth)) Object.defineProperty(fn, k, { value: v, enumerable: true });
+  return fn;
 }
 
 describe('hydrateClaimsFromClerk()', () => {
@@ -63,6 +68,41 @@ describe('hydrateClaimsFromClerk()', () => {
     await run(clerkAuth({}), load);
     await run(clerkAuth({ userId: 'cli-user', sessionClaims: {} }), load);
     expect(load).not.toHaveBeenCalled();
+  });
+
+  // @clerk/express accepts any token type: a user-owned Clerk API key or an
+  // OAuth access token carries userId user_… and no session claims. Those
+  // must stay roleless (read-only), never inherit the user's admin role.
+  it('never hydrates machine tokens (Clerk API keys, OAuth tokens, M2M)', async () => {
+    const load = vi.fn().mockResolvedValue({ role: 'admin' });
+    for (const tokenType of ['api_key', 'oauth_token', 'm2m_token', undefined]) {
+      const auth = clerkAuth({ userId: 'user_1', name: 'ci key', tokenType }); // undefined: no tokenType at all
+      const plain = tokenType ? { userId: 'user_1', tokenType, name: 'ci key' } : { userId: 'user_1' };
+      for (const a of [auth, plain]) {
+        const { req, next } = await run(a, load);
+        expect(getUserRole(req.auth)).toBeUndefined();
+        expect(next).toHaveBeenCalledWith();
+      }
+    }
+    expect(load).not.toHaveBeenCalled();
+  });
+
+  it('copies fields a function cannot be assigned (name) without throwing', async () => {
+    const load = vi.fn().mockResolvedValue({ role: 'analyst' });
+    const { req, next } = await run(clerkAuth({ userId: 'user_1', name: 'x', sessionClaims: {} }), load);
+    expect(next).toHaveBeenCalledWith();
+    expect(getUserRole(req.auth)).toBe('analyst');
+    expect((req.auth as unknown as Auth).name).toBe('x');
+  });
+
+  it('never rejects: an unexpected error leaves req.auth as it was and calls next()', async () => {
+    const auth = clerkAuth({ userId: 'user_1', sessionClaims: {} });
+    const req = { auth } as unknown as Request;
+    Object.freeze(req); // replacing req.auth throws
+    const next = vi.fn();
+    await expect(hydrateClaimsFromClerk(vi.fn().mockResolvedValue({ role: 'admin' }))(req, {} as Response, next as unknown as NextFunction)).resolves.toBeUndefined();
+    expect(next).toHaveBeenCalledWith();
+    expect(req.auth).toBe(auth);
   });
 
   it('skips when req.auth() throws on a malformed token', async () => {

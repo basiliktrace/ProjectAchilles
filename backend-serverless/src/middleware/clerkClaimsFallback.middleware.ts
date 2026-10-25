@@ -10,7 +10,7 @@
 
 import type { Request, Response, NextFunction } from 'express';
 import { clerkClient } from '@clerk/express';
-import { safeClerkAuth } from './clerkAuthHelpers.js';
+import { safeClerkAuth, type ClerkAuthLike } from './clerkAuthHelpers.js';
 
 type Metadata = Record<string, unknown>;
 export type MetadataLoader = (userId: string) => Promise<Metadata>;
@@ -60,24 +60,46 @@ const hasMetadataClaim = (claims: unknown) =>
   typeof claims === 'object' && claims !== null && 'metadata' in claims;
 
 /**
- * Runs right after clerkAuth: for a signed-in Clerk user whose token has no
- * metadata claim, replaces req.auth with the same auth plus
- * sessionClaims.metadata from Clerk, in the callable-with-fields shape
- * @clerk/express uses (as acceptCliAuth does).
+ * Only a user's browser session gets the fallback. @clerk/express accepts
+ * every token type, and a user-owned Clerk API key or an OAuth access token
+ * also carries userId user_… without session claims: those stay roleless
+ * (read-only) rather than inherit the user's role. No tokenType = no fallback.
+ */
+const isUserSession = (auth: ClerkAuthLike) =>
+  auth.tokenType === 'session_token' && !!auth.userId?.startsWith('user_');
+
+/**
+ * Runs right after clerkAuth: for a Clerk session whose token has no metadata
+ * claim, replaces req.auth with the same auth plus sessionClaims.metadata from
+ * Clerk, in the callable-with-fields shape @clerk/express uses (as
+ * acceptCliAuth does). It never rejects: on any error req.auth stays as it was.
  */
 export function hydrateClaimsFromClerk(load: MetadataLoader = clerkLoader) {
+  // next() runs exactly once, outside the try: a downstream throw must not
+  // land in this catch and call next() a second time.
   return async (req: Request, _res: Response, next: NextFunction) => {
-    const auth = safeClerkAuth(req);
-    const userId = auth?.userId;
-    if (!auth || !userId?.startsWith('user_') || hasMetadataClaim(auth.sessionClaims)) return next();
-
-    const metadata = await publicMetadataFor(userId, load);
-    const enriched = { ...auth, sessionClaims: { ...((auth.sessionClaims as object | undefined) ?? {}), metadata } };
-    const authFn = () => enriched;
-    Object.assign(authFn, enriched);
-    (req as unknown as Record<string, unknown>).auth = authFn;
+    try {
+      await hydrate(req, load);
+    } catch (err) {
+      console.warn('[auth] Clerk claims fallback skipped:', err instanceof Error ? err.message : err);
+    }
     next();
   };
+}
+
+/** The fallback itself; may throw (the middleware catches). */
+async function hydrate(req: Request, load: MetadataLoader): Promise<void> {
+  const auth = safeClerkAuth(req);
+  if (!auth || !isUserSession(auth) || hasMetadataClaim(auth.sessionClaims)) return;
+
+  const metadata = await publicMetadataFor(auth.userId as string, load);
+  const enriched = { ...auth, sessionClaims: { ...((auth.sessionClaims as object | undefined) ?? {}), metadata } };
+  const authFn = function () { return enriched; };
+  // defineProperty, not assignment: a function's own name/length are read-only.
+  for (const [k, v] of Object.entries(enriched)) {
+    Object.defineProperty(authFn, k, { value: v, enumerable: true, writable: true, configurable: true });
+  }
+  (req as unknown as Record<string, unknown>).auth = authFn;
 }
 
 /** For tests. */
