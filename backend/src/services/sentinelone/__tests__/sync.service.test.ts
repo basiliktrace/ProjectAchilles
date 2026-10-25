@@ -125,6 +125,15 @@ describe('SentinelOne normalization', () => {
   });
 });
 
+describe('SentinelOne normalization — missing dates', () => {
+  it('emits null, never an empty string, for dates S1 omits (ES date fields reject "")', () => {
+    const t = transformThreat({ id: 't9', threatInfo: {} } as never, 'https://acme.sentinelone.net');
+    expect(t).toMatchObject({ timestamp: null, created_at: null, updated_at: null, resolved_at: null });
+    const a = transformCloudAlert({ alertInfo: { alertId: 'a9' } } as never);
+    expect(a).toMatchObject({ timestamp: null, created_at: null, updated_at: null });
+  });
+});
+
 describe('SentinelOne normalization — shared-module contract', () => {
   it('lowercases display-case statuses and verdicts from detection alerts and sets resolved_at', () => {
     const doc = transformCloudAlert({
@@ -308,6 +317,44 @@ describe('SentinelOneSyncService', () => {
     expect(mockListThreats.mock.calls[0][0].updatedAt__gte).toBe('2026-10-22T09:58:00.000Z');
     expect(mockListThreats.mock.calls[0][0].createdAt__gte).toBeUndefined();
     expect(mockListAlerts.mock.calls[0][0].createdAt__gte).toBe('2026-10-22T08:58:00.000Z');
+  });
+
+  it('removes items that stopped passing the filters instead of keeping a stale copy', async () => {
+    mockSettings = { ...mockSettings, sources: ['threats'], filters: { incident_statuses: ['unresolved'] } };
+    mockListThreats.mockResolvedValueOnce({ data: [threat('1'), threat('2', { incidentStatus: 'resolved' })] });
+    const result = await new SentinelOneSyncService().syncAll();
+    expect(result.threats).toMatchObject({ synced: 1, filtered: 1, errors: [] });
+    const ops = mockBulk.mock.calls[0][0].operations;
+    expect(ops).toContainEqual({ delete: { _index: 'achilles-sentinelone', _id: 'threat-2' } });
+    expect(ops).toContainEqual({ update: { _index: 'achilles-sentinelone', _id: 'threat-1', retry_on_conflict: 3 } });
+  });
+
+  it('a permanently rejected doc is reported but does not pin the checkpoint; throttling does', async () => {
+    mockSettings = { ...mockSettings, sources: ['threats'] };
+    mockListThreats.mockResolvedValueOnce({ data: [threat('1'), threat('2')] });
+    mockBulk.mockResolvedValueOnce({ errors: true, items: [
+      { update: { _id: 'threat-1', status: 200 } },
+      { update: { _id: 'threat-2', status: 400, error: { reason: 'failed to parse field [created_at]' } } },
+    ] });
+    const ok = await new SentinelOneSyncService().syncAll();
+    expect(ok.threats).toMatchObject({ synced: 1, errors: ['threat-2: failed to parse field [created_at]'] });
+    expect(mockSaveCheckpoints.mock.calls[0][0].last_threat_sync).toBeTruthy();
+
+    mockSaveCheckpoints.mockClear();
+    mockListThreats.mockResolvedValueOnce({ data: [threat('1')] });
+    mockBulk.mockResolvedValueOnce({ errors: true, items: [{ update: { _id: 'threat-1', status: 429, error: { reason: 'rejected execution' } } }] });
+    await new SentinelOneSyncService().syncAll();
+    expect(mockSaveCheckpoints.mock.calls[0][0].last_threat_sync).toBeUndefined();
+  });
+
+  it('does not record the doc-schema version until every enabled source re-synced cleanly', async () => {
+    mockCheckpoints = { last_threat_sync: '2026-10-22T10:00:00.000Z', last_alert_sync: '2026-10-22T09:00:00.000Z', sync_version: SENTINELONE_SYNC_VERSION - 1 };
+    mockListAlerts.mockRejectedValueOnce(new Error('HTTP 500'));
+    await new SentinelOneSyncService().syncAll();
+    const saved = mockSaveCheckpoints.mock.calls[0][0];
+    expect(saved.last_threat_sync).toBeTruthy();
+    expect(saved.last_alert_sync).toBeUndefined();
+    expect(saved.sync_version).toBeUndefined();
   });
 
   it('applies severity / status segmentation filters', async () => {

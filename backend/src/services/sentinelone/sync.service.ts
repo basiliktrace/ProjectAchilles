@@ -137,7 +137,7 @@ export function transformThreat(t: S1Threat, baseUrl: string): SentinelOneAlertD
   return {
     doc_type: 'alert',
     source_type: 'threats',
-    timestamp: ti.updatedAt || ti.createdAt || '',
+    timestamp: ti.updatedAt || ti.createdAt || null,
     alert_id: t.id,
     alert_title: ti.threatName || ti.fileDisplayName || 'SentinelOne threat',
     description: [ti.classification, ti.mitigationStatusDescription, ti.originatorProcess ? `Originator: ${ti.originatorProcess}` : undefined]
@@ -147,9 +147,9 @@ export function transformThreat(t: S1Threat, baseUrl: string): SentinelOneAlertD
     category: ti.classification || ti.detectionType || '',
     service_source: 'SentinelOne',
     mitre_techniques: techniques,
-    created_at: ti.createdAt ?? '',
-    updated_at: ti.updatedAt ?? '',
-    resolved_at: status === 'resolved' ? (ti.updatedAt ?? null) : null,
+    created_at: ti.createdAt || null,
+    updated_at: ti.updatedAt || null,
+    resolved_at: status === 'resolved' ? (ti.updatedAt || null) : null,
     recommended_actions: '',
     evidence_hostnames: host ? [host.toUpperCase()] : [],
     evidence_filenames: filenames,
@@ -192,7 +192,7 @@ export function transformCloudAlert(a: S1CloudDetectionAlert): SentinelOneAlertD
   return {
     doc_type: 'alert',
     source_type: 'cloud_detection_alerts',
-    timestamp: ai.updatedAt || ai.createdAt || ai.reportedAt || '',
+    timestamp: ai.updatedAt || ai.createdAt || ai.reportedAt || null,
     alert_id: ai.alertId,
     alert_title: ri.name || 'SentinelOne detection alert',
     description: ri.description ?? '',
@@ -201,9 +201,9 @@ export function transformCloudAlert(a: S1CloudDetectionAlert): SentinelOneAlertD
     category: ai.eventType || ai.source || '',
     service_source: 'SentinelOne',
     mitre_techniques: extractTechniques([...mitre, ri.name, ri.description]),
-    created_at: ai.createdAt ?? '',
-    updated_at: ai.updatedAt ?? ai.createdAt ?? '',
-    resolved_at: status === 'resolved' ? (ai.updatedAt ?? null) : null,
+    created_at: ai.createdAt || null,
+    updated_at: ai.updatedAt || ai.createdAt || null,
+    resolved_at: status === 'resolved' ? (ai.updatedAt || null) : null,
     recommended_actions: '',
     evidence_hostnames: a.agentDetectionInfo?.name ? [a.agentDetectionInfo.name.toUpperCase()] : [],
     evidence_filenames: filenames,
@@ -298,10 +298,15 @@ export class SentinelOneSyncService {
         result.cloud_detection_alerts = await this.syncSource('cloud_detection_alerts', client, es, settings, this.status.lastAlertSync);
       }
 
+      // Record the doc-schema version only once every enabled source has a
+      // checkpoint from a clean run under it. Otherwise a failed re-backfill
+      // after a version bump would be marked done and never retried.
+      const allCaughtUp = (!sources.includes('threats') || this.status.lastThreatSync !== null)
+        && (!sources.includes('cloud_detection_alerts') || this.status.lastAlertSync !== null);
       svc.saveSentinelOneSyncTimestamps({
         last_threat_sync: this.status.lastThreatSync ?? undefined,
         last_alert_sync: this.status.lastAlertSync ?? undefined,
-        sync_version: SENTINELONE_SYNC_VERSION,
+        ...(allCaughtUp ? { sync_version: SENTINELONE_SYNC_VERSION } : {}),
       });
 
       // Correlate AFTER the poll so freshly-synced alerts are visible.
@@ -371,6 +376,7 @@ export class SentinelOneSyncService {
     const startedAt = new Date().toISOString();
     const out: SentinelOneSourceSyncResult = { fetched: 0, synced: 0, filtered: 0, errors: [] };
     const params = this.buildParams(source, settings, checkpoint);
+    let retryNeeded = false;
 
     try {
       const pages = source === 'threats'
@@ -380,37 +386,53 @@ export class SentinelOneSyncService {
       for await (const page of pages) {
         out.fetched += page.length;
         const docs: Array<{ id: string; doc: SentinelOneAlertDoc }> = [];
+        const dropped: string[] = [];
         for (const item of page) {
           const doc = source === 'threats'
             ? transformThreat(item as S1Threat, client.baseUrl)
             : transformCloudAlert(item as S1CloudDetectionAlert);
           if (!doc) continue;
-          if (!passesFilters(doc, settings)) { out.filtered++; continue; }
-          docs.push({ id: `${source === 'threats' ? 'threat' : 'alert'}-${doc.alert_id}`, doc });
+          const id = `${source === 'threats' ? 'threat' : 'alert'}-${doc.alert_id}`;
+          // An item that no longer passes the filters (e.g. it was resolved and
+          // only unresolved ones are kept) is removed, so the index never
+          // keeps a stale copy from when it did pass.
+          if (!passesFilters(doc, settings)) { out.filtered++; dropped.push(id); continue; }
+          docs.push({ id, doc });
         }
-        if (docs.length === 0) continue;
+        if (docs.length === 0 && dropped.length === 0) continue;
 
         // update + doc_as_upsert keeps f0rtika.* enrichment fields across re-syncs.
-        const operations = docs.flatMap(({ id, doc }) => [
-          { update: { _index: SENTINELONE_INDEX, _id: id, retry_on_conflict: 3 } },
-          { doc, doc_as_upsert: true },
-        ]);
+        // Deleting an id that was never stored is a no-op ('not_found', not an error).
+        const operations = [
+          ...docs.flatMap(({ id, doc }) => [
+            { update: { _index: SENTINELONE_INDEX, _id: id, retry_on_conflict: 3 } },
+            { doc, doc_as_upsert: true },
+          ]),
+          ...dropped.map((id) => ({ delete: { _index: SENTINELONE_INDEX, _id: id } })),
+        ];
         const res = await es.bulk({ operations, refresh: 'wait_for' });
         let pageErrors = 0;
         if (res.errors) {
           for (const item of res.items) {
-            if (item.update?.error) {
-              pageErrors++;
-              if (out.errors.length < 20) out.errors.push(`${item.update._id}: ${item.update.error.reason}`);
+            const op = item.update ?? item.delete;
+            if (op?.error) {
+              if (item.update) pageErrors++;
+              // A 4xx other than 429 (mapping / parsing) fails the same way on
+              // every retry: report it, but don't let one bad doc hold the
+              // checkpoint back forever. Throttling and 5xx are retried.
+              const status = op.status ?? 0;
+              if (status === 429 || status >= 500 || status === 0) retryNeeded = true;
+              if (out.errors.length < 20) out.errors.push(`${op._id}: ${op.error.reason}`);
             }
           }
         }
         out.synced += docs.length - pageErrors;
       }
 
-      // Advance the checkpoint to the start of this run only when nothing failed,
-      // so a partial failure is retried (dedup makes re-fetches harmless).
-      if (out.errors.length === 0) {
+      // Advance the checkpoint to the start of this run unless something
+      // retryable failed, so a partial failure is retried (dedup makes
+      // re-fetches harmless).
+      if (!retryNeeded) {
         if (source === 'threats') this.status.lastThreatSync = startedAt;
         else this.status.lastAlertSync = startedAt;
       }

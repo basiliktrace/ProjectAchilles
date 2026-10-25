@@ -246,7 +246,8 @@ export interface S1CloudDetectionAlert {
 export interface SentinelOneAlertDoc {
   doc_type: 'alert';
   source_type: SentinelOneSource;
-  timestamp: string;
+  /** Date fields are null when S1 omits them ('' is rejected by the ES date mapping). */
+  timestamp: string | null;
   alert_id: string;
   alert_title: string;
   description: string;
@@ -255,8 +256,8 @@ export interface SentinelOneAlertDoc {
   category: string;
   service_source: 'SentinelOne';
   mitre_techniques: string[];
-  created_at: string;
-  updated_at: string;
+  created_at: string | null;
+  updated_at: string | null;
   resolved_at: string | null;
   recommended_actions: string;
   evidence_hostnames: string[];
