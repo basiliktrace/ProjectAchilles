@@ -112,18 +112,20 @@ export function AlertsConfig({ onStatusChange }: AlertsConfigProps) {
   };
 
   const numOrUndefined = (val: string) => val ? Number(val) : undefined;
+  // Thresholds: an emptied field must clear the saved value (an omitted key keeps it).
+  const numOrNull = (val: string) => val ? Number(val) : null;
 
   const buildSavePayload = () => ({
     thresholds: {
       enabled: alertingEnabled,
-      defense_score_min: numOrUndefined(defenseScoreMin),
-      error_rate_max: numOrUndefined(errorRateMax),
-      ...(defenderConfigured ? { secure_score_min: numOrUndefined(secureScoreMin) } : {}),
+      defense_score_min: numOrNull(defenseScoreMin),
+      error_rate_max: numOrNull(errorRateMax),
+      ...(defenderConfigured ? { secure_score_min: numOrNull(secureScoreMin) } : {}),
       ...(s1Configured
         ? {
-            s1_infected_agents_max: numOrUndefined(s1InfectedMax),
-            s1_detect_only_agents_max: numOrUndefined(s1DetectOnlyMax),
-            s1_outdated_agents_max: numOrUndefined(s1OutdatedMax),
+            s1_infected_agents_max: numOrNull(s1InfectedMax),
+            s1_detect_only_agents_max: numOrNull(s1DetectOnlyMax),
+            s1_outdated_agents_max: numOrNull(s1OutdatedMax),
           }
         : {}),
     },

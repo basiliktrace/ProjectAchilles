@@ -103,8 +103,11 @@ describe('IntegrationsSettingsService — SentinelOne', () => {
     // Reads fall back to legacy like the other integrations…
     expect(org.isSentinelOneConfigured()).toBe(true);
     // …but writes stay in the org's own section.
-    expect(() => org.setSentinelOneAutoResolveMode('dry_run')).toThrow(/not configured for this organization/);
-    expect(() => org.saveSentinelOneSettings({ label: 'mine' })).toThrow(/required for initial setup/);
+    expect(() => org.setSentinelOneAutoResolveMode('dry_run')).toThrow(/whole deployment/);
+    expect(() => org.saveSentinelOneSettings({ label: 'mine' })).toThrow(/whole deployment/);
+    // Disconnecting must not answer "done" while the deployment-wide integration keeps running.
+    expect(() => org.deleteSentinelOneSettings()).toThrow(/whole deployment/);
+    expect(legacy.isSentinelOneConfigured()).toBe(true);
     expect(legacy.getSentinelOneAutoResolveMode()).toBe('disabled');
     expect(JSON.parse(realFs.readFileSync(FILE, 'utf8')).orgs).toBeUndefined();
   });

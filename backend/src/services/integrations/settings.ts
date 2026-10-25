@@ -30,6 +30,9 @@ import {
   normalizeAutoMitigation,
 } from '../sentinelone/defaults.js';
 
+/** An org caller asked to change the deployment-wide (legacy) SentinelOne settings. */
+const DEPLOYMENT_WIDE_S1 = 'SentinelOne is configured for the whole deployment, not for this organization. Change or disconnect it from an account without an active organization.';
+
 const AUTO_RESOLVE_MODES: ReadonlyArray<AutoResolveMode> = ['disabled', 'dry_run', 'enabled'] as const;
 const DEFAULT_AUTO_RESOLVE_MODE: AutoResolveMode = 'disabled';
 
@@ -1049,7 +1052,9 @@ export class IntegrationsSettingsService {
 
     const baseUrl = update.base_url ? normalizeSentinelOneBaseUrl(update.base_url) : current?.base_url;
     const token = update.api_token || current?.api_token;
-    if (!baseUrl || !token) throw new Error('base_url and api_token are required for initial setup');
+    if (!baseUrl || !token) {
+      throw new Error(this.orgId && !current && decrypted.sentinelone ? DEPLOYMENT_WIDE_S1 : 'base_url and api_token are required for initial setup');
+    }
 
     // A changed console or scope invalidates the incremental checkpoints.
     const scopeChanged = (update.base_url && baseUrl !== current?.base_url)
@@ -1156,6 +1161,10 @@ export class IntegrationsSettingsService {
     } else if (!this.orgId && raw.sentinelone) {
       delete raw.sentinelone;
       delete raw.sentinelone_sync;
+    } else if (this.orgId && raw.sentinelone) {
+      // Answering "disconnected" here would be false: the deployment-wide
+      // integration keeps syncing (and, in Response mode, writing).
+      throw new Error(DEPLOYMENT_WIDE_S1);
     } else {
       return;
     }
@@ -1174,7 +1183,7 @@ export class IntegrationsSettingsService {
     const existing = this.getRawFileSettingsForWrite();
     if (this.orgId) {
       const section = existing.orgs?.[this.orgId]?.sentinelone;
-      if (!section) throw new Error('SentinelOne is not configured for this organization');
+      if (!section) throw new Error(existing.sentinelone ? DEPLOYMENT_WIDE_S1 : 'SentinelOne is not configured for this organization');
       Object.assign(section, patch);
     } else if (existing.sentinelone) {
       Object.assign(existing.sentinelone, patch);
@@ -1315,11 +1324,16 @@ export class IntegrationsSettingsService {
       cooldown_minutes: 15,
     };
 
-    // Deep merge
+    // Deep merge. A threshold sent as null is cleared: an omitted key would
+    // keep the saved value, so an emptied field could never be turned off.
+    const thresholds = settings.thresholds
+      ? { ...current.thresholds, ...settings.thresholds }
+      : current.thresholds;
+    for (const [key, value] of Object.entries(thresholds)) {
+      if (value === null) delete (thresholds as unknown as Record<string, unknown>)[key];
+    }
     const merged: AlertSettings = {
-      thresholds: settings.thresholds
-        ? { ...current.thresholds, ...settings.thresholds }
-        : current.thresholds,
+      thresholds,
       cooldown_minutes: settings.cooldown_minutes ?? current.cooldown_minutes,
       last_alert_at: settings.last_alert_at !== undefined
         ? settings.last_alert_at

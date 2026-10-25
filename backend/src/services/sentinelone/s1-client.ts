@@ -292,7 +292,8 @@ export class SentinelOneClient {
   /** POST /threats/mitigate/{action} with body { filter: { ids }, data: {} }. */
   async mitigateThreats(action: SentinelOneAutoMitigationAction, threatIds: string[]): Promise<{ affected: number }> {
     if (!S1_MITIGATION_ACTIONS.includes(action)) throw new SentinelOnePermissionError(`Unknown mitigation action: ${action}`);
-    if (threatIds.length === 0) throw new Error('mitigateThreats: at least one threat id is required');
+    // An empty or malformed filter on /threats/mitigate could match far more than intended.
+    SentinelOneClient.checkIds(threatIds, 'mitigateThreats');
     const res = await this.request<{ data?: { affected?: number } }>('POST', `${S1_API_PREFIX}/threats/mitigate/${action}`, {
       body: { filter: { ids: threatIds }, data: {} },
     });

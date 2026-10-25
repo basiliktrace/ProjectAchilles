@@ -106,6 +106,14 @@ describe('SentinelOneClient', () => {
       expect(JSON.parse(init.body)).toEqual({ filter: { ids: ['1234567890'] }, data: {} });
     });
 
+    it('refuses an empty, oversized or non-numeric id list before any request', async () => {
+      const client = new SentinelOneClient({ base_url: BASE, api_token: TOKEN, permission_mode: 'response' });
+      await expect(client.mitigateThreats('kill', [])).rejects.toThrow(/at least one id/);
+      await expect(client.mitigateThreats('kill', Array.from({ length: 101 }, (_, i) => String(i)))).rejects.toThrow(/at most 100/);
+      await expect(client.mitigateThreats('kill', ['1 OR 1=1'])).rejects.toThrow(/numeric/);
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
     it('rejects anything but kill / quarantine even in response mode', async () => {
       const client = new SentinelOneClient({ base_url: BASE, api_token: TOKEN, permission_mode: 'response' });
       for (const action of ['delete-everything', 'remediate', 'rollback-remediation', 'un-quarantine']) {

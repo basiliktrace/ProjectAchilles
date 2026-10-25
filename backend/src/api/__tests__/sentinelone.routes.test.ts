@@ -120,6 +120,19 @@ describe('SentinelOne routes', () => {
     expect(mockFetch.mock.calls[0][1].headers.Authorization).toBe(`ApiToken ${TOKEN}`);
   });
 
+  it('test connection never sends the saved token to a different console', async () => {
+    await request(app()).post('/api/integrations/sentinelone').send({ base_url: BASE, api_token: TOKEN });
+    const other = await request(app()).post('/api/integrations/sentinelone/test').send({ base_url: 'https://other-tenant.sentinelone.net' });
+    expect(other.body.success).toBe(false);
+    expect(other.body.error).toMatch(/saved token is only used with the saved console URL/);
+    expect(mockFetch).not.toHaveBeenCalled();
+
+    mockFetch.mockResolvedValueOnce(json({ data: [], pagination: { totalItems: 1 } }));
+    const same = await request(app()).post('/api/integrations/sentinelone/test').send({});
+    expect(same.body.success).toBe(true);
+    expect(mockFetch.mock.calls[0][1].headers.Authorization).toBe(`ApiToken ${TOKEN}`);
+  });
+
   it('exposes no manual response-action routes, even in response mode', async () => {
     await request(app()).post('/api/integrations/sentinelone').send({ base_url: BASE, api_token: TOKEN, permission_mode: 'response' });
     const kill = await request(app()).post('/api/integrations/sentinelone/actions/threats/kill').send({ threat_ids: ['1234567890123456789'] });

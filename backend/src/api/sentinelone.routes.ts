@@ -107,8 +107,7 @@ router.post('/test', requirePermission('integrations:write'), validate(SentinelO
   const { base_url, api_token, scope } = req.body as { base_url?: string; api_token?: string; scope?: { account_ids?: string[]; site_ids?: string[] } };
   const stored = getSettingsService(req).getSentinelOneCredentials();
   const effectiveUrl = base_url || stored?.base_url;
-  const effectiveToken = api_token || stored?.api_token;
-  if (!effectiveUrl || !effectiveToken) {
+  if (!effectiveUrl) {
     res.json({ success: false, error: 'Missing credentials: console URL and API token are required' });
     return;
   }
@@ -117,6 +116,13 @@ router.post('/test', requirePermission('integrations:write'), validate(SentinelO
     url = await checkBaseUrl(effectiveUrl);
   } catch (err) {
     res.json({ success: false, error: err instanceof Error ? err.message : 'Invalid console URL' });
+    return;
+  }
+  // The stored token is only ever sent to the stored console: testing a
+  // different console needs its own token.
+  const effectiveToken = api_token || (stored && url === stored.base_url ? stored.api_token : undefined);
+  if (!effectiveToken) {
+    res.json({ success: false, error: stored ? 'Enter the API token for this console (the saved token is only used with the saved console URL)' : 'Missing credentials: console URL and API token are required' });
     return;
   }
   const client = new SentinelOneClient({ base_url: url, api_token: effectiveToken, permission_mode: 'read_only' });

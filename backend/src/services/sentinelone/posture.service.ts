@@ -439,7 +439,8 @@ export class SentinelOnePostureService {
   async getAgentHealth(days = 30): Promise<{ latest: Raw | null; trend: Array<{ timestamp: string; counts: SentinelOneAgentHealthCounts }> }> {
     const res = await this.es.search({
       index: SENTINELONE_POSTURE_INDEX,
-      size: 500,
+      // One snapshot per posture pass (every 6 hours): size the page to the window.
+      size: Math.min(Math.ceil(days * (86_400_000 / POSTURE_INTERVAL_MS)) + 8, 10_000),
       query: { bool: { filter: [{ term: { doc_type: 'agent_health' } }, { range: { timestamp: { gte: `now-${days}d` } } }] } },
       sort: [{ timestamp: 'desc' }],
     } as any).catch(missingIndex);
