@@ -457,7 +457,7 @@ func TestRestoreRoundTripAndPerms(t *testing.T) {
 		t.Fatal(err)
 	}
 	b, _ := os.ReadFile(filepath.Join(d.RepoDir, ".env"))
-	if string(b) != "B=2\nCOMPOSE_PROJECT_NAME=projectachilles\n" {
+	if string(b) != "B=2\n" {
 		t.Fatalf(".env = %q", b)
 	}
 	if fi, _ := os.Stat(filepath.Join(d.CADir, "root.key")); fi.Mode().Perm() != 0o600 {
@@ -765,60 +765,5 @@ func TestRestoreShellCommandsCarryNoArchiveNames(t *testing.T) {
 				}
 			}
 		}
-	}
-}
-
-func TestProjectNameResolution(t *testing.T) {
-	repo := filepath.Join(t.TempDir(), "-Pa.Test")
-	if err := os.MkdirAll(repo, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	d := Deps{RepoDir: repo}
-	t.Setenv("COMPOSE_PROJECT_NAME", "")
-	if got := d.project(); got != "patest" {
-		t.Fatalf("no .env: project = %q, want the normalised directory name", got)
-	}
-	_ = os.WriteFile(filepath.Join(repo, ".env"), []byte("A=1\nCOMPOSE_PROJECT_NAME=old\nCOMPOSE_PROJECT_NAME=achilles-server\n"), 0o600)
-	if got := d.project(); got != "achilles-server" {
-		t.Fatalf(".env: project = %q, want the last .env value", got)
-	}
-	t.Setenv("COMPOSE_PROJECT_NAME", "from-env")
-	if got := d.project(); got != "from-env" {
-		t.Fatalf("env: project = %q, want the environment to beat .env", got)
-	}
-	d.Project = "explicit"
-	if got := d.project(); got != "explicit" {
-		t.Fatalf("explicit: project = %q", got)
-	}
-}
-
-// A backup from an install that predates the pinned project name restores
-// into the live project, and the restored .env keeps naming it, so `up`
-// does not start on a fresh set of empty volumes.
-func TestRestoreKeepsLiveComposeProject(t *testing.T) {
-	t.Setenv("COMPOSE_PROJECT_NAME", "")
-	f := helperFake(false)
-	d := backupDeps(t, f)
-	d.Project = ""
-	p, err := Backup(context.Background(), d, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(d.RepoDir, ".env"), []byte("COMPOSE_PROJECT_NAME=achilles-server\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	f.calls = nil
-	if err := Restore(context.Background(), d, p, true); err != nil {
-		t.Fatal(err)
-	}
-	b, _ := os.ReadFile(filepath.Join(d.RepoDir, ".env"))
-	if string(b) != "B=2\nCOMPOSE_PROJECT_NAME=achilles-server\n" {
-		t.Fatalf(".env = %q", b)
-	}
-	if fi, _ := os.Stat(filepath.Join(d.RepoDir, ".env")); fi.Mode().Perm() != 0o600 {
-		t.Fatalf(".env mode %v", fi.Mode().Perm())
-	}
-	if !f.has("achilles-server_achilles-data:/v") {
-		t.Fatalf("volume not restored into the live project: %v", f.calls)
 	}
 }

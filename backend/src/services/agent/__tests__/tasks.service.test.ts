@@ -1257,7 +1257,7 @@ describe('tasks.service', () => {
       insertTestTask(testDb, { id: 't2', agent_id: 'agent-002', batch_id: batchId, created_at: '2026-02-01 10:00:00' });
       insertTestTask(testDb, { id: 't3', agent_id: 'agent-003', batch_id: batchId, created_at: '2026-02-01 10:00:00' });
 
-      const result = listTasksGrouped({}, { kind: 'all' });
+      const result = listTasksGrouped({});
 
       expect(result.total).toBe(1);
       expect(result.groups).toHaveLength(1);
@@ -1270,7 +1270,7 @@ describe('tasks.service', () => {
       insertTestTask(testDb, { id: 't1', created_at: '2026-02-01 10:00:01' });
       insertTestTask(testDb, { id: 't2', created_at: '2026-02-01 10:00:02' });
 
-      const result = listTasksGrouped({}, { kind: 'all' });
+      const result = listTasksGrouped({});
 
       expect(result.total).toBe(2);
       expect(result.groups).toHaveLength(2);
@@ -1285,7 +1285,7 @@ describe('tasks.service', () => {
       insertTestTask(testDb, { id: 't1', agent_id: 'agent-001', batch_id: batchId, status: 'completed', created_at: '2026-02-01 10:00:00' });
       insertTestTask(testDb, { id: 't2', agent_id: 'agent-002', batch_id: batchId, status: 'failed', created_at: '2026-02-01 10:00:00' });
 
-      const result = listTasksGrouped({}, { kind: 'all' });
+      const result = listTasksGrouped({});
 
       expect(result.groups[0].status_counts).toEqual({ completed: 1, failed: 1 });
     });
@@ -1301,7 +1301,7 @@ describe('tasks.service', () => {
       // Single task (different batch)
       insertTestTask(testDb, { id: 't3', created_at: '2026-02-01 10:00:01' });
 
-      const result = listTasksGrouped({ limit: 1, offset: 0 }, { kind: 'all' });
+      const result = listTasksGrouped({ limit: 1, offset: 0 });
 
       expect(result.total).toBe(2); // 2 groups
       expect(result.groups).toHaveLength(1); // page size 1
@@ -1317,7 +1317,7 @@ describe('tasks.service', () => {
       // Another group with only completed
       insertTestTask(testDb, { id: 't3', status: 'completed', created_at: '2026-02-01 10:00:01' });
 
-      const result = listTasksGrouped({ status: 'failed' }, { kind: 'all' });
+      const result = listTasksGrouped({ status: 'failed' });
 
       expect(result.total).toBe(1); // only the batch containing a failed task
       expect(result.groups[0].batch_id).toBe(batchId);
@@ -1335,7 +1335,7 @@ describe('tasks.service', () => {
       // Separate task that won't match
       insertTestTask(testDb, { id: 't3', created_at: '2026-02-01 10:00:01' });
 
-      const result = listTasksGrouped({ search: 'prod-server' }, { kind: 'all' });
+      const result = listTasksGrouped({ search: 'prod-server' });
 
       expect(result.total).toBe(1);
       expect(result.groups[0].batch_id).toBe(batchId);
@@ -1344,7 +1344,7 @@ describe('tasks.service', () => {
     it('returns empty groups for no-match', () => {
       insertTestTask(testDb, { id: 't1' });
 
-      const result = listTasksGrouped({ search: 'nonexistent-xyz' }, { kind: 'all' });
+      const result = listTasksGrouped({ search: 'nonexistent-xyz' });
       expect(result.total).toBe(0);
       expect(result.groups).toHaveLength(0);
     });
@@ -1353,7 +1353,7 @@ describe('tasks.service', () => {
       insertTestTask(testDb, { id: 't-old', batch_id: 'batch-old', created_at: '2026-01-01 10:00:00' });
       insertTestTask(testDb, { id: 't-new', batch_id: 'batch-new', created_at: '2026-02-01 10:00:00' });
 
-      const result = listTasksGrouped({}, { kind: 'all' });
+      const result = listTasksGrouped({});
 
       expect(result.groups[0].batch_id).toBe('batch-new');
       expect(result.groups[1].batch_id).toBe('batch-old');

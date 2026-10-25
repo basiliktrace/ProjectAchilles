@@ -191,11 +191,6 @@ export interface EnrichedTestExecution extends TestExecution {
   defender_prevented?: boolean;
   /** Derived prevention action (normalized, same vocabulary as CrowdStrike). */
   defender_prevention_action?: string;
-  /** SentinelOne equivalents of the crowdstrike_* flags (SentinelOne enrichment pass, same rules). */
-  sentinelone_detected?: boolean;
-  sentinelone_stage_detected?: boolean;
-  sentinelone_prevented?: boolean;
-  sentinelone_prevention_action?: string;
 }
 
 export interface PaginatedResponse<T> {
@@ -373,8 +368,6 @@ export interface ExecutionGroup {
   crowdstrikeDetected?: boolean;
   crowdstrikePrevented?: boolean;
   defenderPrevented?: boolean;
-  sentineloneDetected?: boolean;
-  sentinelonePrevented?: boolean;
 }
 
 // Response shape for grouped/collapsed pagination

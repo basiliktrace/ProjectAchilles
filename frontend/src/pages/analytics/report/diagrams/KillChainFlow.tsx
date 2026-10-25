@@ -15,7 +15,6 @@ const PER_ROW = 6;
 const ALERT_VENDORS: { key: ReportAlert['vendor']; label: string }[] = [
   { key: 'defender', label: 'Defender' },
   { key: 'crowdstrike', label: 'Falcon' },
-  { key: 'sentinelone', label: 'SentinelOne' },
 ];
 
 /**
@@ -72,7 +71,7 @@ export function KillChainFlow({ test, edrVendors = ['defender', 'crowdstrike'], 
                   {vendors.length > 0 && (
                     <>
                       <br />
-                      Alerts: {vendors.map((v) => `${v.label} ${fmtAlertCount(s.alerts[v.key] ?? 0, alertsIncomplete)}`).join(' · ')}
+                      Alerts: {vendors.map((v) => `${v.label} ${fmtAlertCount(s.alerts[v.key], alertsIncomplete)}`).join(' · ')}
                     </>
                   )}
                 </div>

@@ -136,8 +136,6 @@ app.get('/api/capabilities', (_req, res) => {
     certUpload: true,
     gitSync: false,
     agentBuild: false,
-    preExecutionNotices: false,
-    campaigns: false,
     platform: 'vercel',
   });
 });

@@ -1,7 +1,6 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { LayoutDashboard, Table, Filter, ChevronUp, ChevronDown, RefreshCw, Settings, ShieldCheck, ShieldOff } from 'lucide-react';
-import { CrowdStrikeLogo, SentinelOneLogo } from '@/components/shared/VendorLogos';
+import { LayoutDashboard, Table, Filter, ChevronUp, ChevronDown, RefreshCw, Settings, ShieldCheck, ShieldOff, Bird } from 'lucide-react';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { Button } from '@/components/ui/button';
 import SettingsModal from './components/SettingsModal';
@@ -21,7 +20,6 @@ import { Toast } from '@/components/shared/ui/Alert';
 import RiskAcceptancesTab from './components/RiskAcceptancesTab';
 import DefenderTab from './components/DefenderTab';
 import CrowdStrikeTab from './components/CrowdStrikeTab';
-import SentinelOneTab from './components/SentinelOneTab';
 import SecureScoreCard from './components/SecureScoreCard';
 import ZtaScoreCard from './components/ZtaScoreCard';
 import TopControlsCard from './components/TopControlsCard';
@@ -31,8 +29,6 @@ import { resolveTimeWindow, timeRangeDays } from '@/lib/timeRange';
 import { useAnalyticsAuth } from '@/hooks/useAnalyticsAuth';
 import { useDefenderConfig } from '@/hooks/useDefenderConfig';
 import { useCrowdStrikeConfig } from '@/hooks/useCrowdStrikeConfig';
-import { useSentinelOneConfig } from '@/hooks/useSentinelOneConfig';
-import { sentineloneAnalyticsApi } from '../../services/api/sentineloneAnalytics';
 import { useScoringMode } from '@/hooks/useScoringMode';
 import { analyticsApi } from '../../services/api/analytics';
 import { reportsApi } from '../../services/api/reports';
@@ -53,7 +49,7 @@ import type {
   RiskAcceptance,
 } from '../../services/api/analytics';
 
-type TabType = 'dashboard' | 'executions' | 'risk-acceptances' | 'defender' | 'crowdstrike' | 'sentinelone';
+type TabType = 'dashboard' | 'executions' | 'risk-acceptances' | 'defender' | 'crowdstrike';
 
 interface DefenseScoreData {
   overall: number | null;
@@ -84,8 +80,6 @@ export default function AnalyticsDashboardPage() {
   const { configured: defenderConfigured } = useDefenderConfig();
   // CrowdStrike integration status (same hidden-until-configured pattern)
   const { configured: crowdstrikeConfigured } = useCrowdStrikeConfig();
-  // SentinelOne integration status (same hidden-until-configured pattern)
-  const { configured: sentineloneConfigured } = useSentinelOneConfig();
   const { scoringMode } = useScoringMode();
 
   // UI State
@@ -97,7 +91,6 @@ export default function AnalyticsDashboardPage() {
     'risk-acceptances',
     ...(defenderConfigured ? ['defender' as const] : []),
     ...(crowdstrikeConfigured ? ['crowdstrike' as const] : []),
-    ...(sentineloneConfigured ? ['sentinelone' as const] : []),
   ];
   const [activeTab, setActiveTab] = useState<TabType>(
     tabFromUrl && validTabs.includes(tabFromUrl) ? tabFromUrl : 'dashboard'
@@ -113,9 +106,6 @@ export default function AnalyticsDashboardPage() {
   const [crowdstrikeTechniqueCount, setCrowdStrikeTechniqueCount] = useState<number>(0);
   const [ztaScoreTrendData, setZtaScoreTrendData] = useState<ZtaScoreTrendPoint[]>([]);
 
-  // SentinelOne dashboard data: technique overlap only (no posture-score equivalent).
-  const [sentineloneTechniqueCount, setSentinelOneTechniqueCount] = useState<number>(0);
-
   // Risk acceptances tab badge count
   const [activeRiskCount, setActiveRiskCount] = useState(0);
 
@@ -126,7 +116,7 @@ export default function AnalyticsDashboardPage() {
     if (resolved !== activeTab) {
       setActiveTab(resolved);
     }
-  }, [searchParams, defenderConfigured, crowdstrikeConfigured, sentineloneConfigured]);
+  }, [searchParams, defenderConfigured, crowdstrikeConfigured]);
 
   // Handle tab change with URL sync
   const handleTabChange = useCallback((tab: TabType) => {
@@ -252,7 +242,7 @@ export default function AnalyticsDashboardPage() {
     if (activeTab === 'dashboard') {
       loadDashboardData();
     }
-  }, [filterState.filters, activeTab, settingsVersion, defenderConfigured, crowdstrikeConfigured, sentineloneConfigured, scoringMode]);
+  }, [filterState.filters, activeTab, settingsVersion, defenderConfigured, crowdstrikeConfigured, scoringMode]);
 
   // Load executions data when tab/filters/pagination/settings change
   useEffect(() => {
@@ -406,18 +396,6 @@ export default function AnalyticsDashboardPage() {
         setZtaScore(null);
         setZtaScoreTrendData([]);
       }
-
-      // SentinelOne: technique overlap badge only — there is no ZTA-style score to show.
-      if (sentineloneConfigured) {
-        try {
-          const s1Techniques = await sentineloneAnalyticsApi.getTechniqueOverlap();
-          setSentinelOneTechniqueCount(s1Techniques.length);
-        } catch {
-          setSentinelOneTechniqueCount(0);
-        }
-      } else {
-        setSentinelOneTechniqueCount(0);
-      }
     } catch (error) {
       console.error('Failed to load dashboard data:', error);
     } finally {
@@ -434,7 +412,7 @@ export default function AnalyticsDashboardPage() {
         }
       }
     }
-  }, [filterState, defenderConfigured, crowdstrikeConfigured, sentineloneConfigured, scoringMode]);
+  }, [filterState, defenderConfigured, crowdstrikeConfigured, scoringMode]);
 
   // Load executions data
   const loadExecutionsData = useCallback(async () => {
@@ -705,8 +683,7 @@ export default function AnalyticsDashboardPage() {
             { id: 'executions' as const, label: 'All Executions', icon: Table, badge: executionsData?.pagination ? executionsData.pagination.totalDocuments.toLocaleString() : null },
             { id: 'risk-acceptances' as const, label: 'Risk Acceptances', icon: ShieldOff, badge: activeRiskCount > 0 ? String(activeRiskCount) : null },
             ...(defenderConfigured ? [{ id: 'defender' as const, label: 'Defender', icon: ShieldCheck, badge: null }] : []),
-            ...(crowdstrikeConfigured ? [{ id: 'crowdstrike' as const, label: 'CrowdStrike', icon: CrowdStrikeLogo, badge: null }] : []),
-            ...(sentineloneConfigured ? [{ id: 'sentinelone' as const, label: 'SentinelOne', icon: SentinelOneLogo, badge: null }] : []),
+            ...(crowdstrikeConfigured ? [{ id: 'crowdstrike' as const, label: 'CrowdStrike', icon: Bird, badge: null }] : []),
           ]).map(tab => (
             <button
               key={tab.id}
@@ -753,9 +730,6 @@ export default function AnalyticsDashboardPage() {
         ) : activeTab === 'crowdstrike' ? (
           /* CrowdStrike Tab (full-page view) */
           <CrowdStrikeTab dateRange={filterState.filters.dateRange} />
-        ) : activeTab === 'sentinelone' ? (
-          /* SentinelOne Tab (full-page view) */
-          <SentinelOneTab dateRange={filterState.filters.dateRange} />
         ) : activeTab === 'risk-acceptances' ? (
           /* Risk Acceptances Tab */
           <RiskAcceptancesTab onActiveCountChange={setActiveRiskCount} />
@@ -776,7 +750,6 @@ export default function AnalyticsDashboardPage() {
                 loading={loadingDashboard}
                 defenderTechniqueCount={defenderTechniqueCount}
                 crowdstrikeTechniqueCount={crowdstrikeTechniqueCount}
-                sentineloneTechniqueCount={sentineloneTechniqueCount}
                 onTechniqueClick={(technique) => {
                   filterState.setTechniques([technique]);
                   handleTabChange('executions');

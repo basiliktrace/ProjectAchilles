@@ -1,8 +1,6 @@
 import crypto from 'crypto';
 import { getDatabase } from './database.js';
 import { createTasks } from './tasks.service.js';
-import { createSchedulerTick } from '../notices/notices.service.js';
-import { toUTCDate, todayInTimezone, dayOfWeekInTimezone, randomTimeForDate } from './scheduleTime.js';
 import { AppError } from '../../middleware/error.middleware.js';
 import type {
   Schedule,
@@ -62,75 +60,49 @@ function parseScheduleRow(row: ScheduleRow): Schedule {
 }
 
 /**
- * How far past due a schedule (or a per_machine agent slot) must be before
- * listSchedules/getSchedule advance it. Within this window the 60-second
- * scheduler tick still fires the run; advancing it on a read would silently
- * skip it (the Dashboard and Tasks pages poll every 10-15 seconds).
- */
-export const FRESHEN_GRACE_MS = 5 * 60_000;
-
-/**
- * For active recurring schedules whose next_run_at is more than
- * FRESHEN_GRACE_MS in the past (e.g. after the machine was off and missed a
- * run), recompute next_run_at to the next future occurrence and persist it to
- * the DB so the cron tick reads the same value the UI shows. Missed runs are
- * skipped, not backfilled, and today's slot is still allowed (no afterFire).
+ * For active recurring schedules whose next_run_at is in the past (e.g. after
+ * the machine was off and missed a run), recompute next_run_at to the next
+ * future occurrence and persist it to the DB so the cron tick reads the
+ * same value the UI shows.
  *
  * Persistence matters: previously this function only mutated the returned
  * object, leaving the DB row stale. processSchedules's WHERE clause read the
  * stale value, which (combined with the ISO/space-format SQL bug above) led
  * to schedules firing multiple times at the wrong moment, or never firing.
  *
- * Persistence is conditional: we only write when next_run_at is past the
- * grace period. Active future values are left untouched, so a casual
- * page-refresh that triggers `listSchedules()` does NOT randomise the next
- * run on every call (which would defeat `randomize_time` and change displayed
- * "Next" on every refresh). A run inside the grace period is left for the
- * tick, so the UI can show a past "Next" for up to FRESHEN_GRACE_MS.
- *
- * The write only applies if the row still holds the values read here; if the
- * tick advanced it in between, the tick's value wins and is returned.
+ * Persistence is conditional: we only write when next_run_at was already in
+ * the past. Active future values are left untouched, so a casual page-refresh
+ * that triggers `listSchedules()` does NOT randomise the next run on every
+ * call (which would defeat `randomize_time` and change displayed "Next" on
+ * every refresh).
  */
-function freshenNextRun(row: ScheduleRow): Schedule {
-  const schedule = parseScheduleRow(row);
+function freshenNextRun(schedule: Schedule): Schedule {
   if (
     schedule.status !== 'active' ||
     schedule.schedule_type === 'once' ||
-    !row.next_run_at
+    !schedule.next_run_at
   ) {
     return schedule;
   }
 
-  const cutoffMs = Date.now() - FRESHEN_GRACE_MS;
-  if (new Date(row.next_run_at).getTime() >= cutoffMs) return schedule;
+  const nextRunDate = new Date(schedule.next_run_at);
+  if (nextRunDate > new Date()) return schedule;
 
-  const db = getDatabase();
-  const reread = (): Schedule => {
-    const current = db.prepare('SELECT * FROM schedules WHERE id = ?').get(schedule.id) as ScheduleRow | undefined;
-    return current ? parseScheduleRow(current) : schedule;
-  };
-
-  // per_machine: advance each agent slot past the grace period and re-min.
+  // per_machine: advance each past-due agent to its next occurrence and re-min.
   // Mirrors the fleet semantics below — missed runs are skipped, not backfilled.
   if (resolveRandomizeMode(schedule.schedule_config) === 'per_machine' && schedule.agent_next_runs) {
     const map = { ...schedule.agent_next_runs };
-    let advanced = false;
+    const nowIso = new Date().toISOString();
     for (const id of Object.keys(map)) {
-      if (new Date(map[id]).getTime() >= cutoffMs) continue;
+      if (map[id] > nowIso) continue;
       const next = computeNextRun(schedule.schedule_type, schedule.schedule_config, schedule.timezone);
       if (next) map[id] = next.toISOString();
       else delete map[id];
-      advanced = true;
     }
-    if (!advanced) return schedule;
     const freshMin = minNextRun(map);
-    const { changes } = db
-      .prepare(
-        'UPDATE schedules SET next_run_at = ?, agent_next_runs = ?, updated_at = datetime(\'now\') ' +
-        'WHERE id = ? AND next_run_at = ? AND agent_next_runs = ?',
-      )
-      .run(freshMin, JSON.stringify(map), schedule.id, row.next_run_at, row.agent_next_runs);
-    if (changes === 0) return reread();
+    getDatabase()
+      .prepare('UPDATE schedules SET next_run_at = ?, agent_next_runs = ?, updated_at = datetime(\'now\') WHERE id = ?')
+      .run(freshMin, JSON.stringify(map), schedule.id);
     return { ...schedule, next_run_at: freshMin, agent_next_runs: map };
   }
 
@@ -145,15 +117,98 @@ function freshenNextRun(row: ScheduleRow): Schedule {
   const freshNextIso = freshNext.toISOString();
 
   // Persist so the cron tick (processSchedules) reads the fresh value too.
-  const { changes } = db
-    .prepare('UPDATE schedules SET next_run_at = ?, updated_at = datetime(\'now\') WHERE id = ? AND next_run_at = ?')
-    .run(freshNextIso, schedule.id, row.next_run_at);
-  if (changes === 0) return reread();
+  getDatabase()
+    .prepare('UPDATE schedules SET next_run_at = ?, updated_at = datetime(\'now\') WHERE id = ?')
+    .run(freshNextIso, schedule.id);
 
   return {
     ...schedule,
     next_run_at: freshNextIso,
   };
+}
+
+/**
+ * Convert a date/time in a given timezone to a UTC Date.
+ * Uses Intl.DateTimeFormat for timezone support without external deps.
+ */
+function toUTCDate(dateStr: string, timeStr: string, timezone: string): Date {
+  // Build an ISO-like string in the target timezone, then resolve to UTC.
+  // Strategy: create a Date from the local values, then compute the offset.
+  const [hours, minutes] = timeStr.split(':').map(Number);
+  const [year, month, day] = dateStr.split('-').map(Number);
+
+  // Create a date and use Intl to figure out the offset
+  const target = new Date(Date.UTC(year, month - 1, day, hours, minutes, 0, 0));
+
+  // Get the timezone offset by formatting the date in the target timezone
+  const formatter = new Intl.DateTimeFormat('en-US', {
+    timeZone: timezone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  });
+
+  const parts = formatter.formatToParts(target);
+  const get = (type: string) => parseInt(parts.find(p => p.type === type)?.value ?? '0', 10);
+
+  const tzYear = get('year');
+  const tzMonth = get('month');
+  const tzDay = get('day');
+  const tzHour = get('hour') === 24 ? 0 : get('hour');
+  const tzMinute = get('minute');
+
+  // Compute offset: UTC time of `target` - what the timezone shows for `target`
+  const utcMs = Date.UTC(tzYear, tzMonth - 1, tzDay, tzHour, tzMinute, 0, 0);
+  const offsetMs = target.getTime() - utcMs;
+
+  // The actual UTC time for "year-month-day hours:minutes in timezone"
+  // is the naive UTC interpretation + the offset
+  const naiveUtc = Date.UTC(year, month - 1, day, hours, minutes, 0, 0);
+  return new Date(naiveUtc + offsetMs);
+}
+
+/**
+ * Get today's date string (YYYY-MM-DD) in a specific timezone.
+ */
+function todayInTimezone(timezone: string, referenceDate?: Date): string {
+  const d = referenceDate ?? new Date();
+  const formatter = new Intl.DateTimeFormat('en-CA', { timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit' });
+  return formatter.format(d);
+}
+
+/**
+ * Get the current day of the week (0=Sun..6=Sat) in a timezone.
+ */
+function dayOfWeekInTimezone(timezone: string, referenceDate?: Date): number {
+  const d = referenceDate ?? new Date();
+  const formatter = new Intl.DateTimeFormat('en-US', { timeZone: timezone, weekday: 'short' });
+  const dayStr = formatter.format(d);
+  const map: Record<string, number> = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+  return map[dayStr] ?? 0;
+}
+
+/**
+ * Generate a random HH:MM time string appropriate for the given date.
+ * Weekdays (Mon–Fri): 09:00–16:59 (office hours).
+ * Weekends (Sat–Sun): 00:00–23:59 (anytime).
+ */
+function randomTimeForDate(dateStr: string, timezone: string): string {
+  // Determine day-of-week for the target date (use noon to avoid DST edge cases)
+  const refDate = new Date(dateStr + 'T12:00:00Z');
+  const dow = dayOfWeekInTimezone(timezone, refDate);
+  const isWeekend = dow === 0 || dow === 6;
+
+  const startHour = isWeekend ? 0 : 9;
+  const endHour = isWeekend ? 24 : 17;
+  const totalMinutes = (endHour - startHour) * 60;
+  const randomMinutes = Math.floor(Math.random() * totalMinutes);
+  const hour = startHour + Math.floor(randomMinutes / 60);
+  const minute = randomMinutes % 60;
+  return `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
 }
 
 /**
@@ -165,30 +220,15 @@ function addDays(dateStr: string, days: number): string {
   return d.toISOString().slice(0, 10);
 }
 
-export interface ComputeNextRunOptions {
-  /**
-   * Set when advancing a schedule right after it fired (processSchedules).
-   * For randomized modes, every slot on the fire's local calendar day
-   * (`todayInTimezone(timezone, after)`) is skipped, so a fresh roll later the
-   * same day can't schedule a second run. Fixed mode ignores it: its slot
-   * equals the fire time, so it already moves to the next occurrence.
-   */
-  afterFire?: boolean;
-}
-
 /**
  * Compute the next run time (as UTC ISO string) for a given schedule config.
  * Returns null if the schedule should not run again (completed one-time).
- *
- * Without `opts.afterFire` today's slot is still allowed (creation, update,
- * freshenNextRun).
  */
 export function computeNextRun(
   type: ScheduleType,
   config: ScheduleConfig,
   timezone: string,
-  after?: Date,
-  opts?: ComputeNextRunOptions,
+  after?: Date
 ): Date | null {
   const now = after ?? new Date();
 
@@ -196,8 +236,6 @@ export function computeNextRun(
   // uses the configured `time`. (For 'per_machine', the caller invokes this once
   // per agent so each agent gets an independent random roll.)
   const randomize = type !== 'once' && resolveRandomizeMode(config) !== 'fixed';
-  // A randomized schedule that just fired must not land on the same local day.
-  const skipToday = randomize && opts?.afterFire === true;
 
   switch (type) {
     case 'once': {
@@ -209,11 +247,9 @@ export function computeNextRun(
     case 'daily': {
       const c = config as ScheduleConfigDaily;
       const todayStr = todayInTimezone(timezone, now);
-      if (!skipToday) {
-        const time = randomize ? randomTimeForDate(todayStr, timezone) : c.time;
-        const candidate = toUTCDate(todayStr, time, timezone);
-        if (candidate > now) return candidate;
-      }
+      const time = randomize ? randomTimeForDate(todayStr, timezone) : c.time;
+      const candidate = toUTCDate(todayStr, time, timezone);
+      if (candidate > now) return candidate;
       const tomorrowStr = addDays(todayStr, 1);
       const tomorrowTime = randomize ? randomTimeForDate(tomorrowStr, timezone) : c.time;
       return toUTCDate(tomorrowStr, tomorrowTime, timezone);
@@ -228,7 +264,6 @@ export function computeNextRun(
 
       // Check each of the next 8 days (covers wrapping around a week)
       for (let offset = 0; offset <= 7; offset++) {
-        if (skipToday && offset === 0) continue;
         const checkDay = (currentDay + offset) % 7;
         if (c.days.includes(checkDay)) {
           const dateStr = addDays(todayStr, offset);
@@ -248,11 +283,9 @@ export function computeNextRun(
       // Try this month
       const dayStr = String(Math.min(c.dayOfMonth, daysInMonth(year, month))).padStart(2, '0');
       const thisMonthDate = `${year}-${String(month).padStart(2, '0')}-${dayStr}`;
-      if (!(skipToday && thisMonthDate === todayStr)) {
-        const thisTime = randomize ? randomTimeForDate(thisMonthDate, timezone) : c.time;
-        const candidate = toUTCDate(thisMonthDate, thisTime, timezone);
-        if (candidate > now) return candidate;
-      }
+      const thisTime = randomize ? randomTimeForDate(thisMonthDate, timezone) : c.time;
+      const candidate = toUTCDate(thisMonthDate, thisTime, timezone);
+      if (candidate > now) return candidate;
 
       // Next month
       const nextMonth = month === 12 ? 1 : month + 1;
@@ -425,14 +458,14 @@ export function listSchedules(
     `SELECT * FROM schedules ${whereClause} ORDER BY created_at DESC`
   ).all(...params) as ScheduleRow[];
 
-  return rows.map(freshenNextRun);
+  return rows.map(parseScheduleRow).map(freshenNextRun);
 }
 
 export function getSchedule(id: string): Schedule {
   const db = getDatabase();
   const row = db.prepare('SELECT * FROM schedules WHERE id = ?').get(id) as ScheduleRow | undefined;
   if (!row) throw new AppError('Schedule not found', 404);
-  return freshenNextRun(row);
+  return freshenNextRun(parseScheduleRow(row));
 }
 
 export function updateSchedule(
@@ -536,14 +569,8 @@ export function deleteSchedule(id: string): void {
 // SCHEDULER TICK
 // ============================================================================
 
-/**
- * `clock` is for tests: it drives both the due-row query and every time used
- * below. Without it the query keeps using SQLite's own clock, as before.
- */
-export function processSchedules(clock?: Date): { processed: number; errors: string[] } {
+export function processSchedules(): { processed: number; errors: string[] } {
   const db = getDatabase();
-  const now = clock ?? new Date();
-  const tick = createSchedulerTick(now);
   const errors: string[] = [];
   let processed = 0;
 
@@ -560,11 +587,12 @@ export function processSchedules(clock?: Date): { processed: number; errors: str
     SELECT * FROM schedules
     WHERE status = 'active'
       AND next_run_at IS NOT NULL
-      AND datetime(next_run_at) <= datetime(${clock ? '?' : "'now'"})
-  `).all(...(clock ? [clock.toISOString()] : [])) as ScheduleRow[];
+      AND datetime(next_run_at) <= datetime('now')
+  `).all() as ScheduleRow[];
 
   for (const row of dueRows) {
     const schedule = parseScheduleRow(row);
+    const now = new Date();
 
     // Filter out decommissioned agents — they'll never pick up tasks
     const placeholders = schedule.agent_ids.map(() => '?').join(', ');
@@ -588,54 +616,22 @@ export function processSchedules(clock?: Date): { processed: number; errors: str
         (id) => eligibleSet.has(id) && map[id] <= nowIso,
       );
 
-      // Agents advanced below as if they had fired: the past-due ones, plus
-      // (R24) the late tail swept onto a run notice. An unparseable entry is
-      // advanced too (from now), so it heals instead of sticking forever.
-      const fired = new Set(
-        Object.keys(map).filter((id) => map[id] <= nowIso || !Number.isFinite(Date.parse(map[id]))),
-      );
-
       if (dueAgentIds.length > 0) {
-        // Rulings R23/R24: today's day notice is already announced and its
-        // pickup deadline is (nearly) past, e.g. a slot at the end of the
-        // window or a catch-up after a restart. Its window is never extended,
-        // so these runs get this tick's run notice instead. To send one email
-        // per window end rather than one per late minute, every remaining
-        // eligible agent slotted before the window end goes with them (held
-        // until the run notice's release_at like any other task).
-        const closed = tick.closedDayNotice(schedule);
-        const tail = closed
-          ? Object.keys(map).filter(
-              (id) => eligibleSet.has(id) && map[id] > nowIso && Date.parse(map[id]) < closed.dayWindowEnd.getTime(),
-            )
-          : [];
-        const request = {
-          agent_ids: [...dueAgentIds, ...tail],
-          test_uuid: schedule.test_uuid,
-          test_name: schedule.test_name,
-          binary_name: schedule.binary_name,
-          execution_timeout: schedule.execution_timeout,
-          priority: schedule.priority,
-          metadata: schedule.metadata,
-          target_index: schedule.target_index ?? undefined,
-        };
         try {
-          if (closed) {
-            // Same flow as the fleet path below, minus the pending-notice skip:
-            // these per-machine runs are already due.
-            const noticeId = tick.runNoticeFor(schedule.id, schedule.timezone, schedule.created_by, schedule.org_id);
-            createTasks(request, schedule.org_id, schedule.created_by, { noticeId });
-            tick.confirmRunSchedule(schedule.id, schedule.org_id);
-            // Only on success: a failed tail keeps its slots and retries then.
-            for (const id of tail) fired.add(id);
-          } else {
-            // One transaction: if createTasks throws, today's day notice is not
-            // left behind with no tasks (it would block the day and alarm).
-            db.transaction(() => {
-              const noticeId = tick.dayNoticeFor({ ...schedule, agent_next_runs: map });
-              createTasks(request, schedule.org_id, schedule.created_by, { noticeId });
-            })();
-          }
+          createTasks(
+            {
+              agent_ids: dueAgentIds,
+              test_uuid: schedule.test_uuid,
+              test_name: schedule.test_name,
+              binary_name: schedule.binary_name,
+              execution_timeout: schedule.execution_timeout,
+              priority: schedule.priority,
+              metadata: schedule.metadata,
+              target_index: schedule.target_index ?? undefined,
+            },
+            schedule.org_id,
+            schedule.created_by,
+          );
           processed++;
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
@@ -648,22 +644,12 @@ export function processSchedules(clock?: Date): { processed: number; errors: str
         processed++;
       }
 
-      // Advance every past-due agent (including ineligible ones) and any swept
-      // tail to its next occurrence, so the schedule's minimum moves into the
-      // future and the row is not re-selected on every tick.
-      for (const id of fired) {
-        // From the agent's own slot (a swept tail slot is later than now), so
-        // its next occurrence is never rolled back into the slot just used.
-        // A malformed slot (NaN) falls back to now: an Invalid Date would make
-        // computeNextRun throw and abort the whole tick.
-        const nowMs = now.getTime();
-        const slotMs = Date.parse(map[id]);
-        const after = new Date(Number.isFinite(slotMs) ? Math.max(nowMs, slotMs) : nowMs);
-        // afterFire (R25): a randomized schedule never re-rolls onto the same
-        // local day as the run that just fired, tail slots included.
-        const next = computeNextRun(
-          schedule.schedule_type, schedule.schedule_config, schedule.timezone, after, { afterFire: true },
-        );
+      // Advance every past-due agent (including ineligible ones) to its next
+      // occurrence, so the schedule's minimum moves into the future and the row
+      // is not re-selected on every tick.
+      for (const id of Object.keys(map)) {
+        if (map[id] > nowIso) continue;
+        const next = computeNextRun(schedule.schedule_type, schedule.schedule_config, schedule.timezone, now);
         if (next) map[id] = next.toISOString();
         else delete map[id];
       }
@@ -680,16 +666,8 @@ export function processSchedules(clock?: Date): { processed: number; errors: str
         `[Scheduler] Skipping schedule "${schedule.name ?? schedule.id}" — all agents are decommissioned`
       );
       processed++;
-    } else if (tick.hasPendingRunNotice(schedule.id, schedule.org_id)) {
-      // The previous occurrence's notice is still undelivered: don't stack a
-      // second batch behind it. Record the skip and advance as usual.
-      tick.recordSkippedOccurrence(schedule.id, schedule.created_by, schedule.timezone, schedule.org_id);
-      console.warn(
-        `[Scheduler] Skipping schedule "${schedule.name ?? schedule.id}" — previous run still waiting for notice delivery`
-      );
     } else {
       try {
-        const noticeId = tick.runNoticeFor(schedule.id, schedule.timezone, schedule.created_by, schedule.org_id);
         createTasks(
           {
             agent_ids: eligibleAgentIds,
@@ -703,11 +681,7 @@ export function processSchedules(clock?: Date): { processed: number; errors: str
           },
           schedule.org_id,
           schedule.created_by,
-          { noticeId },
         );
-        // Listed on the shared notice only once its tasks exist, so a failed
-        // schedule never appears in the trigger text or blocks its next run.
-        tick.confirmRunSchedule(schedule.id, schedule.org_id);
         processed++;
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
@@ -726,7 +700,6 @@ export function processSchedules(clock?: Date): { processed: number; errors: str
         schedule.schedule_config,
         schedule.timezone,
         now,
-        { afterFire: true },
       );
       db.prepare("UPDATE schedules SET next_run_at = ?, last_run_at = ?, updated_at = datetime('now') WHERE id = ?")
         .run(nextRun ? nextRun.toISOString() : null, now.toISOString(), schedule.id);

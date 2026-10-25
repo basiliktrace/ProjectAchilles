@@ -10,11 +10,9 @@ They are the backward-compatibility proof for the existing TLS modes
 current script in render-only mode and requires:
 
 - `backend/.env` equal to `<mode>.backend.env`;
-- root `.env` equal to `<mode>.root.env` plus two appended lines, the only
-  intended differences: `CADDY_BIND_IP=` (empty, so compose publishes Caddy on
-  every IPv4 and IPv6 address, as before) and
-  `COMPOSE_PROJECT_NAME=achilles-server` (the pinned project name of a fresh
-  install; an existing install keeps its directory's name).
+- root `.env` equal to `<mode>.root.env` plus one appended line,
+  `CADDY_BIND_IP=` (empty). That is the only intended difference: an empty
+  value makes compose publish Caddy on every IPv4 and IPv6 address, as before.
   `ACHILLES_CA_DIR` is written only in `achilles-ca` mode.
 
 Do not edit these files by hand. Regenerate them (Docker is stubbed, nothing

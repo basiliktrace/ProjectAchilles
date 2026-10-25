@@ -180,20 +180,12 @@ Persistent state lives in Docker volumes:
 Back up `achilles-data` regularly, e.g.:
 
 ```bash
-docker run --rm -v achilles-server_achilles-data:/data -v "$PWD":/backup alpine \
+docker run --rm -v projectachilles_achilles-data:/data -v "$PWD":/backup alpine \
   tar czf /backup/achilles-data-$(date +%F).tar.gz -C /data .
 ```
 
-> The volume prefix is the compose project name, which the installer pins in the
-> root `.env` as `COMPOSE_PROJECT_NAME`: `achilles-server` on a new install. An
-> install made before this setting keeps the checkout directory's name (for
-> example `projectachilles_achilles-data`) so its volumes stay attached. Check
-> with `grep COMPOSE_PROJECT_NAME .env` or `docker volume ls`.
->
-> The installer refuses to run when another checkout's containers already use
-> the project name, because `up` would take over that stack and its volumes.
-> For a second stack on the same host, set a different `COMPOSE_PROJECT_NAME` in
-> `deploy.config.env` before the first install; it can't be changed afterwards.
+> The volume prefix (`projectachilles_`) is the compose project name — confirm
+> with `docker volume ls`.
 
 ## Troubleshooting
 

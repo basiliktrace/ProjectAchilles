@@ -60,69 +60,43 @@ function parseScheduleRow(row: ScheduleRow): Schedule {
 }
 
 /**
- * How far past due a schedule (or a per_machine agent slot) must be before
- * listSchedules/getSchedule advance it. Within this window the scheduler cron
- * still fires the run; advancing it on a read would silently skip it (the
- * Dashboard and Tasks pages poll every 10-15 seconds).
- */
-export const FRESHEN_GRACE_MS = 5 * 60_000;
-
-/**
- * For active recurring schedules whose next_run_at is more than
- * FRESHEN_GRACE_MS in the past (e.g. after the machine was off and missed a
- * run), recompute next_run_at to the next future occurrence and persist it so
- * the cron tick reads the same value the UI shows. Missed runs are skipped,
- * not backfilled, and today's slot is still allowed (no afterFire). See the
- * backend/ counterpart for full rationale.
+ * For active recurring schedules whose next_run_at is in the past (e.g. after
+ * the machine was off and missed a run), recompute next_run_at to the next
+ * future occurrence and persist it so the cron tick reads the same value
+ * the UI shows. See the backend/ counterpart for full rationale.
  *
- * Persistence is conditional: we only write when next_run_at is past the
- * grace period, to keep `randomize_time` stable across page refreshes and to
- * leave a run that is about to fire for the cron.
- *
- * The write only applies if the row still holds the values read here. A
- * request reads, computes and writes across awaits, so the cron can advance
- * the row in between; overwriting it could schedule a same-day second run.
- * When 0 rows change, the cron's value wins and is returned.
+ * Persistence is conditional: we only write when next_run_at was already in
+ * the past, to keep `randomize_time` stable across page refreshes.
  */
-async function freshenNextRun(row: ScheduleRow): Promise<Schedule> {
-  const schedule = parseScheduleRow(row);
+async function freshenNextRun(schedule: Schedule): Promise<Schedule> {
   if (
     schedule.status !== 'active' ||
     schedule.schedule_type === 'once' ||
-    !row.next_run_at
+    !schedule.next_run_at
   ) {
     return schedule;
   }
 
-  const cutoffMs = Date.now() - FRESHEN_GRACE_MS;
-  if (new Date(row.next_run_at).getTime() >= cutoffMs) return schedule;
+  const nextRunDate = new Date(schedule.next_run_at);
+  if (nextRunDate > new Date()) return schedule;
 
-  const db = await getDb();
-  const reread = async (): Promise<Schedule> => {
-    const current = await db.get('SELECT * FROM schedules WHERE id = ?', [schedule.id]) as unknown as ScheduleRow | undefined;
-    return current ? parseScheduleRow(current) : schedule;
-  };
-
-  // per_machine: advance each agent slot past the grace period and re-min.
+  // per_machine: advance each past-due agent to its next occurrence and re-min.
   // Mirrors the fleet semantics below — missed runs are skipped, not backfilled.
   if (resolveRandomizeMode(schedule.schedule_config) === 'per_machine' && schedule.agent_next_runs) {
     const map = { ...schedule.agent_next_runs };
-    let advanced = false;
+    const nowIso = new Date().toISOString();
     for (const id of Object.keys(map)) {
-      if (new Date(map[id]).getTime() >= cutoffMs) continue;
+      if (map[id] > nowIso) continue;
       const next = computeNextRun(schedule.schedule_type, schedule.schedule_config, schedule.timezone);
       if (next) map[id] = next.toISOString();
       else delete map[id];
-      advanced = true;
     }
-    if (!advanced) return schedule;
     const freshMin = minNextRun(map);
-    const { changes } = await db.run(
-      'UPDATE schedules SET next_run_at = ?, agent_next_runs = ?, updated_at = datetime(\'now\') ' +
-      'WHERE id = ? AND next_run_at = ? AND agent_next_runs = ?',
-      [freshMin, JSON.stringify(map), schedule.id, row.next_run_at, row.agent_next_runs]
+    const db = await getDb();
+    await db.run(
+      'UPDATE schedules SET next_run_at = ?, agent_next_runs = ?, updated_at = datetime(\'now\') WHERE id = ?',
+      [freshMin, JSON.stringify(map), schedule.id]
     );
-    if (changes === 0) return reread();
     return { ...schedule, next_run_at: freshMin, agent_next_runs: map };
   }
 
@@ -137,11 +111,11 @@ async function freshenNextRun(row: ScheduleRow): Promise<Schedule> {
   const freshNextIso = freshNext.toISOString();
 
   // Persist so the cron tick (processSchedules) reads the fresh value too.
-  const { changes } = await db.run(
-    'UPDATE schedules SET next_run_at = ?, updated_at = datetime(\'now\') WHERE id = ? AND next_run_at = ?',
-    [freshNextIso, schedule.id, row.next_run_at]
+  const db = await getDb();
+  await db.run(
+    'UPDATE schedules SET next_run_at = ?, updated_at = datetime(\'now\') WHERE id = ?',
+    [freshNextIso, schedule.id]
   );
-  if (changes === 0) return reread();
 
   return {
     ...schedule,
@@ -242,30 +216,15 @@ function addDays(dateStr: string, days: number): string {
   return d.toISOString().slice(0, 10);
 }
 
-export interface ComputeNextRunOptions {
-  /**
-   * Set when advancing a schedule right after it fired (processSchedules).
-   * For randomized modes, every slot on the fire's local calendar day
-   * (`todayInTimezone(timezone, after)`) is skipped, so a fresh roll later the
-   * same day can't schedule a second run. Fixed mode ignores it: its slot
-   * equals the fire time, so it already moves to the next occurrence.
-   */
-  afterFire?: boolean;
-}
-
 /**
  * Compute the next run time (as UTC ISO string) for a given schedule config.
  * Returns null if the schedule should not run again (completed one-time).
- *
- * Without `opts.afterFire` today's slot is still allowed (creation, update,
- * freshenNextRun).
  */
 export function computeNextRun(
   type: ScheduleType,
   config: ScheduleConfig,
   timezone: string,
-  after?: Date,
-  opts?: ComputeNextRunOptions,
+  after?: Date
 ): Date | null {
   const now = after ?? new Date();
 
@@ -273,8 +232,6 @@ export function computeNextRun(
   // uses the configured `time`. (For 'per_machine', the caller invokes this once
   // per agent so each agent gets an independent random roll.)
   const randomize = type !== 'once' && resolveRandomizeMode(config) !== 'fixed';
-  // A randomized schedule that just fired must not land on the same local day.
-  const skipToday = randomize && opts?.afterFire === true;
 
   switch (type) {
     case 'once': {
@@ -286,11 +243,9 @@ export function computeNextRun(
     case 'daily': {
       const c = config as ScheduleConfigDaily;
       const todayStr = todayInTimezone(timezone, now);
-      if (!skipToday) {
-        const time = randomize ? randomTimeForDate(todayStr, timezone) : c.time;
-        const candidate = toUTCDate(todayStr, time, timezone);
-        if (candidate > now) return candidate;
-      }
+      const time = randomize ? randomTimeForDate(todayStr, timezone) : c.time;
+      const candidate = toUTCDate(todayStr, time, timezone);
+      if (candidate > now) return candidate;
       const tomorrowStr = addDays(todayStr, 1);
       const tomorrowTime = randomize ? randomTimeForDate(tomorrowStr, timezone) : c.time;
       return toUTCDate(tomorrowStr, tomorrowTime, timezone);
@@ -305,7 +260,6 @@ export function computeNextRun(
 
       // Check each of the next 8 days (covers wrapping around a week)
       for (let offset = 0; offset <= 7; offset++) {
-        if (skipToday && offset === 0) continue;
         const checkDay = (currentDay + offset) % 7;
         if (c.days.includes(checkDay)) {
           const dateStr = addDays(todayStr, offset);
@@ -325,11 +279,9 @@ export function computeNextRun(
       // Try this month
       const dayStr = String(Math.min(c.dayOfMonth, daysInMonth(year, month))).padStart(2, '0');
       const thisMonthDate = `${year}-${String(month).padStart(2, '0')}-${dayStr}`;
-      if (!(skipToday && thisMonthDate === todayStr)) {
-        const thisTime = randomize ? randomTimeForDate(thisMonthDate, timezone) : c.time;
-        const candidate = toUTCDate(thisMonthDate, thisTime, timezone);
-        if (candidate > now) return candidate;
-      }
+      const thisTime = randomize ? randomTimeForDate(thisMonthDate, timezone) : c.time;
+      const candidate = toUTCDate(thisMonthDate, thisTime, timezone);
+      if (candidate > now) return candidate;
 
       // Next month
       const nextMonth = month === 12 ? 1 : month + 1;
@@ -496,14 +448,14 @@ export async function listSchedules(
     [...params]
   ) as unknown as ScheduleRow[];
 
-  return Promise.all(rows.map(freshenNextRun));
+  return Promise.all(rows.map(parseScheduleRow).map(freshenNextRun));
 }
 
 export async function getSchedule(id: string): Promise<Schedule> {
   const db = await getDb();
   const row = await db.get('SELECT * FROM schedules WHERE id = ?', [id]) as unknown as ScheduleRow | undefined;
   if (!row) throw new AppError('Schedule not found', 404);
-  return freshenNextRun(row);
+  return freshenNextRun(parseScheduleRow(row));
 }
 
 export async function updateSchedule(
@@ -695,9 +647,7 @@ export async function processSchedules(): Promise<{ processed: number; errors: s
       // is not re-selected on every tick.
       for (const id of Object.keys(map)) {
         if (map[id] > nowIso) continue;
-        const next = computeNextRun(
-          schedule.schedule_type, schedule.schedule_config, schedule.timezone, now, { afterFire: true },
-        );
+        const next = computeNextRun(schedule.schedule_type, schedule.schedule_config, schedule.timezone, now);
         if (next) map[id] = next.toISOString();
         else delete map[id];
       }
@@ -751,7 +701,6 @@ export async function processSchedules(): Promise<{ processed: number; errors: s
         schedule.schedule_config,
         schedule.timezone,
         now,
-        { afterFire: true },
       );
       await db.run(
         "UPDATE schedules SET next_run_at = ?, last_run_at = ?, updated_at = datetime('now') WHERE id = ?",

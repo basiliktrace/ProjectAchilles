@@ -1,5 +1,4 @@
 import { Link } from 'react-router-dom';
-import type { ComponentType } from 'react';
 import type { LucideIcon } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -7,8 +6,7 @@ export interface KpiCardProps {
   label: string;
   value: string;
   sub?: string;
-  /** A lucide icon, or a brand logo component taking the same className sizing. */
-  icon: LucideIcon | ComponentType<{ className?: string }>;
+  icon: LucideIcon;
   to: string;
   /** danger colors the value + icon (e.g. defense score below threshold). */
   tone?: 'default' | 'accent' | 'danger' | 'muted';
