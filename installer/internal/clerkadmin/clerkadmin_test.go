@@ -108,11 +108,16 @@ func TestPendingAdminInvitationIsNotResent(t *testing.T) {
 	}
 }
 
-func TestPendingInvitationWithoutAdminRoleGetsANewOne(t *testing.T) {
-	f := &fakeClerk{users: `[]`, invitations: `[{"email_address":"admin@example.com","public_metadata":{}}]`}
+// An older pending invitation without the admin role is revoked first: left
+// valid next to the new one, accepting it would create an account with no role.
+func TestPendingInvitationWithoutAdminRoleIsReplaced(t *testing.T) {
+	f := &fakeClerk{users: `[]`, invitations: `[{"id":"inv_old","email_address":"admin@example.com","public_metadata":{}},{"id":"inv_other","email_address":"someone@example.com","public_metadata":{}}]`}
 	r, err := f.server(t).EnsureAdmin(context.Background(), "admin@example.com", signUp)
-	if err != nil || r.Outcome != Invited || len(f.writes) != 1 {
-		t.Fatalf("got %+v, %v, writes %v", r, err, f.writes)
+	if err != nil || r.Outcome != Invited {
+		t.Fatalf("got %+v, %v", r, err)
+	}
+	if want := []string{"POST /invitations/inv_old/revoke", "POST /invitations"}; strings.Join(f.writes, ",") != strings.Join(want, ",") {
+		t.Fatalf("writes %v, want %v", f.writes, want)
 	}
 }
 

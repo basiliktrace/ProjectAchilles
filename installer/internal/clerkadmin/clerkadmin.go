@@ -97,10 +97,21 @@ func (c Client) EnsureAdmin(ctx context.Context, email, signUpURL string) (Resul
 	if err := c.do(ctx, "GET", "/invitations?"+url.Values{"status": {"pending"}, "query": {email}}.Encode(), nil, &pending); err != nil {
 		return res, err
 	}
+	var stale []string // pending for this address, but without the admin role
 	for _, inv := range pending.items {
-		if strings.EqualFold(inv.EmailAddress, email) && isAdmin(inv.PublicMetadata) {
+		if !strings.EqualFold(inv.EmailAddress, email) {
+			continue
+		}
+		if isAdmin(inv.PublicMetadata) {
 			res.Outcome = AlreadyInvited
 			return res, nil
+		}
+		stale = append(stale, inv.ID)
+	}
+	// Left valid next to the new one, accepting it would make a roleless account.
+	for _, id := range stale {
+		if err := c.do(ctx, "POST", "/invitations/"+url.PathEscape(id)+"/revoke", nil, nil); err != nil {
+			return res, err
 		}
 	}
 
@@ -109,13 +120,14 @@ func (c Client) EnsureAdmin(ctx context.Context, email, signUpURL string) (Resul
 		"public_metadata": metadata{"role": "admin"},
 		"redirect_url":    signUpURL,
 		"notify":          true,
-		"ignore_existing": true, // a pending invitation without the admin role
+		"ignore_existing": true, // existing accounts and pending invitations are handled above
 	}
 	res.Outcome = Invited
 	return res, c.do(ctx, "POST", "/invitations", body, nil)
 }
 
 type invitation struct {
+	ID             string   `json:"id"`
 	EmailAddress   string   `json:"email_address"`
 	PublicMetadata metadata `json:"public_metadata"`
 }
