@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { CheckCircle, Info, ExternalLink, Unlink, RefreshCw } from 'lucide-react';
 import { sentinelOneApi } from '@/services/api/sentinelone';
 import type {
@@ -35,6 +35,9 @@ const STATUS_OPTIONS: SentinelOneIncidentStatus[] = ['unresolved', 'in_progress'
 const parseIds = (value: string): string[] => value.split(/[\s,]+/).map((s) => s.trim()).filter(Boolean);
 const toggle = <T,>(list: T[], value: T): T[] => (list.includes(value) ? list.filter((v) => v !== value) : [...list, value]);
 const fmt = (iso: string | null | undefined) => (iso ? new Date(iso).toLocaleString() : 'never');
+const SYNC_POLL_MS = 3000;
+const SYNC_POLL_MAX_MS = 30 * 60_000;
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 interface SentinelOneConfigProps {
   onStatusChange?: (configured: boolean) => void;
@@ -70,6 +73,8 @@ export function SentinelOneConfig({ onStatusChange }: SentinelOneConfigProps) {
   const [syncStatus, setSyncStatus] = useState<SentinelOneSyncStatus | null>(null);
   const [alerts, setAlerts] = useState<{ items: SentinelOneAlert[]; total: number } | null>(null);
   const [history, setHistory] = useState<SentinelOneAuditRecord[]>([]);
+  const mounted = useRef(true);
+  useEffect(() => () => { mounted.current = false; }, []);
 
   const refreshRuntime = useCallback(async () => {
     const [status, latest, audit] = await Promise.all([
@@ -173,12 +178,24 @@ export function SentinelOneConfig({ onStatusChange }: SentinelOneConfigProps) {
     try {
       setSyncing(true);
       setError(null);
-      await sentinelOneApi.triggerSync(reset);
+      const started = await sentinelOneApi.triggerSync(reset);
+      if (!started.started && reset) setError('A sync is already running; re-backfill was not started. Try again when it finishes.');
+      // The sync runs in the background (a backfill can take minutes): poll its status.
+      const deadline = Date.now() + SYNC_POLL_MAX_MS;
+      while (mounted.current && Date.now() < deadline) {
+        await sleep(SYNC_POLL_MS);
+        const status = await sentinelOneApi.getSyncStatus();
+        if (!mounted.current) return;
+        setSyncStatus(status);
+        if (!status.inProgress) break;
+      }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Sync failed');
+      if (mounted.current) setError(err instanceof Error ? err.message : 'Sync failed');
     } finally {
-      setSyncing(false);
-      refreshRuntime();
+      if (mounted.current) {
+        setSyncing(false);
+        refreshRuntime();
+      }
     }
   };
 

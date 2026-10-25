@@ -126,14 +126,26 @@ router.post('/test', requirePermission('integrations:write'), validate(SentinelO
 // Sync
 // ---------------------------------------------------------------------------
 
-/** POST /api/integrations/sentinelone/sync — manual sync ({ reset: true } re-runs the backfill). */
+/**
+ * POST /api/integrations/sentinelone/sync — start a manual sync ({ reset: true }
+ * re-runs the backfill). Returns 202 at once: a backfill can cover up to 365
+ * days, far longer than a proxy keeps a request open. Poll /sync/status
+ * (`inProgress`, `lastSyncResult`). A request while a sync runs starts
+ * nothing (and does not reset): `started: false`.
+ */
 router.post('/sync', requirePermission('integrations:write'), validate(SentinelOneSyncSchema), asyncHandler(async (req, res) => {
   if (!new IntegrationsSettingsService().isSentinelOneConfigured()) {
     throw new AppError('SentinelOne integration is not configured', 400);
   }
+  if (sentinelOneSyncService.getSyncStatus().inProgress) {
+    res.status(202).json({ success: true, data: { started: false, inProgress: true } });
+    return;
+  }
   if (req.body?.reset) sentinelOneSyncService.resetCheckpoints();
-  const result = await sentinelOneSyncService.syncAll();
-  res.json({ success: true, data: result });
+  sentinelOneSyncService.syncAll().catch((err) => {
+    console.warn('⚠ SentinelOne manual sync failed:', err instanceof Error ? err.message : err);
+  });
+  res.status(202).json({ success: true, data: { started: true, inProgress: true } });
 }));
 
 /** GET /api/integrations/sentinelone/sync/status */

@@ -82,6 +82,31 @@ describe('SentinelOne routes', () => {
     expect(JSON.stringify(get.body)).not.toContain(TOKEN);
   });
 
+  it('POST /sync answers 202 at once and runs the sync in the background', async () => {
+    await request(app()).post('/api/integrations/sentinelone').send({ base_url: BASE, api_token: TOKEN });
+    vi.mocked(sentinelOneSyncService.syncAll).mockClear();
+    let finish: (v: { timestamp: string }) => void = () => {};
+    vi.mocked(sentinelOneSyncService.syncAll).mockReturnValueOnce(new Promise((r) => { finish = r; }));
+    const res = await request(app()).post('/api/integrations/sentinelone/sync').send({});
+    expect(res.status).toBe(202);
+    expect(res.body).toEqual({ success: true, data: { started: true, inProgress: true } });
+    expect(sentinelOneSyncService.syncAll).toHaveBeenCalledTimes(1);
+    finish({ timestamp: 'done' });
+  });
+
+  it('POST /sync while a sync runs starts nothing and does not reset the checkpoints', async () => {
+    await request(app()).post('/api/integrations/sentinelone').send({ base_url: BASE, api_token: TOKEN });
+    vi.mocked(sentinelOneSyncService.syncAll).mockClear();
+    const status = vi.spyOn(sentinelOneSyncService, 'getSyncStatus').mockReturnValueOnce({ inProgress: true } as never);
+    const reset = vi.spyOn(sentinelOneSyncService, 'resetCheckpoints');
+    const res = await request(app()).post('/api/integrations/sentinelone/sync').send({ reset: true });
+    expect(res.status).toBe(202);
+    expect(res.body.data).toEqual({ started: false, inProgress: true });
+    expect(reset).not.toHaveBeenCalled();
+    expect(sentinelOneSyncService.syncAll).not.toHaveBeenCalled();
+    status.mockRestore();
+  });
+
   it('validates poll interval / backfill bounds', async () => {
     const res = await request(app()).post('/api/integrations/sentinelone').send({ base_url: BASE, api_token: TOKEN, backfill_days: 400 });
     expect(res.status).toBe(400);

@@ -155,9 +155,10 @@ export const sentinelOneApi = {
     return response.data;
   },
 
-  async triggerSync(reset = false): Promise<{ success: boolean }> {
+  /** Starts a sync in the background (202); poll getSyncStatus() until inProgress is false. */
+  async triggerSync(reset = false): Promise<{ started: boolean; inProgress: boolean }> {
     const response = await apiClient.post('/integrations/sentinelone/sync', { reset });
-    return response.data;
+    return response.data.data;
   },
 
   async getSyncStatus(): Promise<SentinelOneSyncStatus> {
