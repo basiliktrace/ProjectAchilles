@@ -209,6 +209,11 @@ export function passesFilters(doc: SentinelOneAlertDoc, settings: Pick<SentinelO
   return true;
 }
 
+/** Console + scope a sync ran against: checkpoints are only valid for the same pair. */
+function scopeFingerprint(s: Pick<SentinelOneIntegrationSettings, 'base_url' | 'scope'> | null | undefined): string {
+  return JSON.stringify({ base_url: s?.base_url ?? null, scope: s?.scope ?? {} });
+}
+
 function describeError(err: unknown): string {
   if (err instanceof Error) return err.message || `${err.name}${(err as { statusCode?: number }).statusCode ? ` HTTP ${(err as { statusCode?: number }).statusCode}` : ''}`;
   return String(err);
@@ -279,6 +284,19 @@ export class SentinelOneSyncService {
       }
       if (sources.includes('cloud_detection_alerts')) {
         result.cloud_detection_alerts = await this.syncSource('cloud_detection_alerts', client, es, settings, this.status.lastAlertSync);
+      }
+
+      // The console or scope was changed while this sync ran: the save already
+      // cleared the checkpoints, and writing this run's (old-scope) ones back
+      // would skip the new scope's backfill. Drop them and run again soon.
+      if (scopeFingerprint(svc.getSentinelOneSettings()) !== scopeFingerprint(settings)) {
+        console.log('[SentinelOne] console or scope changed during the sync: checkpoints discarded, re-syncing');
+        this.status.lastThreatSync = null;
+        this.status.lastAlertSync = null;
+        this.status.lastAttemptAt = null; // isDue() → true on the next tick
+        result.scopeChanged = true;
+        this.status.lastSyncResult = result;
+        return result;
       }
 
       // Record the doc-schema version only once every enabled source has a

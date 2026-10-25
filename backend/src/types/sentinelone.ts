@@ -183,7 +183,7 @@ export interface S1Threat {
     description?: string;
     tactics?: Array<{ name?: string; source?: string; techniques?: Array<{ name?: string; link?: string }> }>;
   }>;
-  mitigationStatus?: Array<{ action?: string; status?: string; lastUpdate?: string }>;
+  mitigationStatus?: Array<{ action?: string; status?: string; lastUpdate?: string; mitigationStartedAt?: string; mitigationEndedAt?: string }>;
 }
 
 export interface S1CloudDetectionAlert {
@@ -335,6 +335,8 @@ export interface SentinelOneSourceSyncResult {
 }
 
 export interface SentinelOneSyncResult {
+  /** The console or scope changed mid-run: nothing was checkpointed, a fresh sync follows. */
+  scopeChanged?: boolean;
   threats?: SentinelOneSourceSyncResult;
   cloud_detection_alerts?: SentinelOneSourceSyncResult;
   /** Correlation pass run after the poll (f0rtika.sentinelone_* flags on results). */

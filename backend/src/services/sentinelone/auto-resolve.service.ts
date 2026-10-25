@@ -96,10 +96,13 @@ export class SentinelOneAutoResolveService {
         }
 
         // Fail closed: act only on what the console still reports as unresolved.
-        const current = live.get(`${c.sourceType}:${c.s1Id}`);
+        const current = live.statuses.get(`${c.sourceType}:${c.s1Id}`);
         if (current !== ELIGIBLE_STATUS) {
           result.skipped += 1;
           if (current) await this.mirrorStatus(c, current);
+          // Gone from the console (purged, deleted, out of scope): shelve it so
+          // it can't hold a slot of this oldest-first queue forever.
+          else if (live.checked.has(c.sourceType)) await this.writeReceipt(c, mode, 'not_found');
           continue;
         }
 
@@ -194,12 +197,14 @@ export class SentinelOneAutoResolveService {
 
   /**
    * Current incident status of each candidate, read from the console (one
-   * GET per source type). Keyed `<sourceType>:<id>`; a candidate missing from
-   * the map couldn't be confirmed (lookup failed, or the console didn't
-   * return it) and is skipped.
+   * GET per source type). `statuses` is keyed `<sourceType>:<id>`; `checked`
+   * holds the source types whose lookup succeeded, so an id missing from a
+   * checked source is known to be gone, while a failed lookup concludes
+   * nothing. Either way the candidate is not resolved.
    */
-  private async liveStatuses(candidates: Candidate[], errors: string[]): Promise<Map<string, string>> {
+  private async liveStatuses(candidates: Candidate[], errors: string[]): Promise<{ statuses: Map<string, string>; checked: Set<SentinelOneSource> }> {
     const out = new Map<string, string>();
+    const checked = new Set<SentinelOneSource>();
     // Malformed ids are shelved by the caller; keep them out so one can't fail the whole lookup.
     const valid = candidates.filter((c) => S1_ID_RE.test(c.s1Id));
     const threatIds = valid.filter((c) => c.sourceType === 'threats').map((c) => c.s1Id);
@@ -208,6 +213,7 @@ export class SentinelOneAutoResolveService {
       try {
         const res = await this.s1Client.listThreats({ ids: threatIds, limit: threatIds.length, skipCount: 'true' });
         for (const t of res.data) if (t.id) out.set(`threats:${t.id}`, normalizeToken(t.threatInfo?.incidentStatus));
+        checked.add('threats');
       } catch (err) {
         errors.push(`live status (threats): ${err instanceof Error ? err.message : String(err)}`);
       }
@@ -219,11 +225,12 @@ export class SentinelOneAutoResolveService {
           const id = a.alertInfo?.alertId;
           if (id) out.set(`cloud_detection_alerts:${id}`, normalizeToken(a.alertInfo?.incidentStatus));
         }
+        checked.add('cloud_detection_alerts');
       } catch (err) {
         errors.push(`live status (alerts): ${err instanceof Error ? err.message : String(err)}`);
       }
     }
-    return out;
+    return { statuses: out, checked };
   }
 
   /** Bring a stale local status up to date so the doc stops being a candidate. */

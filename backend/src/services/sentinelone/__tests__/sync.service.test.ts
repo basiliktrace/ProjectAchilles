@@ -213,6 +213,27 @@ describe('threatPreventionAction (kill failed only on a failed stop attempt)', (
   });
 });
 
+describe('threatPreventionAction: only SentinelOne\'s own, immediate response counts', () => {
+  const at = (iso: string) => ({ threatInfo: { identifiedAt: '2026-10-20T10:00:00.000Z', createdAt: '2026-10-20T10:00:01.000Z' }, mitigationStatus: [{ action: 'quarantine', status: 'success', mitigationStartedAt: iso }] }) as never;
+
+  it('a quarantine that started with the detection is prevention', () => {
+    expect(threatPreventionAction(at('2026-10-20T10:00:03.000Z'))).toBe('quarantined');
+  });
+
+  it('a quarantine an analyst or a rule ran hours later is not', () => {
+    expect(threatPreventionAction(at('2026-10-20T14:00:00.000Z'))).toBeUndefined();
+  });
+
+  it('a late manual response does not fall back to the "mitigated" summary either', () => {
+    const t = { threatInfo: { identifiedAt: '2026-10-20T10:00:00.000Z', mitigationStatus: 'mitigated' }, mitigationStatus: [{ action: 'kill', status: 'success', mitigationStartedAt: '2026-10-21T09:00:00.000Z' }] } as never;
+    expect(threatPreventionAction(t)).toBeUndefined();
+  });
+
+  it('missing timestamps keep the report as-is (no data loss when S1 omits them)', () => {
+    expect(threatPreventionAction({ threatInfo: {}, mitigationStatus: [{ action: 'kill', status: 'success' }] } as never)).toBe('process_killed');
+  });
+});
+
 describe('SentinelOneSyncService', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -346,6 +367,21 @@ describe('SentinelOneSyncService', () => {
     mockBulk.mockResolvedValueOnce({ errors: true, items: [{ update: { _id: 'threat-1', status: 429, error: { reason: 'rejected execution' } } }] });
     await new SentinelOneSyncService().syncAll();
     expect(mockSaveCheckpoints.mock.calls[0][0].last_threat_sync).toBeUndefined();
+  });
+
+  it('a scope change saved while the sync runs is not overwritten with the old scope\'s checkpoints', async () => {
+    mockSettings = { ...mockSettings, sources: ['threats'] };
+    mockListThreats.mockImplementationOnce(async () => {
+      // The admin saves a new site scope while the backfill is fetching.
+      mockSettings = { ...mockSettings, scope: { site_ids: ['999'] } };
+      return { data: [threat('1')] };
+    });
+    const svc = new SentinelOneSyncService();
+    const result = await svc.syncAll();
+    expect(result.scopeChanged).toBe(true);
+    expect(mockSaveCheckpoints).not.toHaveBeenCalled();
+    expect(mockRunEnrichment).not.toHaveBeenCalled();
+    expect(svc.isDue()).toBe(true);
   });
 
   it('does not record the doc-schema version until every enabled source re-synced cleanly', async () => {

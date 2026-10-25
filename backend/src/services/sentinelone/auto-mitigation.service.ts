@@ -26,7 +26,7 @@
 import type { Client } from '@elastic/elasticsearch';
 import { SENTINELONE_INDEX } from './index-management.js';
 import { scopeFilters } from './scope-filter.js';
-import { normalizeToken, threatPreventionAction } from './normalize.js';
+import { normalizeToken, hasStopAttempt } from './normalize.js';
 import type { SentinelOneClient } from './s1-client.js';
 import type { ResponseActionOutcome } from './response.service.js';
 import type {
@@ -86,13 +86,19 @@ export class SentinelOneAutoMitigationService {
       const candidates = await this.findCandidates(options.maxPerPass ?? DEFAULT_MAX_PER_PASS, mode);
       result.candidates = candidates.length;
       const maxDurationMs = options.maxDurationMs ?? DEFAULT_MAX_DURATION_MS;
-      const stillOpen = await this.stillUnmitigated(candidates, result.errors);
+      const live = await this.liveState(candidates, result.errors);
 
       for (const c of candidates) {
         if (Date.now() - startedAt > maxDurationMs) break;
         if (!c.threatId || !c.testUuid) { result.skipped += 1; continue; }
         // Fail closed: only act on what the console still reports as open and unmitigated.
-        if (!stillOpen.has(c.threatId)) { result.skipped += 1; continue; }
+        if (!live.open.has(c.threatId)) {
+          result.skipped += 1;
+          // Gone from the console (purged, deleted, out of scope): shelve it so
+          // it can't hold a slot of this oldest-first queue forever.
+          if (live.ok && !live.returned.has(c.threatId)) await this.writeReceipt(c, mode, 'not_found');
+          continue;
+        }
 
         if (mode === 'dry_run') {
           console.log(`[SentinelOne-AutoMitigation-DryRun] would_${action} threat id=${c.threatId} test_uuid=${c.testUuid}`);
@@ -101,16 +107,24 @@ export class SentinelOneAutoMitigationService {
           continue;
         }
 
+        // The receipt is what keeps our own kill from counting as SentinelOne
+        // prevention (enrichment + analytics read it), so it is written
+        // BEFORE the action, and no receipt means no action.
+        if (!(await this.writeReceipt(c, 'enabled'))) {
+          result.skipped += 1;
+          result.errors.push(`${c.threatId}: receipt write failed, not mitigated`);
+          continue;
+        }
         const outcome = await this.executor.execute(
           { kind: 'threat_mitigation', action, threatIds: [c.threatId] },
           { userId: AUTO_MITIGATION_ACTOR },
         );
         if (outcome.success) {
           result.mitigated += 1;
-          await this.writeReceipt(c, 'enabled');
           continue;
         }
         if (outcome.statusCode === 401 || outcome.statusCode === 403) {
+          await this.clearReceipt(c); // retried once the role is fixed
           result.errors.push(`${outcome.statusCode}: ${outcome.error ?? 'forbidden'}`);
           break;
         }
@@ -119,6 +133,7 @@ export class SentinelOneAutoMitigationService {
           result.errors.push(`${c.threatId}: not_found`);
           continue;
         }
+        await this.clearReceipt(c); // transient: retried next pass
         result.errors.push(`${c.threatId}: ${outcome.error ?? `HTTP ${outcome.statusCode}`}`);
       }
     } catch (err) {
@@ -129,23 +144,45 @@ export class SentinelOneAutoMitigationService {
     return result;
   }
 
-  /** Ids the console still reports as unresolved with no mitigation (one GET). */
-  private async stillUnmitigated(candidates: Candidate[], errors: string[]): Promise<Set<string>> {
-    const out = new Set<string>();
+  /**
+   * Live console state of the candidates (one GET): which ids came back at
+   * all, and which are still unresolved with no mitigation attempt.
+   * `ok: false` when the lookup failed, so nothing is concluded from absence.
+   */
+  private async liveState(candidates: Candidate[], errors: string[]): Promise<{ ok: boolean; returned: Set<string>; open: Set<string> }> {
+    const returned = new Set<string>();
+    const open = new Set<string>();
     const ids = candidates.map((c) => c.threatId).filter((id) => /^\d{1,24}$/.test(id));
-    if (ids.length === 0) return out;
+    if (ids.length === 0) return { ok: true, returned, open };
     try {
       const res = await this.reader.listThreats({ ids, limit: ids.length, skipCount: 'true' });
       for (const t of res.data) {
-        const open = normalizeToken(t.threatInfo?.incidentStatus) === 'unresolved'
+        if (!t.id) continue;
+        returned.add(t.id);
+        const stillOpen = normalizeToken(t.threatInfo?.incidentStatus) === 'unresolved'
           && t.threatInfo?.mitigationStatus === 'not_mitigated'
-          && threatPreventionAction(t) === undefined;
-        if (t.id && open) out.add(t.id);
+          && !hasStopAttempt(t);
+        if (stillOpen) open.add(t.id);
       }
+      return { ok: true, returned, open };
     } catch (err) {
       errors.push(`live status: ${err instanceof Error ? err.message : String(err)}`);
+      return { ok: false, returned, open };
     }
-    return out;
+  }
+
+  /** Remove a pre-written receipt so the candidate is retried (best effort). */
+  private async clearReceipt(c: Candidate): Promise<void> {
+    try {
+      await this.esClient.update({
+        index: c.docIndex,
+        id: c.docId,
+        doc: { f0rtika: { auto_mitigated: false, auto_mitigation_mode: null, auto_mitigated_at: null } },
+        retry_on_conflict: 3,
+      } as any);
+    } catch {
+      // The candidate then stays shelved: fails closed (no further kill).
+    }
   }
 
   private async findCandidates(size: number, mode: AutoResolveMode): Promise<Candidate[]> {
@@ -185,7 +222,8 @@ export class SentinelOneAutoMitigationService {
     });
   }
 
-  private async writeReceipt(c: Candidate, mode: AutoResolveMode, error?: string): Promise<void> {
+  /** Write (or overwrite) the receipt; resolves false when the write failed. */
+  private async writeReceipt(c: Candidate, mode: AutoResolveMode, error?: string): Promise<boolean> {
     try {
       await this.esClient.update({
         index: c.docIndex,
@@ -201,9 +239,9 @@ export class SentinelOneAutoMitigationService {
         },
         retry_on_conflict: 3,
       } as any);
+      return true;
     } catch {
-      // Non-fatal. In enabled mode a missing receipt means the next pass may
-      // retry the same kill/quarantine, which S1 treats idempotently.
+      return false;
     }
   }
 }

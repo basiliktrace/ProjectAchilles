@@ -17,6 +17,7 @@ import type { Client } from '@elastic/elasticsearch';
 import type {
   QueryDslQueryContainer,
 } from '@elastic/elasticsearch/lib/api/types.js';
+import { isAchillesMitigated, ACHILLES_MITIGATED_QUERY } from '../shared/achillesMitigation.js';
 import type { DetectionRateResponse, RelatedAlertsResponse } from '../../types/crowdstrike.js';
 
 // ---------------------------------------------------------------------------
@@ -132,26 +133,6 @@ export interface PaginatedAlerts {
 /** prevention_action values meaning Falcon stopped the activity. */
 const PREVENTED_ACTIONS = ['quarantined', 'process_killed', 'blocked'];
 
-/**
- * Alerts whose prevention action came from Achilles itself (SentinelOne
- * automatic mitigation writes an enabled, error-free `f0rtika.auto_mitigated`
- * receipt). Our own kill is not the EDR preventing anything, so these count
- * as detected only, matching the enrichment pass and the Defense Score.
- * Applied when `ignoreAchillesMitigated` is set (the SentinelOne subclass).
- */
-const ACHILLES_MITIGATED = {
-  bool: {
-    filter: [
-      { term: { 'f0rtika.auto_mitigated': true } },
-      { term: { 'f0rtika.auto_mitigation_mode': 'enabled' } },
-    ],
-    must_not: [{ exists: { field: 'f0rtika.auto_mitigation_error' } }],
-  },
-};
-
-function mitigatedByAchilles(f0rtika: Record<string, unknown>): boolean {
-  return f0rtika.auto_mitigated === true && f0rtika.auto_mitigation_mode === 'enabled' && !f0rtika.auto_mitigation_error;
-}
 
 // ---------------------------------------------------------------------------
 // Service
@@ -196,15 +177,15 @@ export class CrowdStrikeAnalyticsService {
             filters: {
               ...(this.ignoreAchillesMitigated
                 ? {
-                  prevented: { bool: { filter: [{ terms: { prevention_action: PREVENTED_ACTIONS } }], must_not: [ACHILLES_MITIGATED] } },
+                  prevented: { bool: { filter: [{ terms: { prevention_action: PREVENTED_ACTIONS } }], must_not: [ACHILLES_MITIGATED_QUERY] } },
                   detected_only: {
                     bool: {
-                      should: [{ bool: { must_not: [{ exists: { field: 'prevention_action' } }] } }, ACHILLES_MITIGATED],
+                      should: [{ bool: { must_not: [{ exists: { field: 'prevention_action' } }] } }, ACHILLES_MITIGATED_QUERY],
                       minimum_should_match: 1,
                     },
                   },
                   // Keeps the buckets disjoint: a receipt-carrying alert counts only as detected_only.
-                  kill_failed: { bool: { filter: [{ term: { prevention_action: 'kill_failed' } }], must_not: [ACHILLES_MITIGATED] } },
+                  kill_failed: { bool: { filter: [{ term: { prevention_action: 'kill_failed' } }], must_not: [ACHILLES_MITIGATED_QUERY] } },
                 }
                 : {
                   prevented: { terms: { prevention_action: PREVENTED_ACTIONS } },
@@ -470,7 +451,7 @@ export class CrowdStrikeAnalyticsService {
         resolved_at: s.resolved_at ? String(s.resolved_at) : null,
         recommended_actions: String(s.recommended_actions ?? ''),
         hostname: firstString(s.evidence_hostnames),
-        ...(s.prevention_action && !(this.ignoreAchillesMitigated && mitigatedByAchilles(f0rtika)) ? { prevention_action: String(s.prevention_action) } : {}),
+        ...(s.prevention_action && !(this.ignoreAchillesMitigated && isAchillesMitigated({ f0rtika })) ? { prevention_action: String(s.prevention_action) } : {}),
         ...(s.pattern_disposition_description
           ? { pattern_disposition_description: String(s.pattern_disposition_description) }
           : {}),

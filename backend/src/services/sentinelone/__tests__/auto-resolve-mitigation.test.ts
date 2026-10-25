@@ -100,6 +100,9 @@ describe('SentinelOneAutoResolveService', () => {
     expect(r.errors).toEqual([expect.stringContaining('live status (threats): timeout')]);
     expect(s1.updateThreatIncidentStatus).not.toHaveBeenCalled();
     expect(s1.updateAlertIncidentStatus).not.toHaveBeenCalled();
+    // The alert lookup succeeded and didn't return '2': shelved as not_found. The
+    // failed threat lookup concludes nothing: no receipt for '1'.
+    expect(es.update.mock.calls.map((c) => [c[0].id, c[0].doc.f0rtika?.auto_resolve_error])).toEqual([['doc-2', 'not_found']]);
   });
 
   it('dry_run applies the same live check, so its receipts match what enabled would do', async () => {
@@ -210,7 +213,32 @@ describe('SentinelOneAutoMitigationService', () => {
     const r = await svc(es, ex).runAutoMitigationPass();
     expect(ex.execute).toHaveBeenCalledTimes(1);
     expect(r.errors[0]).toMatch(/^403/);
-    expect(es.update).not.toHaveBeenCalled();
+    // Pre-written receipt, then cleared so the threat is retried once the role is fixed.
+    expect(es.update.mock.calls.map((c) => c[0].doc.f0rtika.auto_mitigated)).toEqual([true, false]);
+  });
+
+  it('writes the receipt BEFORE the kill, and does not kill when that write fails', async () => {
+    const es = mockEs([threatHit('1')]);
+    const ex = exec();
+    await svc(es, ex).runAutoMitigationPass();
+    expect(es.update.mock.invocationCallOrder[0]).toBeLessThan(ex.execute.mock.invocationCallOrder[0]);
+    expect(es.update.mock.calls[0][0].doc.f0rtika).toMatchObject({ auto_mitigated: true, auto_mitigation_mode: 'enabled' });
+
+    const es2 = mockEs([threatHit('2')]);
+    es2.update.mockRejectedValueOnce(new Error('429'));
+    const ex2 = exec();
+    const r = await svc(es2, ex2).runAutoMitigationPass();
+    expect(ex2.execute).not.toHaveBeenCalled();
+    expect(r.errors).toEqual(['2: receipt write failed, not mitigated']);
+  });
+
+  it('a threat the console no longer returns is shelved with not_found (keeps the queue moving)', async () => {
+    const es = mockEs([threatHit('1')]);
+    const ex = exec();
+    const reader = { listThreats: vi.fn().mockResolvedValue({ data: [] }) };
+    await svc(es, ex, {}, reader).runAutoMitigationPass();
+    expect(ex.execute).not.toHaveBeenCalled();
+    expect(es.update.mock.calls[0][0].doc.f0rtika).toMatchObject({ auto_mitigation_error: 'not_found' });
   });
 
   it('re-reads the console first: a threat S1 mitigated, or an analyst resolved, since the last poll is left alone', async () => {
