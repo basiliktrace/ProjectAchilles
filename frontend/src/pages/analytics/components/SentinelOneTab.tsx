@@ -5,9 +5,9 @@ import { sentineloneAnalyticsApi } from '@/services/api/sentineloneAnalytics';
 import { sentinelOneApi } from '@/services/api/sentinelone';
 import type { TechniqueCoverageResponse } from '@/services/api/integrationTypes';
 import type { DateRangeValue } from '@/lib/timeRange';
-import CrowdStrikeTabHeader from './CrowdStrikeTabHeader';
+import IntegrationTabHeader from './integrations/IntegrationTabHeader';
 import HeroStatTile from './HeroStatTile';
-import CrowdStrikeAlertDetailsDrawer from './CrowdStrikeAlertDetailsDrawer';
+import EndpointAlertDetailsDrawer from './integrations/EndpointAlertDetailsDrawer';
 import IntegrationTimelineCard from './integrations/IntegrationTimelineCard';
 import IntegrationAlertFeed from './integrations/IntegrationAlertFeed';
 import TechniqueCoverageCard from './integrations/TechniqueCoverageCard';
@@ -115,10 +115,8 @@ export default function SentinelOneTab({ dateRange }: SentinelOneTabProps) {
 
   return (
     <div className="space-y-6">
-      <CrowdStrikeTabHeader
-        title="SentinelOne Singularity"
-        subtitle="Threats, detection alerts, and detection correlation"
-        failureTitle="SentinelOne sync failed"
+      <IntegrationTabHeader
+        vendor={vendor}
         lastSync={lastSync}
         syncing={syncing}
         syncError={syncError}
@@ -185,7 +183,7 @@ export default function SentinelOneTab({ dateRange }: SentinelOneTabProps) {
 
       <SentinelOnePolicyTable refreshKey={refreshKey} />
 
-      <CrowdStrikeAlertDetailsDrawer
+      <EndpointAlertDetailsDrawer
         vendor="sentinelone"
         open={drawerOpen}
         onClose={closeDrawer}

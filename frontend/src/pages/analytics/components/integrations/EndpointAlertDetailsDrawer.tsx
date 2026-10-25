@@ -2,20 +2,26 @@ import { useEffect, useRef, useState } from 'react';
 import { X, AlertTriangle, ExternalLink, ShieldCheck } from 'lucide-react';
 import { Button } from '@/components/shared/ui/Button';
 import { Skeleton } from '@/components/ui/skeleton';
-import { crowdstrikeApi, type CrowdStrikeAlertItem } from '@/services/api/crowdstrike';
+import { crowdstrikeApi, type CrowdStrikeAlertItem, type PaginatedCrowdStrikeAlerts } from '@/services/api/crowdstrike';
 import { sentineloneAnalyticsApi } from '@/services/api/sentineloneAnalytics';
-import { getSeverityTokens } from '../utils/crowdstrikeSeverityTokens';
-import { formatCrowdStrikeProduct } from '../utils/crowdstrikeProduct';
-import {
-  DEFAULT_FALCON_CONSOLE_BASE,
-  falconAlertUrl,
-  resolveFalconConsoleBase,
-} from '../utils/falconConsole';
-import PreventionBadge from './PreventionBadge';
+import { getSeverityTokens } from '../../utils/crowdstrikeSeverityTokens';
+import { formatCrowdStrikeProduct } from '../../utils/crowdstrikeProduct';
+import PreventionBadge from '../PreventionBadge';
+import { VENDORS } from './vendorConfig';
 
 import type { TimeWindow } from '@/services/api/integrationTypes';
 
-interface CrowdStrikeAlertDetailsDrawerProps {
+/** Vendors whose alert docs share the CrowdStrike alert shape (see vendorConfig `endpointEdr`). */
+export type EndpointVendorId = 'crowdstrike' | 'sentinelone';
+
+/** The CrowdStrike-shaped alert list of each endpoint vendor. */
+const ALERT_LISTS: Record<EndpointVendorId, (params: Parameters<typeof crowdstrikeApi.getAlerts>[0]) => Promise<PaginatedCrowdStrikeAlerts>> = {
+  crowdstrike: crowdstrikeApi.getAlerts,
+  sentinelone: sentineloneAnalyticsApi.getAlerts,
+};
+
+interface EndpointAlertDetailsDrawerProps {
+  vendor: EndpointVendorId;
   open: boolean;
   onClose: () => void;
   /** Single MITRE technique filter (convenience for the chart click-throughs). */
@@ -26,11 +32,6 @@ interface CrowdStrikeAlertDetailsDrawerProps {
   title?: string;
   /** created_at window sent as from/to. Absent = unbounded (as before). */
   window?: TimeWindow;
-  /**
-   * Alert source. SentinelOne docs share the CrowdStrike alert shape, so the
-   * same drawer lists them from /analytics/sentinelone/alerts.
-   */
-  vendor?: 'crowdstrike' | 'sentinelone';
 }
 
 const PAGE_SIZE = 100;
@@ -46,22 +47,22 @@ function formatTimeAgo(dateStr: string): string {
   return `${d}d ago`;
 }
 
-export default function CrowdStrikeAlertDetailsDrawer({
+/** Alert list drawer for the endpoint-EDR tabs (chart and technique click-throughs). */
+export default function EndpointAlertDetailsDrawer({
+  vendor: vendorId,
   open,
   onClose,
   technique,
   techniques,
   title,
   window,
-  vendor = 'crowdstrike',
-}: CrowdStrikeAlertDetailsDrawerProps) {
-  const isS1 = vendor === 'sentinelone';
-  const vendorName = isS1 ? 'SentinelOne' : 'CrowdStrike';
-  const consoleLabel = isS1 ? 'Open in SentinelOne console' : 'Open in Falcon console';
+}: EndpointAlertDetailsDrawerProps) {
+  const vendor = VENDORS[vendorId];
+  const consoleLink = vendor.consoleLink;
   const [alerts, setAlerts] = useState<CrowdStrikeAlertItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [consoleBase, setConsoleBase] = useState(DEFAULT_FALCON_CONSOLE_BASE);
+  const [consoleBase, setConsoleBase] = useState(consoleLink?.defaultBase ?? '');
   const dialogRef = useRef<HTMLDivElement | null>(null);
   const closeButtonRef = useRef<HTMLButtonElement | null>(null);
   const previouslyFocusedRef = useRef<HTMLElement | null>(null);
@@ -108,18 +109,19 @@ export default function CrowdStrikeAlertDetailsDrawer({
     };
   }, [open, onClose]);
 
-  // Resolve the Falcon console base from the configured region once per open
-  // (also warms the module-wide cache for the executions panel).
+  // Resolve the console base once per open when the vendor needs one
+  // (CrowdStrike: the configured region; also warms the module-wide cache
+  // for the executions panel).
   useEffect(() => {
-    if (!open || isS1) return;
+    if (!open || !consoleLink) return;
     let cancelled = false;
-    resolveFalconConsoleBase().then((base) => {
+    consoleLink.resolveBase().then((base) => {
       if (!cancelled) setConsoleBase(base);
     });
     return () => {
       cancelled = true;
     };
-  }, [open, isS1]);
+  }, [open, consoleLink]);
 
   // Normalize to a single source-of-truth array. `techniques` takes precedence
   // when provided; otherwise wrap the legacy single-technique prop.
@@ -137,8 +139,7 @@ export default function CrowdStrikeAlertDetailsDrawer({
     let cancelled = false;
     setLoading(true);
     setError(null);
-    (isS1 ? sentineloneAnalyticsApi : crowdstrikeApi)
-      .getAlerts({
+    ALERT_LISTS[vendorId]({
         pageSize: PAGE_SIZE,
         sortField: 'created_at',
         sortOrder: 'desc',
@@ -161,13 +162,13 @@ export default function CrowdStrikeAlertDetailsDrawer({
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, techniquesKey, window?.from, window?.to, isS1]);
+  }, [open, techniquesKey, window?.from, window?.to, vendorId]);
 
   if (!open) return null;
 
   const defaultHeader =
     !effectiveTechniques
-      ? `Recent ${vendorName} Alerts`
+      ? `Recent ${vendor.shortName} Alerts`
       : effectiveTechniques.length === 1
       ? `Alerts for ${effectiveTechniques[0]}`
       : `Alerts for ${effectiveTechniques.join(', ')}`;
@@ -252,14 +253,14 @@ export default function CrowdStrikeAlertDetailsDrawer({
                           <div className="text-sm font-medium leading-tight break-words">
                             {alert.alert_title}
                           </div>
-                          {(!isS1 || alert.portal_url) && (
+                          {(consoleLink || alert.portal_url) && (
                             <a
-                              href={isS1 ? alert.portal_url : falconAlertUrl(alert.portal_url, consoleBase)}
+                              href={consoleLink ? consoleLink.url(alert.portal_url, consoleBase) : alert.portal_url}
                               target="_blank"
                               rel="noopener noreferrer"
                               className="shrink-0 p-1 -m-1 rounded hover:bg-raised text-muted-foreground hover:text-foreground transition-colors"
-                              aria-label={consoleLabel}
-                              title={consoleLabel}
+                              aria-label={vendor.portalLabel}
+                              title={vendor.portalLabel}
                             >
                               <ExternalLink className="w-3.5 h-3.5" />
                             </a>

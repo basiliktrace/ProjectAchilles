@@ -70,8 +70,8 @@ function LinkedTestCell({ alert }: { alert: IntegrationAlertItem }) {
 }
 
 export default function IntegrationAlertFeed({ vendor, window, windowLabel, refreshKey = 0 }: Props) {
-  // Endpoint-EDR layout (host column, prevention facet): CrowdStrike and SentinelOne.
-  const isCs = vendor.id === 'crowdstrike' || vendor.id === 'sentinelone';
+  // Endpoint-EDR layout (host column, prevention facet).
+  const isCs = vendor.endpointEdr;
   const [source, setSource] = useState<AlertSource>('all');
   const [severityKey, setSeverityKey] = useState(vendor.defaultSeverityKey);
   const [alertTypeKey, setAlertTypeKey] = useState('all');
