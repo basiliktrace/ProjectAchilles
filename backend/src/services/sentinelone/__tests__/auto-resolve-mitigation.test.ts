@@ -10,12 +10,16 @@ const alertHit = (id: string) => hit(id, { alert_id: id, source_type: 'cloud_det
 function mockEs(hits: unknown[]) {
   return { search: vi.fn().mockResolvedValue({ hits: { hits } }), update: vi.fn().mockResolvedValue({}) };
 }
-function mockS1(permissionMode: 'read_only' | 'response' = 'response') {
+/** Console state: every id asked about is still unresolved unless `live` says otherwise. */
+function mockS1(permissionMode: 'read_only' | 'response' = 'response', live: Record<string, string> = {}) {
+  const status = (id: string) => live[id] ?? 'unresolved';
   return {
     permissionMode,
     updateThreatIncidentStatus: vi.fn().mockResolvedValue({ affected: 1 }),
     addThreatNote: vi.fn().mockResolvedValue({ affected: 1 }),
     updateAlertIncidentStatus: vi.fn().mockResolvedValue({ affected: 1 }),
+    listThreats: vi.fn(async (p: { ids: string[] }) => ({ data: p.ids.map((id) => ({ id, threatInfo: { incidentStatus: status(id) } })) })),
+    listCloudDetectionAlerts: vi.fn(async (p: { ids: string[] }) => ({ data: p.ids.map((id) => ({ alertInfo: { alertId: id, incidentStatus: status(id) } })) })),
   };
 }
 const filters = (es: ReturnType<typeof mockEs>) => JSON.stringify(es.search.mock.calls[0][0].query);
@@ -72,6 +76,37 @@ describe('SentinelOneAutoResolveService', () => {
     expect(r.errors[0]).toMatch(/read-only/);
     expect(es.search).not.toHaveBeenCalled();
     expect(s1.updateThreatIncidentStatus).not.toHaveBeenCalled();
+  });
+
+  it('re-reads the console first: an alert an analyst moved to In progress is skipped and its local status updated', async () => {
+    const es = mockEs([threatHit('1'), alertHit('2'), alertHit('3')]);
+    const s1 = mockS1('response', { '2': 'In progress' });
+    const r = await new SentinelOneAutoResolveService(es as never, s1 as never, 'enabled', {}).runAutoResolvePass();
+    expect(s1.listThreats).toHaveBeenCalledWith(expect.objectContaining({ ids: ['1'] }));
+    expect(s1.listCloudDetectionAlerts).toHaveBeenCalledWith(expect.objectContaining({ ids: ['2', '3'] }));
+    expect(r).toMatchObject({ candidates: 3, patched: 2, skipped: 1 });
+    expect(s1.updateAlertIncidentStatus).toHaveBeenCalledTimes(1);
+    expect(s1.updateAlertIncidentStatus).toHaveBeenCalledWith(['3'], 'resolved');
+    expect(es.update).toHaveBeenCalledWith(expect.objectContaining({ id: 'doc-2', doc: { status: 'in_progress' } }));
+  });
+
+  it('fails closed: a failed status lookup, or an id the console no longer returns, is never resolved', async () => {
+    const es = mockEs([threatHit('1'), alertHit('2')]);
+    const s1 = mockS1();
+    s1.listThreats.mockRejectedValueOnce(new Error('timeout'));
+    s1.listCloudDetectionAlerts.mockResolvedValueOnce({ data: [] });
+    const r = await new SentinelOneAutoResolveService(es as never, s1 as never, 'enabled', {}).runAutoResolvePass();
+    expect(r).toMatchObject({ patched: 0, skipped: 2 });
+    expect(r.errors).toEqual([expect.stringContaining('live status (threats): timeout')]);
+    expect(s1.updateThreatIncidentStatus).not.toHaveBeenCalled();
+    expect(s1.updateAlertIncidentStatus).not.toHaveBeenCalled();
+  });
+
+  it('dry_run applies the same live check, so its receipts match what enabled would do', async () => {
+    const es = mockEs([threatHit('1'), threatHit('2')]);
+    const s1 = mockS1('read_only', { '1': 'resolved' });
+    const r = await new SentinelOneAutoResolveService(es as never, s1 as never, 'dry_run', {}).runAutoResolvePass();
+    expect(r).toMatchObject({ wouldPatch: 1, skipped: 1 });
   });
 
   it('a failed note does not undo the resolve; 403 halts; 404 writes a not_found receipt; transient errors retry', async () => {

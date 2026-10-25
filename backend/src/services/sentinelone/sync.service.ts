@@ -12,6 +12,7 @@ import { SentinelOneClient } from './s1-client.js';
 import { IntegrationsSettingsService } from '../integrations/settings.js';
 import { S1_DEFAULT_BACKFILL_DAYS, S1_DEFAULT_POLL_INTERVAL_MINUTES, S1_DEFAULT_SOURCES, S1_MAX_BACKFILL_DAYS } from './defaults.js';
 import { ensureSentinelOneIndex, SENTINELONE_INDEX } from './index-management.js';
+import { normalizeToken } from './normalize.js';
 import { SettingsService } from '../analytics/settings.js';
 import { createEsClient } from '../analytics/client.js';
 import { CrowdStrikeEnrichmentService } from '../crowdstrike/enrichment.service.js';
@@ -56,16 +57,7 @@ function extractTechniques(values: Array<string | undefined>): string[] {
   return Array.from(out);
 }
 
-/**
- * S1 returns incident status / analyst verdict in two vocabularies:
- * `/threats` uses snake_case (`in_progress`, `false_positive`) while
- * `/cloud-detection/alerts` uses display case (`In progress`, `False positive`).
- * Normalize both to the lowercase snake_case the shared facets and the
- * correlation time window expect (`resolved`, `closed`, ...).
- */
-export function normalizeToken(raw: string | undefined): string {
-  return (raw ?? '').trim().toLowerCase().replace(/[\s-]+/g, '_');
-}
+export { normalizeToken };
 
 /** File name of a Windows (`\device\...`, `C:\...`) or POSIX path. */
 function basename(path: string | undefined): string | undefined {

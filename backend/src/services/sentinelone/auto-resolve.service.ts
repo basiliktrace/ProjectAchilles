@@ -14,7 +14,10 @@
 //     false positives — analysts' verdicts stay theirs);
 //   - no mitigation of any kind (that is auto-mitigation.service.ts, opt-in);
 //   - nothing outside the configured scope, nothing not matched to a test,
-//     nothing a human already moved off 'unresolved'.
+//     nothing a human already moved off 'unresolved'. The local status can
+//     be stale (detection alerts are only re-synced by createdAt), so every
+//     candidate's status is re-read from the console right before acting;
+//     anything that can't be confirmed as still 'unresolved' is skipped.
 //
 // Modes: disabled (default, no-op) | dry_run (log + receipts, no API call) |
 // enabled (API call + receipts; requires Response mode — checked here and by
@@ -24,6 +27,7 @@ import type { Client } from '@elastic/elasticsearch';
 import { SentinelOneClient, SentinelOneApiError, SentinelOnePermissionError } from './s1-client.js';
 import { SENTINELONE_INDEX } from './index-management.js';
 import { scopeFilters } from './scope-filter.js';
+import { normalizeToken } from './normalize.js';
 import type { AutoResolveMode, AutoResolvePassResult } from '../../types/defender.js';
 import type { SentinelOneScope, SentinelOneSource } from '../../types/sentinelone.js';
 
@@ -48,7 +52,7 @@ export interface S1AutoResolveOptions {
 }
 
 /** Minimal client surface (lets tests pass a mock). */
-export type S1IncidentClient = Pick<SentinelOneClient, 'permissionMode' | 'updateThreatIncidentStatus' | 'addThreatNote' | 'updateAlertIncidentStatus'>;
+export type S1IncidentClient = Pick<SentinelOneClient, 'permissionMode' | 'updateThreatIncidentStatus' | 'addThreatNote' | 'updateAlertIncidentStatus' | 'listThreats' | 'listCloudDetectionAlerts'>;
 
 export class SentinelOneAutoResolveService {
   constructor(
@@ -77,10 +81,19 @@ export class SentinelOneAutoResolveService {
       const candidates = await this.findCandidates(options.maxPerPass ?? DEFAULT_MAX_PER_PASS, mode);
       result.candidates = candidates.length;
       const maxDurationMs = options.maxDurationMs ?? DEFAULT_MAX_DURATION_MS;
+      const live = await this.liveStatuses(candidates, result.errors);
 
       for (const c of candidates) {
         if (Date.now() - startedAt > maxDurationMs) break;
         if (!c.s1Id || !c.testUuid) { result.skipped += 1; continue; }
+
+        // Fail closed: act only on what the console still reports as unresolved.
+        const current = live.get(`${c.sourceType}:${c.s1Id}`);
+        if (current !== ELIGIBLE_STATUS) {
+          result.skipped += 1;
+          if (current) await this.mirrorStatus(c, current);
+          continue;
+        }
 
         if (mode === 'dry_run') {
           console.log(`[SentinelOne-AutoResolve-DryRun] would_resolve ${c.sourceType} id=${c.s1Id} test_uuid=${c.testUuid}`);
@@ -164,6 +177,47 @@ export class SentinelOneAutoResolveService {
         testUuid: typeof src.f0rtika?.achilles_test_uuid === 'string' ? src.f0rtika.achilles_test_uuid : '',
       } as Candidate;
     });
+  }
+
+  /**
+   * Current incident status of each candidate, read from the console (one
+   * GET per source type). Keyed `<sourceType>:<id>`; a candidate missing from
+   * the map couldn't be confirmed (lookup failed, or the console didn't
+   * return it) and is skipped.
+   */
+  private async liveStatuses(candidates: Candidate[], errors: string[]): Promise<Map<string, string>> {
+    const out = new Map<string, string>();
+    const threatIds = candidates.filter((c) => c.sourceType === 'threats' && c.s1Id).map((c) => c.s1Id);
+    const alertIds = candidates.filter((c) => c.sourceType === 'cloud_detection_alerts' && c.s1Id).map((c) => c.s1Id);
+    if (threatIds.length > 0) {
+      try {
+        const res = await this.s1Client.listThreats({ ids: threatIds, limit: threatIds.length, skipCount: 'true' });
+        for (const t of res.data) if (t.id) out.set(`threats:${t.id}`, normalizeToken(t.threatInfo?.incidentStatus));
+      } catch (err) {
+        errors.push(`live status (threats): ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+    if (alertIds.length > 0) {
+      try {
+        const res = await this.s1Client.listCloudDetectionAlerts({ ids: alertIds, limit: alertIds.length, skipCount: 'true' });
+        for (const a of res.data) {
+          const id = a.alertInfo?.alertId;
+          if (id) out.set(`cloud_detection_alerts:${id}`, normalizeToken(a.alertInfo?.incidentStatus));
+        }
+      } catch (err) {
+        errors.push(`live status (alerts): ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+    return out;
+  }
+
+  /** Bring a stale local status up to date so the doc stops being a candidate. */
+  private async mirrorStatus(c: Candidate, status: string): Promise<void> {
+    try {
+      await this.esClient.update({ index: c.alertDocIndex, id: c.alertDocId, doc: { status }, retry_on_conflict: 3 } as any);
+    } catch {
+      // Non-fatal: the next pass re-checks the console anyway.
+    }
   }
 
   private async writeReceipt(c: Candidate, mode: AutoResolveMode, error?: string, resolved = false): Promise<void> {
