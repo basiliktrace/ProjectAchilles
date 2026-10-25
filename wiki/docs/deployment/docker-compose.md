@@ -81,7 +81,7 @@ curl -s http://localhost/env-config.js   # should show VITE_CLERK_PUBLISHABLE_KE
 docker compose --profile elasticsearch up -d
 ```
 
-This starts Elasticsearch 8.17 in single-node mode (security disabled) and seeds synthetic test results for the Analytics dashboard.
+This starts Elasticsearch 8.17 in single-node mode (security disabled) and seeds synthetic test results for the Analytics dashboard, into the `achilles-results-synthetic` index. The seed runs once: a later `docker compose up` skips it while that index holds documents.
 
 Configure the Analytics module at `/analytics/setup` with:
 - **Node URL:** `http://elasticsearch:9200`

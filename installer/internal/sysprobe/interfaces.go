@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"io"
 	"net"
+	"net/netip"
 	"os"
 	"sort"
 	"strconv"
@@ -14,6 +15,23 @@ import (
 type Iface struct {
 	Name, IP, CIDR string
 	Default        bool
+}
+
+// Public reports whether the address is a public IPv4 address: a cloud
+// server's own address rather than one on a LAN.
+func (i Iface) Public() bool { return IsPublicIPv4(i.IP) }
+
+// cgnat is the carrier-grade NAT range (RFC 6598): not private by RFC 1918,
+// but not reachable from the internet either.
+var cgnat = netip.MustParsePrefix("100.64.0.0/10")
+
+// IsPublicIPv4 reports whether ip is a globally routable IPv4 address.
+func IsPublicIPv4(ip string) bool {
+	a, err := netip.ParseAddr(ip)
+	if err != nil || !a.Is4() {
+		return false
+	}
+	return a.IsGlobalUnicast() && !a.IsPrivate() && !cgnat.Contains(a)
 }
 
 var virtualPrefixes = []string{
@@ -29,8 +47,8 @@ func isVirtual(name string) bool {
 	return false
 }
 
-// LANInterfaces lists candidate LAN IPv4 addresses, default-route interface
-// first, then by name (and IP).
+// LANInterfaces lists candidate IPv4 addresses, default-route interface
+// first, then by name, public before private, then by IP.
 func LANInterfaces(list func() ([]net.Interface, error), addrs func(net.Interface) ([]net.Addr, error), defaultIface string) []Iface {
 	ifs, err := list()
 	if err != nil {
@@ -69,6 +87,11 @@ func LANInterfaces(list func() ([]net.Interface, error), addrs func(net.Interfac
 		}
 		if out[i].Name != out[j].Name {
 			return out[i].Name < out[j].Name
+		}
+		// A cloud server's interface can also carry a private address (a
+		// DigitalOcean anchor IP): the public one comes first.
+		if out[i].Public() != out[j].Public() {
+			return out[i].Public()
 		}
 		return out[i].IP < out[j].IP
 	})

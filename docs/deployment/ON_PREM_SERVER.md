@@ -54,7 +54,7 @@ Set `TLS_MODE` in `deploy.config.env`. All three on-prem options produce a
 > **Recommendation:** if you own a public domain, `acme-dns` is the smoothest —
 > publicly-trusted certs with zero client configuration and no inbound exposure.
 > Use `internal` for truly isolated networks (for a LAN with Windows endpoints,
-> prefer the [On-Prem LAN guide](./ON_PREM_LAN.md)'s name-constrained CA,
+> prefer the [Server Installer guide](./ON_PREM_LAN.md)'s name-constrained CA,
 > `TLS_MODE=achilles-ca`), or `byo` to plug into an existing enterprise PKI.
 
 ## Step 1 — Configure

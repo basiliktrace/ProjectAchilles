@@ -1,0 +1,24 @@
+ ProjectAchilles installer                                 Certificates  4 / 10
+────────────────────────────────────────────────────────────────────────────────
+ Let's Encrypt checks http://achilles.corp.example.com/.well-known/acme-
+ challenge/ from the internet: achilles.corp.example.com must resolve
+ publicly to this server, and port 80 must be open to the internet, including
+ any cloud firewall in front of it.
+ 
+ ┃ Email for Let's Encrypt                                                     
+ ┃ Expiry and account notices go here.                                         
+ ┃ >                                                                          
+
+
+
+
+
+
+
+
+
+
+
+
+────────────────────────────────────────────────────────────────────────────────
+ enter next · esc back · ctrl+c quit

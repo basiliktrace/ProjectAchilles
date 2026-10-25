@@ -62,3 +62,54 @@ eth0	0005000A	00000000	0001	0	0	100	00FFFFFF	0	0	0
 		t.Errorf("got %q", got)
 	}
 }
+
+func TestIsPublicIPv4(t *testing.T) {
+	for ip, want := range map[string]bool{
+		"203.0.113.10":    true, // a cloud server's own public address
+		"159.89.10.20":    true,
+		"10.0.5.20":       false,
+		"172.16.4.1":      false,
+		"192.168.1.10":    false,
+		"100.64.0.1":      false, // carrier-grade NAT (RFC 6598)
+		"169.254.10.1":    false, // link-local
+		"127.0.0.1":       false,
+		"0.0.0.0":         false,
+		"255.255.255.255": false,
+		"fe80::1":         false,
+		"not-an-ip":       false,
+		"":                false,
+	} {
+		if got := IsPublicIPv4(ip); got != want {
+			t.Errorf("IsPublicIPv4(%q) = %v, want %v", ip, got, want)
+		}
+	}
+	if !(Iface{IP: "203.0.113.10"}).Public() || (Iface{IP: "10.0.5.20"}).Public() {
+		t.Error("Iface.Public disagrees with IsPublicIPv4")
+	}
+}
+
+// A DigitalOcean Droplet carries its public IP and a private anchor address on
+// eth0: the public one must come first so pressing enter picks it.
+func TestLANInterfacesPublicFirstOnSameInterface(t *testing.T) {
+	ifs := []net.Interface{{Name: "eth0", Flags: net.FlagUp}, {Name: "eth1", Flags: net.FlagUp}}
+	mk := func(s string) net.Addr {
+		ip, n, _ := net.ParseCIDR(s)
+		n.IP = ip
+		return n
+	}
+	by := map[string][]net.Addr{
+		"eth0": {mk("10.17.0.5/16"), mk("159.89.10.20/20")},
+		"eth1": {mk("10.110.0.2/20")},
+	}
+	got := LANInterfaces(
+		func() ([]net.Interface, error) { return ifs, nil },
+		func(i net.Interface) ([]net.Addr, error) { return by[i.Name], nil },
+		"eth0")
+	var ips []string
+	for _, f := range got {
+		ips = append(ips, f.IP)
+	}
+	if want := "159.89.10.20,10.17.0.5,10.110.0.2"; strings.Join(ips, ",") != want {
+		t.Fatalf("order = %v, want %s", ips, want)
+	}
+}

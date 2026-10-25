@@ -41,6 +41,67 @@ except ImportError:
     HAS_REQUESTS = False
 
 
+DEFAULT_RESULTS_INDEX = 'achilles-results-'
+
+
+def indices_in_bulk_file(file_path):
+    """The distinct _index names the bulk file's action lines write to, in order."""
+    seen = []
+    with open(file_path, 'r') as f:
+        lines = [l for l in f.read().split('\n') if l.strip()]
+    for action_line in lines[0::2]:
+        index_name = json.loads(action_line).get('index', {}).get('_index', DEFAULT_RESULTS_INDEX)
+        if index_name not in seen:
+            seen.append(index_name)
+    return seen
+
+
+def indices_to_create(index_flag, file_path):
+    """Results indices that --create-index maps: --index plus every index the file
+    writes to. Each document goes to its action line's _index, so mapping only
+    --index would leave the seeded index dynamically mapped (text, not keyword)."""
+    names = [index_flag]
+    if file_path:
+        names += [i for i in indices_in_bulk_file(file_path) if i != index_flag]
+    return names
+
+
+def populated_indices(count, names):
+    """The indices among names that already hold documents. count(name) returns
+    the document count, or None when the index does not exist."""
+    return [n for n in names if (count(n) or 0) > 0]
+
+
+def _count_es(es_client):
+    def count(name):
+        try:
+            if not es_client.indices.exists(index=name):
+                return None
+            return es_client.count(index=name)["count"]
+        except Exception:
+            return None
+    return count
+
+
+def _count_requests(session, host):
+    def count(name):
+        try:
+            r = session.get(f"{host.rstrip('/')}/{name}/_count")
+            return r.json().get("count") if r.status_code == 200 else None
+        except Exception:
+            return None
+    return count
+
+
+def _skip_populated(count, file_path):
+    """--skip-if-populated: True (and say so) when the file's indices already
+    hold documents. docker compose re-runs the one-shot seed on every `up`."""
+    full = populated_indices(count, indices_in_bulk_file(file_path))
+    if full:
+        print(f"Already seeded, skipping: {', '.join(full)} already has documents")
+    return bool(full)
+
+
 def upload_with_es_client(file_path, es_client, chunk_size=500):
     """Upload using the official Elasticsearch Python client."""
     print("Using Elasticsearch Python client...")
@@ -593,6 +654,11 @@ def main():
         help="Create results index with mappings before uploading"
     )
     parser.add_argument(
+        "--skip-if-populated",
+        action="store_true",
+        help="Do nothing when an index the file writes to already has documents (a re-run seed)"
+    )
+    parser.add_argument(
         "--init-indices",
         action="store_true",
         help="Create all index types (results, defender, crowdstrike, risk-acceptance) and exit. Does not require --file."
@@ -634,12 +700,15 @@ def main():
                 cloud_id=args.cloud_id,
                 api_key=args.api_key
             )
+            if args.file and args.skip_if_populated and _skip_populated(_count_es(es), args.file):
+                return
             if args.init_indices:
                 _init_all_indices_es(es, args.index)
                 if not args.file:
                     return
             elif args.create_index:
-                create_index_mapping(es, args.index)
+                for name in indices_to_create(args.index, args.file):
+                    create_index_mapping(es, name)
             upload_with_es_client(args.file, es, args.chunk_size)
         else:
             print("Error: elasticsearch-py not installed. Install with: pip install elasticsearch")
@@ -658,26 +727,32 @@ def main():
             else:
                 es = Elasticsearch(args.host)
 
+            if args.file and args.skip_if_populated and _skip_populated(_count_es(es), args.file):
+                return
             if args.init_indices:
                 _init_all_indices_es(es, args.index)
                 if not args.file:
                     return
             elif args.create_index:
-                create_index_mapping(es, args.index)
+                for name in indices_to_create(args.index, args.file):
+                    create_index_mapping(es, name)
             upload_with_es_client(args.file, es, args.chunk_size)
 
         elif HAS_REQUESTS:
             session = _make_requests_session()
             auth_header = session.headers.get('Authorization')
 
+            if args.file and args.skip_if_populated and _skip_populated(_count_requests(session, args.host), args.file):
+                return
             if args.init_indices:
                 _init_all_indices_requests(session, args.host, args.index, args.api_key)
                 if not args.file:
                     return
             elif args.create_index:
                 mapping = get_results_index_mapping()
-                _, msg = create_index_with_requests(session, args.host, args.index, mapping, args.api_key)
-                print(msg)
+                for name in indices_to_create(args.index, args.file):
+                    _, msg = create_index_with_requests(session, args.host, name, mapping, args.api_key)
+                    print(msg)
 
             upload_with_requests(args.file, args.host, auth_header, args.chunk_size)
         else:

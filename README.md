@@ -96,23 +96,23 @@ That one command:
   <img src="wiki/static/img/screenshots/onprem-review.png" alt="achilles-installer review screen — hostname, LAN IP, ProjectAchilles CA constrained to the DNS zone, Clerk keys, and Elasticsearch mode before installing" width="700">
 </p>
 
-The wizard automates every step a LAN install needs:
+The wizard automates every step of an install, on a LAN server or a cloud server with a public IP:
 
 | Step | What `achilles-installer` does for you |
 |------|----------------------------------------|
 | **Preflight** | Checks root, OS, RAM, disk, free ports 80/443, outbound reach to Docker Hub/GitHub/Clerk, and clock sync. The install step installs Docker if it is missing |
 | **Name and DNS** | Works with internal DNS. Detects whether the hostname is under a public domain or a private-only zone, and prints the exact A record plus the AD DNS PowerShell line to create it. Can add an optional `/etc/hosts` entry |
-| **Certificates** | Defaults to a **ProjectAchilles CA name-constrained to your DNS zone** (server-auth only, so a GPO-distributed root can't impersonate other sites or sign code). Also supports an Enterprise CA request (CSR), your own certificate files, or Let's Encrypt DNS-01, which needs no inbound internet. A root-owned timer renews the intermediate |
-| **Clerk keys** | Checks offline that the keys match each other and your domain before anything is installed |
-| **Network exposure** | Binds Caddy to one LAN IP, because Docker-published ports bypass `ufw`. Optional LAN-scoped `ufw`/`firewalld` rules never touch SSH |
-| **Agent enrollment** | Renders fingerprint-pinned bootstrap scripts for Windows (PowerShell 5.1) and Linux/macOS. GPO or Intune pushes **only the root certificate**, never enrollment tokens |
+| **Certificates** | On a LAN, defaults to a **ProjectAchilles CA name-constrained to your DNS zone** (server-auth only, so a GPO-distributed root can't impersonate other sites or sign code); a root-owned timer renews the intermediate. On a public IP (DigitalOcean, Hetzner), defaults to **Let's Encrypt HTTP-01**. Also supports an Enterprise CA request (CSR), your own certificate files, or Let's Encrypt DNS-01, which needs no inbound internet |
+| **Clerk and the first admin** | Checks offline that the keys match each other and your domain before anything is installed, then invites the first admin through the Clerk API (or promotes an existing account), so there's someone who can manage the install |
+| **Network exposure** | Binds Caddy to the one IP you pick, because Docker-published ports bypass `ufw`. Optional LAN-scoped `ufw`/`firewalld` rules never touch SSH |
+| **Agent enrollment** | On a LAN, renders fingerprint-pinned bootstrap scripts for Windows (PowerShell 5.1) and Linux/macOS; GPO or Intune pushes **only the root certificate**, never enrollment tokens. With Let's Encrypt, agents enroll with the standard command |
 | **Day 2** | `achilles-installer status`, `upgrade`, `backup`, `restore`, `ca renew` / `ca export` / `ca bootstrap` |
 
-**Needs:** 2 GiB RAM (4 GiB with the bundled Elasticsearch), 20 GiB free disk, outbound internet, and a terminal. A public IP is not required. Installer options: `--ref vX.Y.Z` to pin a release, `--dir` to change the install directory, and `--no-run` to install the binary only. For automation, use `achilles-installer install --config deploy.config.env --yes`.
+**Needs:** 2 GiB RAM (4 GiB with the bundled Elasticsearch), 20 GiB free disk, outbound internet, and a terminal. A public IP is not required, and works too: on a cloud server the wizard switches to Let's Encrypt. Installer options: `--ref vX.Y.Z` to pin a release, `--dir` to change the install directory, and `--no-run` to install the binary only. For automation, use `achilles-installer install --config deploy.config.env --yes`.
 
-The full walkthrough covers DNS and Clerk choices, the CA model, GPO rollout to Windows endpoints, backups and troubleshooting: **[On-Prem LAN Deployment guide](docs/deployment/ON_PREM_LAN.md)**.
+The full walkthrough covers DNS and Clerk choices, the first admin, the CA model, GPO rollout to Windows endpoints, cloud servers, backups and troubleshooting: **[Server installer guide (on-prem LAN or cloud)](docs/deployment/ON_PREM_LAN.md)**.
 
-> Internet-facing VPS with Let's Encrypt HTTP-01? Use [`scripts/deploy-server.sh`](docs/deployment/SELF_HOSTED_SERVER.md) (or `scripts/deploy-do.sh` to create a DigitalOcean droplet first). It is the same engine the wizard drives.
+> Prefer a script to a wizard? [`scripts/deploy-server.sh`](docs/deployment/SELF_HOSTED_SERVER.md) is the engine the wizard drives (and `scripts/deploy-do.sh` creates a DigitalOcean droplet first).
 
 ### Local development
 
@@ -162,7 +162,7 @@ The PowerShell script checks prerequisites, fixes line endings, configures `back
 
 | Target | Install with | Database | Agent Builds | Guide |
 |--------|--------------|----------|-------------|-------|
-| **On-prem LAN server (recommended for self-hosting)** | `install-onprem.sh` → `achilles-installer` wizard | SQLite (volume) | Yes | [On-Prem LAN Guide](docs/deployment/ON_PREM_LAN.md) |
+| **On-prem LAN or cloud server (recommended for self-hosting)** | `install-onprem.sh` → `achilles-installer` wizard | SQLite (volume) | Yes | [Server Installer Guide](docs/deployment/ON_PREM_LAN.md) |
 | **Public server (VPS/droplet)** | `scripts/deploy-server.sh` or `scripts/deploy-do.sh` | SQLite (volume) | Yes | [Public Server Guide](docs/deployment/SELF_HOSTED_SERVER.md) |
 | **On-prem server over SSH** | `scripts/deploy-remote.sh user@host` | SQLite (volume) | Yes | [On-Prem Guide](docs/deployment/ON_PREM_SERVER.md) |
 | **Docker Compose** | `scripts/setup.sh` + `docker compose up -d` | SQLite (volume) | Yes | [docker-compose.yml](docker-compose.yml) |
@@ -802,7 +802,7 @@ Restart the backend afterwards so it reopens the database cleanly.
 ## Documentation
 
 ### Getting Started
-- **[On-Prem LAN Deployment](docs/deployment/ON_PREM_LAN.md)** — the one-command Linux install: `achilles-installer` wizard, name-constrained ProjectAchilles CA, GPO trust and enrollment for Windows agents, backups and day-2
+- **[Server Installer: On-Prem LAN or Cloud](docs/deployment/ON_PREM_LAN.md)** — the one-command Linux install: `achilles-installer` wizard, first admin through Clerk, name-constrained ProjectAchilles CA with GPO trust for Windows agents on a LAN, or Let's Encrypt on a cloud server, backups and day-2
 - [Quick Start Deployment](docs/deployment/QUICK_START_DEPLOYMENT.md) — 50-minute production deployment
 - [Windows Docker Installation](docs/deployment/WINDOWS_DOCKER_INSTALL.md) — Complete guide for Windows with Docker Desktop
 - [Docker Compose guide](docker-compose.yml) — Local deployment with optional Elasticsearch

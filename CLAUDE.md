@@ -233,7 +233,7 @@ Analytics endpoints take `basis=latest|executions` (default `executions`; invali
 
 ### Authentication
 **Three-tier model:**
-1. **Clerk (global)**: All routes use `<RequireAuth>` wrapper; JWT injected via `useAuthenticatedApi` hook
+1. **Clerk (global)**: All routes use `<RequireAuth>` wrapper; JWT injected via `useAuthenticatedApi` hook. Roles live in Clerk `publicMetadata.role`; the backend reads `sessionClaims.metadata`, and when the token has no `metadata` claim (no session-token customisation, which Clerk can't set by API) `hydrateClaimsFromClerk()` fills it from the Clerk API (60s cache, both backends)
 2. **Analytics**: `AnalyticsAuthProvider` context → redirects to `/analytics/setup` if unconfigured
 3. **Agent admin**: Clerk JWT required; device endpoints use agent API key (hashed in DB)
 
@@ -308,7 +308,7 @@ cp deploy.config.env.example deploy.config.env   # fill in domain, Clerk keys, T
 ./scripts/deploy-do.sh            # create a DigitalOcean droplet, then install
 ```
 
-On-prem LAN installs can instead use the Go TUI installer, `achilles-installer` (`installer/`): a wizard around `scripts/deploy-server.sh` with `TLS_MODE=achilles-ca` (a name-constrained ProjectAchilles root + intermediate CA) and day-2 `status`, `upgrade`, `backup`, `restore`. `scripts/install-onprem.sh` is the one-command bootstrap: it clones the repo into `/opt/projectachilles` (or `--dir`), installs the SHA256SUMS-verified release binary for `--ref` (building from source when there is no release asset) and launches the wizard. Rendered Caddy snippets live in `deploy/caddy/rendered/` (gitignored), so after a `git pull` re-run `deploy-server.sh` (or `achilles-installer upgrade`). Guide: `docs/deployment/ON_PREM_LAN.md`.
+On-prem LAN and cloud installs can instead use the Go TUI installer, `achilles-installer` (`installer/`): a wizard around `scripts/deploy-server.sh` with `TLS_MODE=achilles-ca` (a name-constrained ProjectAchilles root + intermediate CA); on a public interface IP (cloud servers) it recommends `acme-http` instead. After the install it makes `ADMIN_EMAIL` an admin through the Clerk Backend API (`installer/internal/clerkadmin`: invitation with `public_metadata.role=admin`, or a metadata merge for an existing account). Day-2: `status`, `upgrade`, `backup`, `restore`. `scripts/install-onprem.sh` is the one-command bootstrap: it clones the repo into `/opt/projectachilles` (or `--dir`), installs the SHA256SUMS-verified release binary for `--ref` (building from source when there is no release asset) and launches the wizard. Rendered Caddy snippets live in `deploy/caddy/rendered/` (gitignored), so after a `git pull` re-run `deploy-server.sh` (or `achilles-installer upgrade`). Guide: `docs/deployment/ON_PREM_LAN.md`.
 
 `TLS_MODE` selects certificate issuance: `acme-http` (public, Let's Encrypt HTTP-01), `acme-dns` (Let's Encrypt DNS-01, no inbound needed — builds a custom Caddy image with the DNS-provider plugin), `internal` (Caddy local CA; root CA exported for browsers + the agent's `ca_cert`), `byo` (mount cert/key PEM), or `achilles-ca` (name-constrained ProjectAchilles CA for LAN installs; see `docs/deployment/ON_PREM_LAN.md`). `ES_MODE` is `self` (bundled ES container, ≥4 GB RAM) or `cloud` (Elastic Cloud). The installer writes `backend/.env` + root `.env` (mode 600, gitignored) and is idempotent. See the two guides above; the public guide holds the shared reference (architecture, backups, day-2).
 

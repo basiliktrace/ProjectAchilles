@@ -1,14 +1,17 @@
 package tui
 
 import (
+	"context"
 	"fmt"
 	"path/filepath"
 	"strings"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/projectachilles/ProjectAchilles/installer/internal/ca"
+	"github.com/projectachilles/ProjectAchilles/installer/internal/clerkadmin"
 	"github.com/projectachilles/ProjectAchilles/installer/internal/config"
 )
 
@@ -25,7 +28,27 @@ type doneScreen struct {
 	s      *shared
 	lines  []string
 	scroll scroller
+
+	admin    adminState // the first-admin Clerk call (ADMIN_EMAIL)
+	adminRes clerkadmin.Result
+	adminErr error
 }
+
+type adminState int
+
+const (
+	adminIdle adminState = iota
+	adminRunning
+	adminFinished
+)
+
+type adminResultMsg struct {
+	res clerkadmin.Result
+	err error
+}
+
+// adminTimeout bounds the Clerk calls that make the first admin.
+const adminTimeout = 30 * time.Second
 
 func newDone(s *shared) *doneScreen { return &doneScreen{s: s} }
 
@@ -39,12 +62,50 @@ func (d *doneScreen) Help() string {
 }
 
 func (d *doneScreen) Init() tea.Cmd {
+	cmd := d.startAdmin()
+	d.scroll = scroller{}
+	d.refresh()
+	return cmd
+}
+
+// refresh rebuilds the content (and the terminal summary) in place.
+func (d *doneScreen) refresh() {
 	d.lines = d.build()
 	d.s.summary = d.plain()
-	d.scroll = scroller{}
 	d.scroll.setLines(d.lines, false)
 	d.scroll.setHeight(d.s.height - 1)
-	return nil
+}
+
+// startAdmin makes ADMIN_EMAIL an admin, once: Init also runs on resize.
+func (d *doneScreen) startAdmin() tea.Cmd {
+	c, f := *d.s.cfg, d.s.deps.Admin
+	if d.admin != adminIdle || c.AdminEmail == "" || f == nil {
+		return nil
+	}
+	d.admin = adminRunning
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), adminTimeout)
+		defer cancel()
+		r, err := f(ctx, c)
+		return adminResultMsg{r, err}
+	}
+}
+
+// adminStep is the first "Next steps" item: how the first admin gets in.
+func (d *doneScreen) adminStep(url string) string {
+	c := d.s.cfg
+	switch {
+	case c.AdminEmail == "" || d.admin == adminIdle:
+		return clerkadmin.ManualSteps(c.AchillesDomain)
+	case d.admin == adminRunning:
+		return "Inviting " + c.AdminEmail + " as the first admin (Clerk)…"
+	case d.adminErr != nil:
+		return "Could not make " + c.AdminEmail + " an admin: " + d.adminErr.Error() + ". " + clerkadmin.ManualSteps(c.AchillesDomain)
+	case d.adminRes.Outcome == clerkadmin.Invited || d.adminRes.Outcome == clerkadmin.AlreadyInvited:
+		return d.adminRes.Message() + " Then sign in at " + url + "."
+	default:
+		return d.adminRes.Message() + " Sign in at " + url + "."
+	}
 }
 
 // plain is the whole content without styling (also the terminal summary).
@@ -62,7 +123,7 @@ func (d *doneScreen) build() []string {
 	add(t.ok(t.Strong.Render("ProjectAchilles is installed and running.")))
 	add("  " + t.Muted.Render("URL     ") + t.Code.Render(url))
 	if ip := strings.Trim(c.CaddyBindIP, "[]"); ip != "" {
-		add("  " + t.Muted.Render("LAN IP  ") + ip)
+		add("  " + t.Muted.Render("IP      ") + ip)
 	}
 	add("")
 
@@ -72,14 +133,16 @@ func (d *doneScreen) build() []string {
 		add(t.Title.Render("Certificates"))
 		para(trustText(c, d.s.deps.RepoRoot), "  ")
 		add("")
-		add(t.Title.Render("Enroll endpoints"))
-		para("Download the agent from the web UI and run it as Administrator/root with --enroll <TOKEN> --server "+url+" --install.", "  ")
+		add(t.Title.Render("Enroll endpoints") + t.Muted.Render(" (as Administrator/root):"))
+		para("Download the agent from the web UI, then run:", "  ")
+		// Never wrapped: word-wrap breaks at hyphens and would split a flag.
+		add("  " + t.Code.Render("achilles-agent --enroll <TOKEN> --server "+url+" --install"))
 		add("")
 	}
 
 	add(t.Title.Render("Next steps"))
 	for i, step := range []string{
-		"Sign in at " + url + " and create the first admin user (Clerk).",
+		d.adminStep(url),
 		"Register an agent version in the web UI before enrolling.",
 		"Create an enrollment token in the web UI, then enroll each endpoint as shown above.",
 	} {
@@ -167,6 +230,9 @@ func (d *doneScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		d.Init()
+	case adminResultMsg:
+		d.admin, d.adminRes, d.adminErr = adminFinished, msg.res, msg.err
+		d.refresh()
 	case tea.KeyPressMsg:
 		switch k := msg.String(); k {
 		case "enter", "q":

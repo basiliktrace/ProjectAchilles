@@ -9,15 +9,15 @@
    > pk_test_aGFwcHktY2F0LTEyLmNsZXJrLmFjY291bnRzLmRldiQ=                      
                                                                                
  ┃ Clerk secret key                                                            
- ┃ > *********************************                                        
+ ┃ > *********************************                                         
+                                                                               
+   First admin email (optional: invited as admin)                              
+   > you@example.com, or blank if the Clerk app has an admin                   
  
  ✓ Frontend API: happy-cat-12.clerk.accounts.dev · reachable from this server
  ! This is a Clerk development key (pk_test_). It works, but production keys
    (pk_live_) are recommended for achilles.corp.example.com: development
    instances show a "Development mode" banner and have stricter usage limits.
-
-
-
 
 
 ────────────────────────────────────────────────────────────────────────────────

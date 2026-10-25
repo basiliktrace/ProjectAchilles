@@ -11,7 +11,7 @@ provide** (reachable over SSH), on your own network, with **working TLS** —
 including options that need no public internet exposure.
 
 :::tip Windows fleet on a LAN with no public IP?
-The [On-Prem LAN guide](./on-prem-lan) covers the interactive `achilles-installer` wizard, a managed name-constrained CA, and GPO-based trust for Windows endpoints.
+The [Server Installer guide](./on-prem-lan) covers the interactive `achilles-installer` wizard: a managed name-constrained CA and GPO-based trust for Windows endpoints on a LAN, or Let's Encrypt on a cloud server.
 :::
 
 This shares the same automation as the [Public Server](./public-server) install;
@@ -47,7 +47,7 @@ endpoint; they differ in what (if anything) clients must trust.
 If you own a public domain, `acme-dns` is smoothest — publicly-trusted certs,
 zero client setup, no inbound exposure. Use `internal` for truly isolated
 networks (for a LAN with Windows endpoints, prefer the
-[On-Prem LAN](./on-prem-lan) guide's name-constrained CA, `TLS_MODE=achilles-ca`),
+[Server Installer](./on-prem-lan) guide's name-constrained CA, `TLS_MODE=achilles-ca`),
 or `byo` to plug into an existing enterprise PKI.
 :::
 
