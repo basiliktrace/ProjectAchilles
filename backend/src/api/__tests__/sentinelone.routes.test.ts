@@ -95,41 +95,13 @@ describe('SentinelOne routes', () => {
     expect(mockFetch.mock.calls[0][1].headers.Authorization).toBe(`ApiToken ${TOKEN}`);
   });
 
-  describe('response actions', () => {
-    const kill = () => request(app()).post('/api/integrations/sentinelone/actions/threats/kill').send({ threat_ids: ['1234567890123456789'] });
-
-    it('are rejected (403) in read-only mode, never reach the API, and are audited', async () => {
-      await request(app()).post('/api/integrations/sentinelone').send({ base_url: BASE, api_token: TOKEN });
-      const res = await kill();
-      expect(res.status).toBe(403);
-      expect(res.body.error).toMatch(/read-only/);
-      const isolate = await request(app()).post('/api/integrations/sentinelone/actions/agents/disconnect').send({ agent_ids: ['1'] });
-      expect(isolate.status).toBe(403);
-      expect(mockFetch).not.toHaveBeenCalled();
-
-      const hist = await request(app()).get('/api/integrations/sentinelone/actions/history');
-      expect(hist.body.data[0]).toMatchObject({ outcome: 'rejected', action: 'disconnect', requested_by: 'user_test' });
-    });
-
-    it('are executed in response mode and audited as success', async () => {
-      await request(app()).post('/api/integrations/sentinelone').send({ base_url: BASE, api_token: TOKEN, permission_mode: 'response' });
-      mockFetch.mockResolvedValueOnce(json({ data: { affected: 1 } }));
-      const res = await kill();
-      expect(res.status).toBe(200);
-      expect(res.body.data.affected).toBe(1);
-      expect(mockFetch.mock.calls[0][0]).toBe(`${BASE}/web/api/v2.1/threats/mitigate/kill`);
-      expect(JSON.parse(mockFetch.mock.calls[0][1].body)).toEqual({ filter: { ids: ['1234567890123456789'] }, data: {} });
-
-      const hist = await request(app()).get('/api/integrations/sentinelone/actions/history');
-      expect(hist.body.data[0]).toMatchObject({ outcome: 'success', action: 'kill', permission_mode: 'response', affected: 1 });
-    });
-
-    it('rejects unknown actions and malformed ids', async () => {
-      await request(app()).post('/api/integrations/sentinelone').send({ base_url: BASE, api_token: TOKEN, permission_mode: 'response' });
-      expect((await request(app()).post('/api/integrations/sentinelone/actions/threats/delete').send({ threat_ids: ['1'] })).status).toBe(400);
-      expect((await request(app()).post('/api/integrations/sentinelone/actions/threats/kill').send({ threat_ids: ['abc;rm'] })).status).toBe(400);
-      expect(mockFetch).not.toHaveBeenCalled();
-    });
+  it('exposes no manual response-action routes, even in response mode', async () => {
+    await request(app()).post('/api/integrations/sentinelone').send({ base_url: BASE, api_token: TOKEN, permission_mode: 'response' });
+    const kill = await request(app()).post('/api/integrations/sentinelone/actions/threats/kill').send({ threat_ids: ['1234567890123456789'] });
+    const isolate = await request(app()).post('/api/integrations/sentinelone/actions/agents/disconnect').send({ agent_ids: ['1'] });
+    expect(kill.status).toBe(404);
+    expect(isolate.status).toBe(404);
+    expect(mockFetch).not.toHaveBeenCalled();
   });
 
   describe('auto-resolve / automatic mitigation settings', () => {

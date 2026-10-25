@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { CheckCircle, Info, ExternalLink, Unlink, RefreshCw, ShieldAlert, Lock } from 'lucide-react';
+import { CheckCircle, Info, ExternalLink, Unlink, RefreshCw } from 'lucide-react';
 import { sentinelOneApi } from '@/services/api/sentinelone';
 import type {
   SentinelOnePermissionMode,
@@ -7,8 +7,6 @@ import type {
   SentinelOneSeverity,
   SentinelOneIncidentStatus,
   SentinelOneSyncStatus,
-  SentinelOneMitigationAction,
-  SentinelOneAgentAction,
   SentinelOneAuditRecord,
   SentinelOneAlert,
 } from '@/services/api/sentinelone';
@@ -22,7 +20,7 @@ import { SentinelOneAutoResolveSection, SentinelOneAutoMitigationSection } from 
 
 const MODE_OPTIONS = [
   { value: 'read_only', label: 'Read-only — extract alerts only' },
-  { value: 'response', label: 'Response — read + response actions' },
+  { value: 'response', label: 'Response — read + opt-in auto-resolve / automatic mitigation' },
 ];
 
 const SOURCE_OPTIONS: Array<{ value: SentinelOneSource; label: string }> = [
@@ -32,19 +30,6 @@ const SOURCE_OPTIONS: Array<{ value: SentinelOneSource; label: string }> = [
 
 const SEVERITY_OPTIONS: SentinelOneSeverity[] = ['critical', 'high', 'medium', 'low', 'informational'];
 const STATUS_OPTIONS: SentinelOneIncidentStatus[] = ['unresolved', 'in_progress', 'resolved'];
-
-const MITIGATION_OPTIONS = [
-  { value: 'kill', label: 'Kill' },
-  { value: 'quarantine', label: 'Quarantine' },
-  { value: 'remediate', label: 'Remediate' },
-  { value: 'rollback-remediation', label: 'Rollback remediation' },
-  { value: 'un-quarantine', label: 'Un-quarantine' },
-];
-
-const AGENT_ACTION_OPTIONS = [
-  { value: 'disconnect', label: 'Isolate from network (disconnect)' },
-  { value: 'connect', label: 'Reconnect to network' },
-];
 
 /** "1, 2\n3" → ["1","2","3"] */
 const parseIds = (value: string): string[] => value.split(/[\s,]+/).map((s) => s.trim()).filter(Boolean);
@@ -85,14 +70,6 @@ export function SentinelOneConfig({ onStatusChange }: SentinelOneConfigProps) {
   const [syncStatus, setSyncStatus] = useState<SentinelOneSyncStatus | null>(null);
   const [alerts, setAlerts] = useState<{ items: SentinelOneAlert[]; total: number } | null>(null);
   const [history, setHistory] = useState<SentinelOneAuditRecord[]>([]);
-
-  // Response action form
-  const [mitigation, setMitigation] = useState<SentinelOneMitigationAction>('kill');
-  const [threatIds, setThreatIds] = useState('');
-  const [agentAction, setAgentAction] = useState<SentinelOneAgentAction>('disconnect');
-  const [agentIds, setAgentIds] = useState('');
-  const [actionRunning, setActionRunning] = useState(false);
-  const [actionResult, setActionResult] = useState<{ success: boolean; message: string } | null>(null);
 
   const refreshRuntime = useCallback(async () => {
     const [status, latest, audit] = await Promise.all([
@@ -226,22 +203,6 @@ export function SentinelOneConfig({ onStatusChange }: SentinelOneConfigProps) {
     }
   };
 
-  const runAction = async (kind: 'threat' | 'agent') => {
-    try {
-      setActionRunning(true);
-      setActionResult(null);
-      const res = kind === 'threat'
-        ? await sentinelOneApi.mitigateThreats(mitigation, parseIds(threatIds))
-        : await sentinelOneApi.agentNetworkAction(agentAction, parseIds(agentIds));
-      setActionResult({ success: true, message: `Action accepted by SentinelOne — ${res.affected} item(s) affected.` });
-    } catch (err) {
-      setActionResult({ success: false, message: err instanceof Error ? err.message : 'Action failed' });
-    } finally {
-      setActionRunning(false);
-      refreshRuntime();
-    }
-  };
-
   const isValid = editMode ? sources.length > 0 : !!(baseUrl && apiToken && sources.length > 0);
 
   if (loading) {
@@ -308,8 +269,8 @@ export function SentinelOneConfig({ onStatusChange }: SentinelOneConfigProps) {
       />
       <p className="text-xs text-muted-foreground -mt-4">
         {mode === 'read_only'
-          ? 'Only GET requests are made. Response actions are blocked server-side.'
-          : 'Allows threat mitigation (kill / quarantine / remediate / rollback) and network isolation from this console. Every action is audited.'}
+          ? 'Only GET requests are made. Every write is blocked server-side.'
+          : 'Allows the opt-in auto-resolve and automatic mitigation passes below to write to the console. Both stay off until you enable them, and every mitigation is audited.'}
       </p>
 
       <div className="grid grid-cols-2 gap-4">
@@ -361,7 +322,7 @@ export function SentinelOneConfig({ onStatusChange }: SentinelOneConfigProps) {
         <p className="font-medium text-card-foreground">Required SentinelOne role</p>
         <ul className="list-disc list-inside space-y-1 ml-2">
           <li><span className="font-medium">Read-only:</span> a service user with the <span className="font-mono text-xs">Viewer</span> role on the accounts/sites in scope</li>
-          <li><span className="font-medium">Response:</span> a role allowing threat actions and network quarantine (e.g. <span className="font-mono text-xs">IR Team</span> / <span className="font-mono text-xs">SOC</span>)</li>
+          <li><span className="font-medium">Response:</span> a role allowing incident status changes and threat mitigation (e.g. <span className="font-mono text-xs">IR Team</span> / <span className="font-mono text-xs">SOC</span>)</li>
         </ul>
         <a
           href="https://usea1-partners.sentinelone.net/api-doc/overview"
@@ -434,42 +395,15 @@ export function SentinelOneConfig({ onStatusChange }: SentinelOneConfigProps) {
         </div>
       )}
 
-      {editMode && (
-        <div className="border-t border-border pt-4 space-y-3">
-          <div className="flex items-center gap-2">
-            {savedMode === 'response' ? <ShieldAlert className="w-4 h-4 text-destructive" /> : <Lock className="w-4 h-4 text-muted-foreground" />}
-            <p className="text-sm font-medium text-foreground">Response actions</p>
-          </div>
-          {savedMode !== 'response' ? (
-            <p className="text-xs text-muted-foreground">
-              This integration is read-only. Switch the permission mode to Response and save to enable actions.
+      {editMode && history.length > 0 && (
+        <div className="border-t border-border pt-4 text-xs text-muted-foreground space-y-1">
+          <p className="text-sm font-medium text-foreground">Mitigation audit</p>
+          {history.map((h, i) => (
+            <p key={`${h.timestamp}-${i}`}>
+              {fmt(h.timestamp)} — {h.action} on {h.target_ids.length} target(s) by {h.requested_by}: <span className={h.outcome === 'success' ? 'text-green-500' : 'text-destructive'}>{h.outcome}</span>
+              {h.error ? ` (${h.error})` : ''}
             </p>
-          ) : (
-            <>
-              <div className="grid grid-cols-3 gap-2 items-end">
-                <Select label="Threat action" value={mitigation} onChange={(e) => setMitigation(e.target.value as SentinelOneMitigationAction)} options={MITIGATION_OPTIONS} />
-                <Input label="Threat IDs" placeholder="Comma-separated" value={threatIds} onChange={(e) => setThreatIds(e.target.value)} />
-                <Button variant="destructive" onClick={() => runAction('threat')} disabled={actionRunning || parseIds(threatIds).length === 0}>Run</Button>
-              </div>
-              <div className="grid grid-cols-3 gap-2 items-end">
-                <Select label="Agent action" value={agentAction} onChange={(e) => setAgentAction(e.target.value as SentinelOneAgentAction)} options={AGENT_ACTION_OPTIONS} />
-                <Input label="Agent IDs" placeholder="Comma-separated" value={agentIds} onChange={(e) => setAgentIds(e.target.value)} />
-                <Button variant="destructive" onClick={() => runAction('agent')} disabled={actionRunning || parseIds(agentIds).length === 0}>Run</Button>
-              </div>
-              {actionResult && <Alert variant={actionResult.success ? 'success' : 'destructive'}>{actionResult.message}</Alert>}
-            </>
-          )}
-          {history.length > 0 && (
-            <div className="text-xs text-muted-foreground space-y-1">
-              <p className="font-medium text-foreground">Recent actions (audit)</p>
-              {history.map((h, i) => (
-                <p key={`${h.timestamp}-${i}`}>
-                  {fmt(h.timestamp)} — {h.action} on {h.target_ids.length} target(s) by {h.requested_by}: <span className={h.outcome === 'success' ? 'text-green-500' : 'text-destructive'}>{h.outcome}</span>
-                  {h.error ? ` (${h.error})` : ''}
-                </p>
-              ))}
-            </div>
-          )}
+          ))}
         </div>
       )}
 

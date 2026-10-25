@@ -4,8 +4,6 @@ export type SentinelOnePermissionMode = 'read_only' | 'response';
 export type SentinelOneSource = 'threats' | 'cloud_detection_alerts';
 export type SentinelOneSeverity = 'critical' | 'high' | 'medium' | 'low' | 'informational' | 'unknown';
 export type SentinelOneIncidentStatus = 'unresolved' | 'in_progress' | 'resolved';
-export type SentinelOneMitigationAction = 'kill' | 'quarantine' | 'remediate' | 'rollback-remediation' | 'un-quarantine';
-export type SentinelOneAgentAction = 'disconnect' | 'connect';
 
 export interface SentinelOneScope {
   account_ids?: string[];
@@ -122,7 +120,7 @@ export interface SentinelOneAlert {
 
 export interface SentinelOneAuditRecord {
   timestamp: string;
-  action_kind: 'threat_mitigation' | 'agent_network';
+  action_kind: 'threat_mitigation';
   action: string;
   target_ids: string[];
   requested_by: string;
@@ -169,16 +167,6 @@ export const sentinelOneApi = {
 
   async getAlerts(params: { limit?: number; severity?: string; source?: string } = {}): Promise<{ items: SentinelOneAlert[]; total: number }> {
     const response = await apiClient.get('/integrations/sentinelone/alerts', { params });
-    return response.data.data;
-  },
-
-  async mitigateThreats(action: SentinelOneMitigationAction, threatIds: string[]): Promise<{ affected: number }> {
-    const response = await apiClient.post(`/integrations/sentinelone/actions/threats/${action}`, { threat_ids: threatIds });
-    return response.data.data;
-  },
-
-  async agentNetworkAction(action: SentinelOneAgentAction, agentIds: string[]): Promise<{ affected: number }> {
-    const response = await apiClient.post(`/integrations/sentinelone/actions/agents/${action}`, { agent_ids: agentIds });
     return response.data.data;
   },
 

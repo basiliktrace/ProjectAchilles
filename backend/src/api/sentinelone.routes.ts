@@ -2,11 +2,12 @@
 //
 // Permission model:
 //   - integrations:read   → view settings (masked), sync status, alerts, audit
-//   - integrations:write  → save/test/delete credentials, manual sync
-//   - integrations:write + integration permission_mode === 'response'
-//                         → response actions (threat mitigation, network isolation)
-// In read_only mode the action endpoints return 403 and are audited as
-// 'rejected'; the S1 client independently refuses any non-GET request.
+//   - integrations:write  → save/test/delete credentials, manual sync,
+//                           auto-resolve / automatic-mitigation settings
+// There are no manual response-action routes. Console writes happen only in
+// the opt-in auto-resolve / automatic-mitigation passes, which require
+// permission_mode === 'response'; the S1 client independently refuses any
+// non-GET request in read_only mode.
 
 import { Router } from 'express';
 import type { Request } from 'express';
@@ -18,19 +19,16 @@ import {
   SentinelOneSettingsSchema,
   SentinelOneTestSchema,
   SentinelOneSyncSchema,
-  SentinelOneThreatActionSchema,
-  SentinelOneAgentActionSchema,
   SentinelOneAutoResolveModeSchema,
   SentinelOneAutoMitigationSchema,
 } from '../schemas/sentinelone.schemas.js';
 import { SentinelOneSettingsService } from '../services/sentinelone/settings.js';
-import { SentinelOneClient, normalizeSentinelOneBaseUrl, S1_MITIGATION_ACTIONS, S1_AGENT_ACTIONS } from '../services/sentinelone/s1-client.js';
+import { SentinelOneClient, normalizeSentinelOneBaseUrl } from '../services/sentinelone/s1-client.js';
 import { SentinelOneSyncService } from '../services/sentinelone/sync.service.js';
 import { SentinelOneResponseService } from '../services/sentinelone/response.service.js';
 import { SENTINELONE_INDEX } from '../services/sentinelone/index-management.js';
 import { SettingsService as AnalyticsSettingsService } from '../services/analytics/settings.js';
 import { createEsClient } from '../services/analytics/client.js';
-import type { SentinelOneMitigationAction, SentinelOneAgentAction, SentinelOneResponseAction } from '../types/sentinelone.js';
 
 const router = Router();
 router.use(requireClerkAuth());
@@ -176,39 +174,6 @@ router.get('/alerts', requirePermission('integrations:read'), asyncHandler(async
     console.warn('[sentinelone alerts] query failed:', err instanceof Error ? err.message : String(err));
     res.json({ success: true, data: { items: [], total: 0, limit, offset } });
   }
-}));
-
-// ---------------------------------------------------------------------------
-// Response actions (Response mode only)
-// ---------------------------------------------------------------------------
-
-async function runAction(req: Request, action: SentinelOneResponseAction) {
-  const actor = actorOf(req);
-  const mode = getSettingsService(req).getPermissionMode();
-  if (mode !== 'response') {
-    const reason = 'SentinelOne integration is in read-only mode. Switch it to Response mode to run response actions.';
-    await sentinelOneResponseService.recordRejected(action, actor, reason);
-    throw new AppError(reason, 403);
-  }
-  const outcome = await sentinelOneResponseService.execute(action, actor);
-  if (!outcome.success) throw new AppError(outcome.error ?? 'SentinelOne action failed', outcome.statusCode);
-  return outcome;
-}
-
-/** POST /api/integrations/sentinelone/actions/threats/:action — kill | quarantine | remediate | rollback-remediation | un-quarantine */
-router.post('/actions/threats/:action', requirePermission('integrations:write'), validate(SentinelOneThreatActionSchema), asyncHandler(async (req, res) => {
-  const action = req.params.action as SentinelOneMitigationAction;
-  if (!S1_MITIGATION_ACTIONS.includes(action)) throw new AppError(`Unknown mitigation action: ${action}`, 400);
-  const outcome = await runAction(req, { kind: 'threat_mitigation', action, threatIds: req.body.threat_ids });
-  res.json({ success: true, data: { affected: outcome.affected ?? 0 } });
-}));
-
-/** POST /api/integrations/sentinelone/actions/agents/:action — disconnect (network isolate) | connect (reconnect) */
-router.post('/actions/agents/:action', requirePermission('integrations:write'), validate(SentinelOneAgentActionSchema), asyncHandler(async (req, res) => {
-  const action = req.params.action as SentinelOneAgentAction;
-  if (!S1_AGENT_ACTIONS.includes(action)) throw new AppError(`Unknown agent action: ${action}`, 400);
-  const outcome = await runAction(req, { kind: 'agent_network', action, agentIds: req.body.agent_ids });
-  res.json({ success: true, data: { affected: outcome.affected ?? 0 } });
 }));
 
 // ---------------------------------------------------------------------------

@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect } from 'react';
-import { Database, Cloud, ShieldCheck, Bird, Bell, MailCheck } from 'lucide-react';
+import { Database, Cloud, ShieldCheck, Bell, MailCheck } from 'lucide-react';
 import { CrowdStrikeLogo, SentinelOneLogo } from '@/components/shared/VendorLogos';
 import { useAnalyticsAuth } from '@/hooks/useAnalyticsAuth';
 import type { IntegrationStatus } from './IntegrationCard';

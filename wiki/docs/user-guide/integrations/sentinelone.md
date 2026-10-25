@@ -1,7 +1,7 @@
 ---
 sidebar_position: 7
 title: "SentinelOne"
-description: "Configure the SentinelOne integration: continuous alert extraction (read-only) and optional response actions."
+description: "Configure the SentinelOne integration: continuous alert extraction (read-only) with opt-in auto-resolve and automatic mitigation."
 ---
 
 # SentinelOne
@@ -50,19 +50,20 @@ can be used instead of the UI; UI settings take priority.
 
 | Mode | Allowed |
 |------|---------|
-| Read-only | GET extraction only. Response endpoints return **403** and are audited as `rejected`; the API client itself refuses any non-GET request. |
-| Response | Read-only + `POST /threats/mitigate/{kill,quarantine,remediate,rollback-remediation,un-quarantine}` and `POST /agents/actions/{disconnect,connect}` (network isolate / reconnect). |
+| Read-only | GET extraction only. The API client itself refuses any non-GET request. |
+| Response | Read-only + the writes of the two opt-in passes: incident status / notes for **auto-resolve**, and `POST /threats/mitigate/{kill,quarantine}` for **automatic mitigation**. Both stay off until you enable them. |
 
-Every response attempt (success, rejected, failed) is recorded as a
-`doc_type: response_action` document in `achilles-sentinelone` with the
-requesting user, targets and outcome, and shown under **Recent actions**.
+There are no manual response actions (kill, quarantine, network isolation by
+id) in this release. Every automatic-mitigation attempt (success, rejected,
+failed) is recorded as a `doc_type: response_action` document in
+`achilles-sentinelone` and shown under **Mitigation audit**.
 
-Required SentinelOne roles: **Viewer** for read-only; a role allowing threat
-actions and network quarantine (e.g. IR Team / SOC) for Response mode.
+Required SentinelOne roles: **Viewer** for read-only; a role allowing incident
+status changes and threat mitigation (e.g. IR Team / SOC) for Response mode.
 
 ## API
 
-All routes require Clerk auth; reads need `integrations:read`, writes and actions `integrations:write`.
+All routes require Clerk auth; reads need `integrations:read`, writes `integrations:write`.
 
 | Method | Path | Purpose |
 |--------|------|---------|
@@ -71,6 +72,4 @@ All routes require Clerk auth; reads need `integrations:read`, writes and action
 | POST | `/api/integrations/sentinelone/sync` | Manual sync (`{ "reset": true }` re-backfills) |
 | GET | `/api/integrations/sentinelone/sync/status` | Checkpoints, last result, last error |
 | GET | `/api/integrations/sentinelone/alerts` | Ingested alerts (`limit`, `offset`, `severity`, `source`) |
-| POST | `/api/integrations/sentinelone/actions/threats/:action` | `{ "threat_ids": [...] }` (Response mode) |
-| POST | `/api/integrations/sentinelone/actions/agents/:action` | `{ "agent_ids": [...] }` (Response mode) |
-| GET | `/api/integrations/sentinelone/actions/history` | Audit trail |
+| GET | `/api/integrations/sentinelone/actions/history` | Automatic-mitigation audit trail |

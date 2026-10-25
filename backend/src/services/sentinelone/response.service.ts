@@ -1,9 +1,10 @@
-// SentinelOne response actions (Response permission mode only) + audit trail.
+// SentinelOne threat mitigation executor (Response permission mode only) + audit trail.
 //
-// Every attempt — accepted, rejected by the permission boundary, or failed at
-// the API — is written as a `doc_type: 'response_action'` document to the
-// achilles-sentinelone index (best-effort) and logged, so there is a record
-// of who asked for what from the ProjectAchilles console.
+// Its only caller is the opt-in automatic-mitigation pass; there are no
+// manual response-action routes. Every attempt — accepted, rejected by the
+// permission boundary, or failed at the API — is written as a
+// `doc_type: 'response_action'` document to the achilles-sentinelone index
+// (best-effort) and logged.
 
 import { SentinelOneClient, SentinelOnePermissionError, SentinelOneApiError } from './s1-client.js';
 import { SentinelOneSettingsService } from './settings.js';
@@ -33,7 +34,7 @@ export class SentinelOneResponseService {
   ): Promise<ResponseActionOutcome> {
     const settingsSvc = new SentinelOneSettingsService(actor.orgId);
     const creds = settingsSvc.getCredentials();
-    const targetIds = action.kind === 'threat_mitigation' ? action.threatIds : action.agentIds;
+    const targetIds = action.threatIds;
 
     const audit: SentinelOneResponseAuditDoc = {
       doc_type: 'response_action',
@@ -57,9 +58,7 @@ export class SentinelOneResponseService {
         // The client itself refuses writes in read_only mode (defence in depth —
         // the route checks the mode too).
         const client = new SentinelOneClient(creds);
-        const res = action.kind === 'threat_mitigation'
-          ? await client.mitigateThreats(action.action, action.threatIds)
-          : await client.agentNetworkAction(action.action, action.agentIds);
+        const res = await client.mitigateThreats(action.action, action.threatIds);
         audit.outcome = 'success';
         audit.affected = res.affected;
         outcome = { success: true, statusCode: 200, affected: res.affected, audit };
@@ -77,24 +76,6 @@ export class SentinelOneResponseService {
 
     await this.recordAudit(audit);
     return outcome;
-  }
-
-  /** Record a rejected attempt that never reached execute() (e.g. route-level mode check). */
-  async recordRejected(action: SentinelOneResponseAction, actor: { userId: string; orgId?: string }, reason: string): Promise<SentinelOneResponseAuditDoc> {
-    const audit: SentinelOneResponseAuditDoc = {
-      doc_type: 'response_action',
-      timestamp: new Date().toISOString(),
-      action_kind: action.kind,
-      action: action.action,
-      target_ids: action.kind === 'threat_mitigation' ? action.threatIds : action.agentIds,
-      requested_by: actor.userId,
-      ...(actor.orgId ? { org_id: actor.orgId } : {}),
-      permission_mode: 'read_only',
-      outcome: 'rejected',
-      error: reason,
-    };
-    await this.recordAudit(audit);
-    return audit;
   }
 
   private async recordAudit(audit: SentinelOneResponseAuditDoc): Promise<void> {

@@ -11,8 +11,7 @@
 import type {
   SentinelOneCredentials,
   SentinelOnePermissionMode,
-  SentinelOneMitigationAction,
-  SentinelOneAgentAction,
+  SentinelOneAutoMitigationAction,
   S1ListResponse,
   S1Threat,
   S1CloudDetectionAlert,
@@ -26,11 +25,8 @@ export const S1_MAX_PAGE_LIMIT = 1000;
 const MAX_RETRIES = 3;
 const REQUEST_TIMEOUT_MS = 30_000;
 
-export const S1_MITIGATION_ACTIONS: ReadonlyArray<SentinelOneMitigationAction> = [
-  'kill', 'quarantine', 'remediate', 'rollback-remediation', 'un-quarantine',
-] as const;
-
-export const S1_AGENT_ACTIONS: ReadonlyArray<SentinelOneAgentAction> = ['disconnect', 'connect'] as const;
+/** The only mitigation actions the client will send (automatic mitigation). */
+export const S1_MITIGATION_ACTIONS: ReadonlyArray<SentinelOneAutoMitigationAction> = ['kill', 'quarantine'] as const;
 
 /** Incident-lifecycle write endpoints used by auto-resolve (never mitigation). */
 export const S1_INCIDENT_PATHS = {
@@ -42,7 +38,6 @@ export const S1_INCIDENT_PATHS = {
 /** Closed allowlist of write endpoints (response mode only). */
 const WRITE_PATH_ALLOWLIST: ReadonlySet<string> = new Set([
   ...S1_MITIGATION_ACTIONS.map((a) => `${S1_API_PREFIX}/threats/mitigate/${a}`),
-  ...S1_AGENT_ACTIONS.map((a) => `${S1_API_PREFIX}/agents/actions/${a}`),
   ...Object.values(S1_INCIDENT_PATHS),
 ]);
 
@@ -295,7 +290,7 @@ export class SentinelOneClient {
   // ---------------------------------------------------------------------------
 
   /** POST /threats/mitigate/{action} with body { filter: { ids }, data: {} }. */
-  async mitigateThreats(action: SentinelOneMitigationAction, threatIds: string[]): Promise<{ affected: number }> {
+  async mitigateThreats(action: SentinelOneAutoMitigationAction, threatIds: string[]): Promise<{ affected: number }> {
     if (!S1_MITIGATION_ACTIONS.includes(action)) throw new SentinelOnePermissionError(`Unknown mitigation action: ${action}`);
     if (threatIds.length === 0) throw new Error('mitigateThreats: at least one threat id is required');
     const res = await this.request<{ data?: { affected?: number } }>('POST', `${S1_API_PREFIX}/threats/mitigate/${action}`, {
@@ -337,16 +332,6 @@ export class SentinelOneClient {
     SentinelOneClient.checkIds(alertIds, 'updateAlertIncidentStatus');
     const res = await this.request<{ data?: { affected?: number } }>('POST', S1_INCIDENT_PATHS.alertIncident, {
       body: { filter: { ids: alertIds }, data: { incidentStatus } },
-    });
-    return { affected: res.data?.affected ?? 0 };
-  }
-
-  /** POST /agents/actions/{disconnect|connect} — network isolate / reconnect endpoints. */
-  async agentNetworkAction(action: SentinelOneAgentAction, agentIds: string[]): Promise<{ affected: number }> {
-    if (!S1_AGENT_ACTIONS.includes(action)) throw new SentinelOnePermissionError(`Unknown agent action: ${action}`);
-    if (agentIds.length === 0) throw new Error('agentNetworkAction: at least one agent id is required');
-    const res = await this.request<{ data?: { affected?: number } }>('POST', `${S1_API_PREFIX}/agents/actions/${action}`, {
-      body: { filter: { ids: agentIds }, data: {} },
     });
     return { affected: res.data?.affected ?? 0 };
   }

@@ -18,17 +18,11 @@ export type SentinelOnePermissionMode = 'read_only' | 'response';
 /** Data sources the poller can pull. */
 export type SentinelOneSource = 'threats' | 'cloud_detection_alerts';
 
-/** Threat mitigation actions — POST /web/api/v2.1/threats/mitigate/{action}. */
-export type SentinelOneMitigationAction = 'kill' | 'quarantine' | 'remediate' | 'rollback-remediation' | 'un-quarantine';
-
-/** Agent network actions — POST /web/api/v2.1/agents/actions/{disconnect|connect}. */
-export type SentinelOneAgentAction = 'disconnect' | 'connect';
-
 /**
- * Actions automatic mitigation may take. Deliberately narrower than the
- * manual response actions: only the two that act on the detected binary /
- * process. Remediate, rollback and network isolation change host state well
- * beyond the test artefact and stay manual-only.
+ * Actions automatic mitigation may take (POST /threats/mitigate/{action}).
+ * Only the two that act on the detected binary / process: remediate, rollback
+ * and network isolation change host state well beyond the test artefact and
+ * are not exposed by this integration.
  */
 export type SentinelOneAutoMitigationAction = 'kill' | 'quarantine';
 
@@ -39,9 +33,7 @@ export interface SentinelOneAutoMitigationSettings {
   action: SentinelOneAutoMitigationAction;
 }
 
-export type SentinelOneResponseAction =
-  | { kind: 'threat_mitigation'; action: SentinelOneMitigationAction; threatIds: string[] }
-  | { kind: 'agent_network'; action: SentinelOneAgentAction; agentIds: string[] };
+export type SentinelOneResponseAction = { kind: 'threat_mitigation'; action: SentinelOneAutoMitigationAction; threatIds: string[] };
 
 /** Normalized severity — same vocabulary as the Defender/CrowdStrike alert docs. */
 export type SentinelOneSeverity = 'critical' | 'high' | 'medium' | 'low' | 'informational' | 'unknown';

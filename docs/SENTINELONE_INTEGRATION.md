@@ -8,8 +8,8 @@ This contribution adds a native **SentinelOne (Singularity XDR)** integration to
 
 - **Data sources:** Threats (`/web/api/v2.1/threats`) and Detection alerts (`/web/api/v2.1/cloud-detection/alerts`).
 - **Permission modes:**
-  - **Read-only (default):** only `GET` requests are made; response actions are blocked server-side.
-  - **Response:** enables threat actions and network quarantine.
+  - **Read-only (default):** only `GET` requests are made; every write is blocked server-side.
+  - **Response:** lets the opt-in auto-resolve and automatic-mitigation (kill / quarantine) passes write to the console. Manual response actions are not part of this release.
 - **Automatic mitigation is OFF by default** and can only be enabled through an explicit option in the integration configuration. Auto-resolve is also off by default.
 - **Polling and backfill:** configurable polling interval (minutes) and initial backfill (up to 365 days, depending on console retention).
 - **Segmentation (optional):** filter by Account IDs, Site IDs, Group IDs, severity and incident status.
@@ -56,7 +56,7 @@ This error comes from ProjectAchilles itself, **not** from SentinelOne. To fix i
 - **Least privilege:**
   - Give the admin role only to users who manage integrations; an admin can switch the integration to Response mode.
   - Use a `Viewer` Service User for Read-only mode.
-  - Use `SOC` / `IR Team` only when response actions are actually needed.
+  - Use `SOC` / `IR Team` only when auto-resolve or automatic mitigation is actually needed.
 - **Protect the `.env` file.** It holds the encryption key used for stored tokens. Restrict its file permissions and never commit it.
 - **Use a Clerk production instance** (custom domain) for real deployments; `*.clerk.accounts.dev` development instances are not meant for production.
 - **Do not expose ProjectAchilles directly to the internet.** Publish it only on an internal network or behind a VPN, especially when Response mode is enabled.

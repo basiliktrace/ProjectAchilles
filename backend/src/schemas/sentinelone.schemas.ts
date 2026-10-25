@@ -46,14 +46,6 @@ export const SentinelOneSyncSchema = z.object({
   reset: z.boolean().optional(),
 });
 
-export const SentinelOneThreatActionSchema = z.object({
-  threat_ids: z.array(S1Id).min(1).max(100),
-});
-
-export const SentinelOneAgentActionSchema = z.object({
-  agent_ids: z.array(S1Id).min(1).max(100),
-});
-
 export const SentinelOneAutoResolveModeSchema = z.object({
   mode: z.enum(['disabled', 'dry_run', 'enabled']),
 });

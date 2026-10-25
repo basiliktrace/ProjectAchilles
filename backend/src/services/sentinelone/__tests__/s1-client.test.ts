@@ -93,7 +93,6 @@ describe('SentinelOneClient', () => {
     it('read_only mode refuses mitigation without touching the network', async () => {
       const client = new SentinelOneClient({ base_url: BASE, api_token: TOKEN, permission_mode: 'read_only' });
       await expect(client.mitigateThreats('kill', ['123'])).rejects.toBeInstanceOf(SentinelOnePermissionError);
-      await expect(client.agentNetworkAction('disconnect', ['123'])).rejects.toBeInstanceOf(SentinelOnePermissionError);
       expect(mockFetch).not.toHaveBeenCalled();
     });
 
@@ -107,16 +106,11 @@ describe('SentinelOneClient', () => {
       expect(JSON.parse(init.body)).toEqual({ filter: { ids: ['1234567890'] }, data: {} });
     });
 
-    it('response mode isolates agents via /agents/actions/disconnect', async () => {
-      mockFetch.mockResolvedValueOnce(jsonResponse({ data: { affected: 2 } }));
+    it('rejects anything but kill / quarantine even in response mode', async () => {
       const client = new SentinelOneClient({ base_url: BASE, api_token: TOKEN, permission_mode: 'response' });
-      await expect(client.agentNetworkAction('disconnect', ['1', '2'])).resolves.toEqual({ affected: 2 });
-      expect(mockFetch.mock.calls[0][0]).toBe(`${BASE}/web/api/v2.1/agents/actions/disconnect`);
-    });
-
-    it('rejects unknown actions even in response mode', async () => {
-      const client = new SentinelOneClient({ base_url: BASE, api_token: TOKEN, permission_mode: 'response' });
-      await expect(client.mitigateThreats('delete-everything' as never, ['1'])).rejects.toBeInstanceOf(SentinelOnePermissionError);
+      for (const action of ['delete-everything', 'remediate', 'rollback-remediation', 'un-quarantine']) {
+        await expect(client.mitigateThreats(action as never, ['1'])).rejects.toBeInstanceOf(SentinelOnePermissionError);
+      }
       expect(mockFetch).not.toHaveBeenCalled();
     });
   });
