@@ -15,7 +15,7 @@ ProjectAchilles supports eight deployment targets. Choose based on your requirem
 | **Docker Compose** | `backend/` | SQLite (volume) | Filesystem (volume) | Yes | Free | Local dev, self-hosted, air-gapped |
 | **Public server** | `backend/` | SQLite (volume) | Filesystem (volume) | Yes | VPS cost | Public single-server install with auto-TLS |
 | **On-prem server** | `backend/` | SQLite (volume) | Filesystem (volume) | Yes | Your hardware | Private/internal networks, own PKI |
-| **On-prem LAN (installer)** | `backend/` | SQLite (volume) | Filesystem (volume) | Yes | Your hardware | LAN-only server, managed CA, Windows fleet via GPO |
+| **Server installer (on-prem or cloud)** | `backend/` | SQLite (volume) | Filesystem (volume) | Yes | Your hardware or VPS cost | One-command wizard: LAN server with a managed CA and GPO trust, or a cloud server with Let's Encrypt |
 | **Railway** | `backend/` | SQLite (volume) | Filesystem (volume) | Partial | ~$10-13/mo | Simplicity, auto-deploy from GitHub |
 | **Render** | `backend/` | SQLite (persistent disk) | Filesystem (disk) | Partial | ~$14/mo | Flat-rate pricing, Blueprint deploy |
 | **Fly.io** | `backend/` | SQLite (volume) | Filesystem (volume) | Yes | ~$8/mo | Cheapest always-on, custom domains |
@@ -71,8 +71,8 @@ ProjectAchilles supports eight deployment targets. Choose based on your requirem
 - **Just evaluating?** Use [Docker Compose](./docker-compose) or [Local Dev](../getting-started/quick-start-local)
 - **Want your own public server with a domain?** Use [Public Server](./public-server) (Caddy auto-TLS, DigitalOcean or any VPS)
 - **Running on a private/internal network?** Use [On-Prem Server](./on-prem-server) (internal CA, DNS-01, or your own cert)
-- **Windows fleet on a LAN, no public IP?** Use [On-Prem LAN](./on-prem-lan) (TUI installer, managed CA, GPO trust)
-- **A DigitalOcean or Hetzner server and you want the wizard?** The same installer handles a public IP with Let's Encrypt: [Cloud servers](./on-prem-lan#cloud-servers-digitalocean-hetzner)
+- **Windows fleet on a LAN, no public IP?** Use the [Server Installer](./on-prem-lan) (TUI wizard, managed CA, GPO trust)
+- **A DigitalOcean or Hetzner server?** The same wizard handles a public IP with Let's Encrypt: [Cloud servers](./on-prem-lan#cloud-servers-digitalocean-hetzner)
 - **Need the cheapest managed always-on?** Use [Fly.io](./fly-io) (~$8/mo)
 - **Want the simplest managed deploy?** Use [Railway](./railway) (GitHub auto-deploy)
 - **Need serverless scale?** Use [Vercel](./vercel) (requires Turso + Blob)

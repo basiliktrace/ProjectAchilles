@@ -13,7 +13,14 @@ This project uses two version streams:
 
 ### Added
 
-- **Installer on cloud servers.** `achilles-installer` now recognises a public IP on the chosen interface (DigitalOcean, Hetzner) and offers **Let's Encrypt HTTP-01** (`TLS_MODE=acme-http`), recommended there. It skips the LAN-subnets question, asks for the A record at your DNS provider instead of in AD DNS, and explains the DNS mismatch behind 1:1 NAT (AWS, Azure, Google Cloud). HTTP-01 is also offered on a LAN for names under a public domain. Guide: `docs/deployment/ON_PREM_LAN.md` section 15.
+- **Installer on cloud servers.** `achilles-installer` now recognises a public IP on the chosen interface (DigitalOcean, Hetzner) and offers **Let's Encrypt HTTP-01** (`TLS_MODE=acme-http`), recommended there. It skips the LAN-subnets question, asks for the A record at your DNS provider instead of in AD DNS, and explains the DNS mismatch behind 1:1 NAT (AWS, Azure, Google Cloud). HTTP-01 is also offered on a LAN for names under a public domain. Ubuntu 26.04 LTS passes preflight. Guide: `docs/deployment/ON_PREM_LAN.md` section 15.
+- **Installer: first admin.** The Login screen asks for the first admin's email (`ADMIN_EMAIL`, optional). After the install, the installer invites that address through the Clerk API with the admin role, or adds the role to an existing account; a re-run doesn't send the email again. Without it, the Done screen gives the manual steps. Guide: `docs/deployment/ON_PREM_LAN.md` section 4.1.
+
+### Fixed
+
+- **Roles without the Clerk session token claim.** The backend read roles only from the session token's `metadata` claim, which a new Clerk instance doesn't have until someone customises its session token in the dashboard (Clerk has no API for it). Until then every admin action returned 403 "Insufficient permissions" while the UI showed the user as admin. The backend now looks the role up in Clerk when the token has no `metadata` claim (cached for a minute per user). The claim is still recommended. Docker and Vercel backends.
+- **Demo data in Analytics → All Executions.** The seeded results index was created without the results mapping, so the Executions table showed "0 groups (N documents)" while the dashboards had data. The seed now maps the index it writes to, and no longer adds another 1000 results each time the installer (or `deploy-server.sh`) runs again. Existing installs: see Troubleshooting in `docs/deployment/ON_PREM_LAN.md`.
+- **Installer Done screen.** The agent enroll command no longer wraps in the middle of `--server` on narrow terminals.
 
 ## [2.4.0] - 2026-10-24
 

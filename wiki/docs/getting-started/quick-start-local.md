@@ -79,9 +79,9 @@ The script opens Clerk's dashboard in your browser, prompts you for both keys, v
 If you've set up Clerk before, just add `CLERK_PUBLISHABLE_KEY` and `CLERK_SECRET_KEY` to `backend/.env` before running the script — it will detect them and skip the interactive setup.
 :::
 
-After key setup, the script guides you through **RBAC configuration** — a required one-time step for role-based access:
+After key setup, the script guides you through **RBAC configuration**, a one-time step for role-based access:
 
-1. **Session token claim** (manual) — you'll be directed to add `"metadata": "{{user.public_metadata}}"` to your Clerk session token template. This lets the backend read user roles from the JWT.
+1. **Session token claim** (manual, recommended) — you'll be directed to add `"metadata": "{{user.public_metadata}}"` to your Clerk session token template. This puts user roles in the JWT; without it the backend looks each user's role up in Clerk (cached for a minute).
 2. **Create your user** — while in the Clerk Dashboard, go to **Users → Add user** and create your admin account with an email and password.
 3. **Admin role** (automated) — the script asks for your email, looks up your Clerk user ID via API, and sets `{"role": "admin"}` on your account automatically.
 

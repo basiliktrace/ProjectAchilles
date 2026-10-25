@@ -100,7 +100,8 @@ graph LR
     C --> M[Morgan<br/>Request logging]
     M --> B[Body Parser<br/>JSON 10 MB limit]
     B --> CK[clerkAuth<br/>Parse JWT]
-    CK --> CLI[acceptCliAuth<br/>CLI token fallback]
+    CK --> HC[hydrateClaimsFromClerk<br/>Role lookup fallback]
+    HC --> CLI[acceptCliAuth<br/>CLI token fallback]
     CLI --> RL[apiLimiter<br/>1000/15 min]
     RL --> ROUTE[Route Handler]
     ROUTE --> NF[notFoundHandler<br/>404]
@@ -126,6 +127,8 @@ Uses `dev` format for colorized, concise HTTP logs during development.
 ### 5. Clerk Auth (global)
 
 `clerkAuth` from `@clerk/express` runs on every request. It parses the JWT from the `Authorization` header and populates `req.auth` but does **not** reject unauthenticated requests. Route-level guards (`requireClerkAuth()`, `requireOrgAccess`, `requirePermission()`) enforce access on specific endpoints.
+
+**Role lookup fallback.** `hydrateClaimsFromClerk()` (`middleware/clerkClaimsFallback.middleware.ts`, in both `backend/` and `backend-serverless/`) runs right after `clerkAuth`. Roles and `org_id` are read from `sessionClaims.metadata`, which a session token carries only when the Clerk instance's session token is customised with `{"metadata": "{{user.public_metadata}}"}`, and Clerk has no API to set that. When a signed-in Clerk user's token has **no `metadata` claim at all**, the middleware loads the user's public metadata from Clerk (cached 60 s per user, one shared lookup for concurrent requests, 3 s timeout) and replaces `req.auth` with the same auth plus `sessionClaims.metadata`. A token that has the claim, even an empty one, is trusted as is. A failed lookup yields no role (read-only), never an error.
 
 ### 6. CLI Auth (global)
 
