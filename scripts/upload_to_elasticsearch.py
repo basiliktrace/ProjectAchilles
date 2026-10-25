@@ -66,6 +66,42 @@ def indices_to_create(index_flag, file_path):
     return names
 
 
+def populated_indices(count, names):
+    """The indices among names that already hold documents. count(name) returns
+    the document count, or None when the index does not exist."""
+    return [n for n in names if (count(n) or 0) > 0]
+
+
+def _count_es(es_client):
+    def count(name):
+        try:
+            if not es_client.indices.exists(index=name):
+                return None
+            return es_client.count(index=name)["count"]
+        except Exception:
+            return None
+    return count
+
+
+def _count_requests(session, host):
+    def count(name):
+        try:
+            r = session.get(f"{host.rstrip('/')}/{name}/_count")
+            return r.json().get("count") if r.status_code == 200 else None
+        except Exception:
+            return None
+    return count
+
+
+def _skip_populated(count, file_path):
+    """--skip-if-populated: True (and say so) when the file's indices already
+    hold documents. docker compose re-runs the one-shot seed on every `up`."""
+    full = populated_indices(count, indices_in_bulk_file(file_path))
+    if full:
+        print(f"Already seeded, skipping: {', '.join(full)} already has documents")
+    return bool(full)
+
+
 def upload_with_es_client(file_path, es_client, chunk_size=500):
     """Upload using the official Elasticsearch Python client."""
     print("Using Elasticsearch Python client...")
@@ -618,6 +654,11 @@ def main():
         help="Create results index with mappings before uploading"
     )
     parser.add_argument(
+        "--skip-if-populated",
+        action="store_true",
+        help="Do nothing when an index the file writes to already has documents (a re-run seed)"
+    )
+    parser.add_argument(
         "--init-indices",
         action="store_true",
         help="Create all index types (results, defender, crowdstrike, risk-acceptance) and exit. Does not require --file."
@@ -659,6 +700,8 @@ def main():
                 cloud_id=args.cloud_id,
                 api_key=args.api_key
             )
+            if args.file and args.skip_if_populated and _skip_populated(_count_es(es), args.file):
+                return
             if args.init_indices:
                 _init_all_indices_es(es, args.index)
                 if not args.file:
@@ -684,6 +727,8 @@ def main():
             else:
                 es = Elasticsearch(args.host)
 
+            if args.file and args.skip_if_populated and _skip_populated(_count_es(es), args.file):
+                return
             if args.init_indices:
                 _init_all_indices_es(es, args.index)
                 if not args.file:
@@ -697,6 +742,8 @@ def main():
             session = _make_requests_session()
             auth_header = session.headers.get('Authorization')
 
+            if args.file and args.skip_if_populated and _skip_populated(_count_requests(session, args.host), args.file):
+                return
             if args.init_indices:
                 _init_all_indices_requests(session, args.host, args.index, args.api_key)
                 if not args.file:

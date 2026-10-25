@@ -7,7 +7,7 @@ Executions table's group-key script then failed on that shard.
 """
 import json, os, sys, tempfile
 sys.path.insert(0, os.path.dirname(__file__))
-from upload_to_elasticsearch import indices_in_bulk_file, indices_to_create
+from upload_to_elasticsearch import indices_in_bulk_file, indices_to_create, populated_indices
 
 
 def _bulk_file(*indices):
@@ -45,8 +45,18 @@ def test_indices_to_create_covers_the_file_and_index_flag():
         os.unlink(path)
 
 
+def test_populated_indices_skips_a_reseed():
+    # compose re-runs the one-shot seed on every `up` (each Reconfigure), so a
+    # seeded index must not get another batch.
+    counts = {"achilles-results-synthetic": 1000, "achilles-results-": 0}
+    count = lambda name: counts.get(name)  # None = no such index
+    assert populated_indices(count, ["achilles-results-synthetic"]) == ["achilles-results-synthetic"]
+    assert populated_indices(count, ["achilles-results-", "achilles-results-other"]) == []
+
+
 if __name__ == "__main__":
     test_indices_in_bulk_file_are_unique_and_ordered()
     test_action_without_index_uses_the_upload_default()
     test_indices_to_create_covers_the_file_and_index_flag()
+    test_populated_indices_skips_a_reseed()
     print("OK: --create-index maps every index the bulk file writes to")

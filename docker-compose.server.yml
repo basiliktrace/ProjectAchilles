@@ -144,6 +144,8 @@ services:
   # One-shot seed: creates the index + ~1000 synthetic records, then exits.
   # Runs only with --profile elasticsearch, and only when SEED_ES=true (set in
   # the root .env). It is a no-op otherwise, so it is safe to leave enabled.
+  # Compose re-runs it on every `up` (each re-install), so it skips an index
+  # that already holds documents.
   es-seed:
     image: python:3.12-slim
     profiles: ["elasticsearch"]
@@ -156,7 +158,7 @@ services:
       sh -c "test \"${SEED_ES:-false}\" = \"true\" || { echo 'SEED_ES not set — skipping seed'; exit 0; } &&
              pip install -q 'elasticsearch==8.17.2' &&
              python /scripts/generate_synthetic_data.py -c 1000 -o /tmp/seed.ndjson -d 30 &&
-             python /scripts/upload_to_elasticsearch.py -f /tmp/seed.ndjson --host http://elasticsearch:9200 --create-index"
+             python /scripts/upload_to_elasticsearch.py -f /tmp/seed.ndjson --host http://elasticsearch:9200 --create-index --skip-if-populated"
     restart: "no"
 
 volumes:
