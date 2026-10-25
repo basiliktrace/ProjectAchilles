@@ -105,19 +105,6 @@ export interface SentinelOneSyncStatus {
   } | null;
 }
 
-export interface SentinelOneAlert {
-  alert_id: string;
-  source_type: SentinelOneSource;
-  alert_title: string;
-  severity: SentinelOneSeverity;
-  status: string;
-  created_at: string;
-  evidence_hostnames: string[];
-  agent_id?: string;
-  threat_id?: string;
-  portal_url?: string;
-}
-
 export interface SentinelOneAuditRecord {
   timestamp: string;
   action_kind: 'threat_mitigation';
@@ -164,11 +151,6 @@ export const sentinelOneApi = {
   async getSyncStatus(): Promise<SentinelOneSyncStatus> {
     const response = await apiClient.get('/integrations/sentinelone/sync/status');
     return response.data;
-  },
-
-  async getAlerts(params: { limit?: number; severity?: string; source?: string } = {}): Promise<{ items: SentinelOneAlert[]; total: number }> {
-    const response = await apiClient.get('/integrations/sentinelone/alerts', { params });
-    return response.data.data;
   },
 
   async getAutoResolveStatus(): Promise<SentinelOneAutoResolveStatus> {

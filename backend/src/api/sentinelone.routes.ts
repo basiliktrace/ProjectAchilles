@@ -1,7 +1,9 @@
 // SentinelOne integration routes — mounted at /api/integrations/sentinelone.
 //
 // Permission model:
-//   - integrations:read   → view settings (masked), sync status, alerts, audit
+//   - integrations:read   → view settings (masked), sync status, audit
+// Ingested alerts are read through /api/analytics/sentinelone, like Defender
+// and CrowdStrike.
 //   - integrations:write  → save/test/delete credentials, manual sync,
 //                           auto-resolve / automatic-mitigation settings
 // There are no manual response-action routes. Console writes happen only in
@@ -152,41 +154,6 @@ router.post('/sync', requirePermission('integrations:write'), validate(SentinelO
 router.get('/sync/status', requirePermission('integrations:read'), (_req, res) => {
   res.json(sentinelOneSyncService.getSyncStatus());
 });
-
-// ---------------------------------------------------------------------------
-// Ingested alerts (read from ES — what the other modules consume)
-// ---------------------------------------------------------------------------
-
-/** GET /api/integrations/sentinelone/alerts?limit=50&offset=0&severity=high&source=threats */
-router.get('/alerts', requirePermission('integrations:read'), asyncHandler(async (req, res) => {
-  const limit = Math.min(Math.max(parseInt(String(req.query.limit ?? '50'), 10) || 50, 1), 200);
-  const offset = Math.max(parseInt(String(req.query.offset ?? '0'), 10) || 0, 0);
-  const filter: object[] = [{ term: { doc_type: 'alert' } }];
-  if (typeof req.query.severity === 'string' && req.query.severity) filter.push({ term: { severity: req.query.severity } });
-  if (typeof req.query.source === 'string' && req.query.source) filter.push({ term: { source_type: req.query.source } });
-
-  const settings = new AnalyticsSettingsService().getSettings();
-  if (!settings.configured) {
-    res.json({ success: true, data: { items: [], total: 0, limit, offset } });
-    return;
-  }
-  try {
-    const resp = await createEsClient(settings).search({
-      index: SENTINELONE_INDEX,
-      size: limit,
-      from: offset,
-      query: { bool: { filter } },
-      sort: [{ created_at: { order: 'desc', unmapped_type: 'date' } }],
-    } as any);
-    const hits = ((resp as any).hits?.hits ?? []) as any[];
-    const totalRaw = (resp as any).hits?.total;
-    const total = typeof totalRaw === 'number' ? totalRaw : totalRaw?.value ?? hits.length;
-    res.json({ success: true, data: { items: hits.map((h) => h._source), total, limit, offset } });
-  } catch (err) {
-    console.warn('[sentinelone alerts] query failed:', err instanceof Error ? err.message : String(err));
-    res.json({ success: true, data: { items: [], total: 0, limit, offset } });
-  }
-}));
 
 // ---------------------------------------------------------------------------
 // Auto-resolve (default disabled) and automatic mitigation (default off)

@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { CheckCircle, Info, ExternalLink, Unlink, RefreshCw } from 'lucide-react';
 import { sentinelOneApi } from '@/services/api/sentinelone';
+import { sentineloneAnalyticsApi } from '@/services/api/sentineloneAnalytics';
 import type {
   SentinelOnePermissionMode,
   SentinelOneSource,
@@ -8,7 +9,6 @@ import type {
   SentinelOneIncidentStatus,
   SentinelOneSyncStatus,
   SentinelOneAuditRecord,
-  SentinelOneAlert,
 } from '@/services/api/sentinelone';
 import { Input } from '@/components/shared/ui/Input';
 import { Select } from '@/components/shared/ui/Select';
@@ -71,7 +71,7 @@ export function SentinelOneConfig({ onStatusChange }: SentinelOneConfigProps) {
   const [showDisconnectConfirm, setShowDisconnectConfirm] = useState(false);
 
   const [syncStatus, setSyncStatus] = useState<SentinelOneSyncStatus | null>(null);
-  const [alerts, setAlerts] = useState<{ items: SentinelOneAlert[]; total: number } | null>(null);
+  const [indexedAlerts, setIndexedAlerts] = useState<number | null>(null);
   const [history, setHistory] = useState<SentinelOneAuditRecord[]>([]);
   const mounted = useRef(true);
   useEffect(() => () => { mounted.current = false; }, []);
@@ -79,11 +79,11 @@ export function SentinelOneConfig({ onStatusChange }: SentinelOneConfigProps) {
   const refreshRuntime = useCallback(async () => {
     const [status, latest, audit] = await Promise.all([
       sentinelOneApi.getSyncStatus().catch(() => null),
-      sentinelOneApi.getAlerts({ limit: 10 }).catch(() => null),
+      sentineloneAnalyticsApi.getAlerts({ pageSize: 1 }).then((r) => r.total).catch(() => null),
       sentinelOneApi.getActionHistory(10).catch(() => []),
     ]);
     setSyncStatus(status);
-    setAlerts(latest);
+    setIndexedAlerts(latest);
     setHistory(audit);
   }, []);
 
@@ -214,7 +214,7 @@ export function SentinelOneConfig({ onStatusChange }: SentinelOneConfigProps) {
       setSuccessMessage(null);
       setShowDisconnectConfirm(false);
       setSyncStatus(null);
-      setAlerts(null);
+      setIndexedAlerts(null);
       onStatusChange?.(false);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to disconnect');
@@ -389,29 +389,9 @@ export function SentinelOneConfig({ onStatusChange }: SentinelOneConfigProps) {
             {syncStatus?.lastSyncResult?.cloud_detection_alerts && (
               <p>Alerts: {syncStatus.lastSyncResult.cloud_detection_alerts.synced} synced / {syncStatus.lastSyncResult.cloud_detection_alerts.fetched} fetched ({syncStatus.lastSyncResult.cloud_detection_alerts.filtered} filtered)</p>
             )}
-            {alerts && <p>Indexed in Elasticsearch (achilles-sentinelone): {alerts.total} alert(s)</p>}
+            {indexedAlerts !== null && <p>Indexed in Elasticsearch (achilles-sentinelone): {indexedAlerts} alert(s). Browse them in Analytics → SentinelOne.</p>}
           </div>
           {syncStatus?.lastError && <Alert variant="destructive">{syncStatus.lastError.stage}: {syncStatus.lastError.message}</Alert>}
-          {alerts && alerts.items.length > 0 && (
-            <div className="max-h-56 overflow-auto rounded border border-border text-xs">
-              <table className="w-full">
-                <thead className="bg-raised/50 text-left">
-                  <tr><th className="p-2">Created</th><th className="p-2">Severity</th><th className="p-2">Title</th><th className="p-2">Host</th><th className="p-2">ID</th></tr>
-                </thead>
-                <tbody>
-                  {alerts.items.map((a) => (
-                    <tr key={`${a.source_type}-${a.alert_id}`} className="border-t border-border">
-                      <td className="p-2 whitespace-nowrap">{fmt(a.created_at)}</td>
-                      <td className="p-2">{a.severity}</td>
-                      <td className="p-2">{a.portal_url ? <a className="text-primary hover:underline" href={a.portal_url} target="_blank" rel="noopener noreferrer">{a.alert_title}</a> : a.alert_title}</td>
-                      <td className="p-2">{a.evidence_hostnames?.[0] ?? ''}</td>
-                      <td className="p-2 font-mono">{a.alert_id}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
         </div>
       )}
 

@@ -71,5 +71,4 @@ All routes require Clerk auth; reads need `integrations:read`, writes `integrati
 | POST | `/api/integrations/sentinelone/test` | Connection test |
 | POST | `/api/integrations/sentinelone/sync` | Start a manual sync in the background (`{ "reset": true }` re-backfills). Returns **202** `{ started, inProgress }`; poll `/sync/status`. While a sync runs, nothing new starts (`started: false`). |
 | GET | `/api/integrations/sentinelone/sync/status` | Checkpoints, last result, last error |
-| GET | `/api/integrations/sentinelone/alerts` | Ingested alerts (`limit`, `offset`, `severity`, `source`) |
 | GET | `/api/integrations/sentinelone/actions/history` | Automatic-mitigation audit trail |
