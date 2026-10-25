@@ -93,8 +93,11 @@ call by id). A candidate is resolved only when the console still reports it as
 - A candidate the console reports as `in_progress`, `resolved` or anything
   else is skipped, and its local status is updated so it stops being a
   candidate.
-- If the lookup fails, or the console doesn't return the alert, the candidate
-  is skipped and retried on the next pass.
+- If the console doesn't return the alert at all (purged, deleted, outside
+  the token's scope), it gets a `not_found` receipt so it stops taking a slot
+  in the oldest-first queue.
+- If the lookup itself fails, nothing is concluded: the candidate is skipped
+  and retried on the next pass.
 
 Turning auto-resolve on never touches an alert an analyst has already picked
 up.
@@ -200,9 +203,10 @@ re-reads every candidate from the console (one `GET /threats?ids=...` call). A
 threat is mitigated only when SentinelOne still reports it as `unresolved`,
 `not_mitigated`, and with no mitigation recorded in its mitigation report
 (no successful or failed kill, quarantine or remediate). Anything else, a
-threat the console doesn't return, or a failed lookup (reported as
-`live status: ...`) is skipped and nothing is mitigated for it. Skipped threats
-get no receipt and are checked again on the next pass.
+failed lookup (reported as `live status: ...`) is skipped and nothing is
+mitigated for it; those are checked again on the next pass. A threat the
+console no longer returns at all gets a `not_found` receipt, so it can't block
+the oldest-first queue.
 :::
 
 ### What it writes
@@ -213,8 +217,11 @@ POST /web/api/v2.1/threats/mitigate/kill         (or /quarantine)
 ```
 
 One request per threat, at most **10 threats** per pass and 30 seconds of
-work. `401` / `403` halts the pass; `404` writes a skip-forever receipt with
-`auto_mitigation_error: not_found`; other errors write no receipt, so the
+work. The receipt (below) is written **before** the request, because it is
+what keeps the kill from counting as SentinelOne prevention: if that write
+fails, the threat is not mitigated. `401` / `403` halts the pass and clears
+the receipt; `404` keeps a skip-forever receipt with
+`auto_mitigation_error: not_found`; other errors clear the receipt, so the
 threat is retried next pass.
 
 ### Receipts and audit

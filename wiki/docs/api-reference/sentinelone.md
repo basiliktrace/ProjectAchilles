@@ -81,8 +81,15 @@ not take it.
 from the `prevention_action` recorded on each threat from its SentinelOne
 mitigation report: a successful `quarantine` → `quarantined`, `kill` →
 `process_killed`, `remediate` → `quarantined`; a failed kill, quarantine or
-remediate → `kill_failed`; otherwise `blocked` when the threat's mitigation
-status is `mitigated`. Detection alerts carry no prevention action.
+remediate → `kill_failed`; otherwise, when the report is empty, `blocked` if
+the threat's mitigation status is `mitigated`. Detection alerts carry no
+prevention action.
+
+Only SentinelOne's own, immediate response counts: a report entry that started
+more than 15 minutes after the threat was identified (`mitigationStartedAt` vs
+`identifiedAt`) is a later manual or rule-driven response (an analyst
+quarantining from the console, a STAR rule) and is ignored, so the stage stays
+**detected**, not **prevented**. Entries without timestamps are kept.
 
 Threats that Achilles [automatic mitigation](../user-guide/integrations/sentinelone-auto-resolve#automatic-mitigation)
 killed or quarantined (an `enabled`, error-free `f0rtika.auto_mitigated`
