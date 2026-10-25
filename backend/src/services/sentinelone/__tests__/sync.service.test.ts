@@ -101,7 +101,7 @@ const alert = (id: string, severity = 'High') => ({
   alertInfo: { alertId: id, incidentStatus: 'unresolved', createdAt: '2026-10-20T11:00:00.000Z' },
   ruleInfo: { name: 'Suspicious LSASS access T1003', severity },
   agentDetectionInfo: { name: 'linux-01', accountId: '111' },
-  sourceProcessInfo: { fileName: 'bash', filePath: '/bin/bash', storyline: 'S2' },
+  sourceProcessInfo: { name: 'bash', filePath: '/bin/bash', storyline: 'S2' },
 });
 
 describe('SentinelOne normalization', () => {
@@ -166,14 +166,15 @@ describe('SentinelOne normalization — shared-module contract', () => {
     expect(doc.evidence_filenames).toEqual([]);
   });
 
-  it('derives detection-alert filenames from process names / image paths and reads MITRE metadata', () => {
+  it('derives detection-alert filenames from process names / image paths and techniques from the rule', () => {
     const doc = transformCloudAlert({
       alertInfo: { alertId: 'a9', incidentStatus: 'Unresolved' },
-      ruleInfo: { name: 'Credential dumping', severity: 'High' },
-      sourceProcessInfo: { name: 'cmd.exe', filePath: 'C:\\Windows\\System32\\cmd.exe' },
+      ruleInfo: { name: 'Credential dumping', description: 'LSASS access (T1003.001)', severity: 'High' },
+      agentDetectionInfo: { name: 'win-01', accountId: '1', siteId: '2', groupId: '3' },
+      sourceProcessInfo: { name: 'cmd.exe', filePath: 'C:\\Windows\\System32\\cmd.exe', fileHashSha256: 'f'.repeat(64) },
       targetProcessInfo: { tgtProcImagePath: 'C:\\F0\\abc-t1003.exe' },
-      mitreAttack: [{ techniqueId: 'T1003.001' }],
     } as never);
+    expect(doc).toMatchObject({ account_id: '1', site_id: '2', group_id: '3', sha256: 'f'.repeat(64) });
     expect(doc?.evidence_filenames).toEqual(['cmd.exe', 'abc-t1003.exe']);
     expect(doc?.evidence_filepaths).toEqual(['c:\\windows\\system32\\cmd.exe', 'c:\\f0\\abc-t1003.exe']);
     expect(doc?.mitre_techniques).toEqual(['T1003.001']);

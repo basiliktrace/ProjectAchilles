@@ -179,16 +179,13 @@ export function transformCloudAlert(a: S1CloudDetectionAlert): SentinelOneAlertD
   const tgt = a.targetProcessInfo ?? {};
   const status = normalizeToken(ai.incidentStatus);
   const filenames = uniqueLower([
-    src.fileName,
     src.name,
     basename(src.filePath),
-    tgt.tgtFileName,
     tgt.tgtProcName,
     basename(tgt.tgtFilePath),
     basename(tgt.tgtProcImagePath),
   ]);
   const filepaths = uniqueLower([src.filePath, tgt.tgtFilePath, tgt.tgtProcImagePath]);
-  const mitre = (a.mitreAttack ?? []).flatMap((m) => [m.techniqueId, m.id]);
   return {
     doc_type: 'alert',
     source_type: 'cloud_detection_alerts',
@@ -200,7 +197,7 @@ export function transformCloudAlert(a: S1CloudDetectionAlert): SentinelOneAlertD
     status,
     category: ai.eventType || ai.source || '',
     service_source: 'SentinelOne',
-    mitre_techniques: extractTechniques([...mitre, ri.name, ri.description]),
+    mitre_techniques: extractTechniques([ri.name, ri.description]),
     created_at: ai.createdAt || null,
     updated_at: ai.updatedAt || ai.createdAt || null,
     resolved_at: status === 'resolved' ? (ai.updatedAt || null) : null,
@@ -210,10 +207,14 @@ export function transformCloudAlert(a: S1CloudDetectionAlert): SentinelOneAlertD
     evidence_filepaths: filepaths,
     account_id: a.agentDetectionInfo?.accountId,
     site_id: a.agentDetectionInfo?.siteId,
+    // Without group_id, a scope with group_ids would never match a detection
+    // alert (scope-filter.ts), so auto-resolve could never act on one.
+    group_id: a.agentDetectionInfo?.groupId,
     agent_id: a.agentRealtimeInfo?.id,
     storyline_id: src.storyline,
     analyst_verdict: normalizeToken(ai.analystVerdict) || undefined,
     sha1: src.fileHashSha1,
+    sha256: src.fileHashSha256,
   };
 }
 

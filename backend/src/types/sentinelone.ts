@@ -210,6 +210,7 @@ export interface S1CloudDetectionAlert {
   agentDetectionInfo?: {
     accountId?: string;
     siteId?: string;
+    groupId?: string;
     name?: string;
     uuid?: string;
     machineType?: string;
@@ -218,20 +219,20 @@ export interface S1CloudDetectionAlert {
   agentRealtimeInfo?: { id?: string; os?: string };
   sourceProcessInfo?: {
     name?: string;
-    fileName?: string;
     filePath?: string;
     storyline?: string;
     fileHashSha1?: string;
+    fileHashSha256?: string;
     commandline?: string;
   };
   targetProcessInfo?: {
-    tgtFileName?: string;
     tgtFilePath?: string;
     tgtProcName?: string;
     tgtProcImagePath?: string;
   };
-  /** Present on some alert payloads (STAR rules with MITRE metadata). */
-  mitreAttack?: Array<{ techniqueId?: string; id?: string; name?: string }>;
+  // Field names follow the SentinelOne alert field reference (Google SecOps
+  // SENTINELONE_ALERT parser). Detection alerts carry no structured MITRE
+  // field: techniques come from the rule name / description.
   containerInfo?: Record<string, unknown>;
   kubernetesInfo?: Record<string, unknown>;
 }
