@@ -50,7 +50,10 @@ const S1_ID_RE = /^\d{1,24}$/;
  * Restricting the host keeps the user-supplied base URL from being usable as
  * a request-forgery primitive (the routes also run the shared SSRF check).
  */
-const S1_HOST_PATTERN = /^(?=.{1,253}$)([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+(sentinelone\.net|s1gov\.net)$/;
+const S1_HOST_PATTERN = /^(?=.{1,253}$)((?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+)(sentinelone\.net|s1gov\.net)$/;
+
+/** The only console domains a request may go to (constants, never user input). */
+const S1_CONSOLE_DOMAINS: Readonly<Record<string, string>> = { 'sentinelone.net': 'sentinelone.net', 's1gov.net': 's1gov.net' };
 
 /** Distinguishable error for SentinelOne API failures (branch on statusCode). */
 export class SentinelOneApiError extends Error {
@@ -92,11 +95,16 @@ export function normalizeSentinelOneBaseUrl(input: string): string {
   if (parsed.search || parsed.hash || (parsed.pathname && parsed.pathname !== '/')) {
     throw new Error('SentinelOne console URL must be the bare console host, e.g. https://<tenant>.sentinelone.net');
   }
-  const host = parsed.hostname.toLowerCase();
-  if (!S1_HOST_PATTERN.test(host)) {
+  const match = S1_HOST_PATTERN.exec(parsed.hostname.toLowerCase());
+  const domain = match ? S1_CONSOLE_DOMAINS[match[2]] : undefined;
+  if (!match || !domain) {
     throw new Error('SentinelOne console URL must be a *.sentinelone.net or *.s1gov.net host');
   }
-  return `https://${host}`;
+  // Rebuild the URL from the validated parts: the domain from the constant
+  // allowlist and the tenant labels URI-encoded, so nothing that could change
+  // the authority ('/', '@', ':') can reach the request host. A no-op for any
+  // host the pattern accepts ([a-z0-9.-] only).
+  return `https://${encodeURIComponent(match[1])}${domain}`;
 }
 
 type QueryValue = string | number | boolean | string[] | undefined | null;

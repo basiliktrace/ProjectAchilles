@@ -30,6 +30,12 @@ import {
   normalizeAutoMitigation,
 } from '../sentinelone/defaults.js';
 
+/** Alert thresholds a save may clear by sending null. */
+const CLEARABLE_THRESHOLDS = [
+  'defense_score_min', 'error_rate_max', 'secure_score_min',
+  's1_infected_agents_max', 's1_detect_only_agents_max', 's1_outdated_agents_max',
+] as const;
+
 /** An org caller asked to change the deployment-wide (legacy) SentinelOne settings. */
 const DEPLOYMENT_WIDE_S1 = 'SentinelOne is configured for the whole deployment, not for this organization. Change or disconnect it from an account without an active organization.';
 
@@ -1329,8 +1335,8 @@ export class IntegrationsSettingsService {
     const thresholds = settings.thresholds
       ? { ...current.thresholds, ...settings.thresholds }
       : current.thresholds;
-    for (const [key, value] of Object.entries(thresholds)) {
-      if (value === null) delete (thresholds as unknown as Record<string, unknown>)[key];
+    for (const key of CLEARABLE_THRESHOLDS) {
+      if ((thresholds as unknown as Record<string, unknown>)[key] === null) delete thresholds[key];
     }
     const merged: AlertSettings = {
       thresholds,
