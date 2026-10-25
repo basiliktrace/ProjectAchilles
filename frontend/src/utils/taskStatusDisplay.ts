@@ -1,12 +1,10 @@
-import type { AgentTask, NoticeSummary, TaskStatus } from '@/types/agent';
+import type { AgentTask, TaskStatus } from '@/types/agent';
 
 export type TaskStatusVariant = 'default' | 'primary' | 'warning' | 'success' | 'destructive';
 
 export interface TaskStatusDisplay {
   label: string;
   variant: TaskStatusVariant;
-  /** Tooltip text (notice error / full not-run reason). */
-  title?: string;
 }
 
 const BASE: Record<TaskStatus, TaskStatusDisplay> = {
@@ -26,23 +24,7 @@ const BASE: Record<TaskStatus, TaskStatusDisplay> = {
  */
 export function resolveTaskStatusDisplay(
   task: Pick<AgentTask, 'status' | 'result'>,
-  notice?: NoticeSummary,
 ): TaskStatusDisplay {
-  if (task.status === 'pending' && notice) {
-    if (notice.state === 'pending') {
-      return { label: 'Sending notice…', variant: 'warning', title: notice.last_error ?? undefined };
-    }
-    if (
-      (notice.state === 'sent' || notice.state === 'overridden') &&
-      notice.release_at &&
-      new Date(notice.release_at).getTime() > Date.now()
-    ) {
-      return { label: 'Starting soon', variant: 'primary' };
-    }
-  }
-  if (task.status === 'expired' && task.result?.error?.startsWith('Not run:')) {
-    return { label: 'Not run', variant: 'default', title: task.result.error };
-  }
   if (task.status === 'completed' && task.result != null && task.result.exit_code !== 0) {
     return { label: 'Failed', variant: 'destructive' };
   }

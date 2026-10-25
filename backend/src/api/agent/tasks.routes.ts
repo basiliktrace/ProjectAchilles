@@ -1,9 +1,8 @@
 import { Router } from 'express';
 import { asyncHandler, AppError } from '../../middleware/error.middleware.js';
-import { getUserId, getUserOrgId, requirePermission, validateRequestOrgId } from '../../middleware/clerk.middleware.js';
+import { getUserId, requirePermission, validateRequestOrgId } from '../../middleware/clerk.middleware.js';
 import {
   createTasks,
-  createTasksBatch,
   createCommandTasks,
   createUpdateTasks,
   createUninstallTasks,
@@ -22,7 +21,6 @@ import {
   markIngestionFailed,
   TerminalStateRejection,
 } from '../../services/agent/tasks.service.js';
-import { runWithNotice } from '../../services/notices/notices.service.js';
 import { ingestResult } from '../../services/agent/results.service.js';
 import { retryPendingIngestions } from '../../services/agent/ingestionWorker.service.js';
 import { alertsService } from '../integrations.routes.js';
@@ -30,7 +28,6 @@ import { validate } from '../../middleware/validation.js';
 import { UpdateTaskStatusSchema, TaskResultSchema } from '../../schemas/agent.schemas.js';
 import {
   CreateTaskSchema,
-  CreateTaskBatchSchema,
   CreateCommandTaskSchema,
   CreateUpdateTaskSchema,
   CreateUninstallTaskSchema,
@@ -202,40 +199,7 @@ adminTasksRouter.post(
     const { org_id, ...taskRequest } = req.body as CreateTaskRequest & { org_id: string };
     validateRequestOrgId(org_id, req.auth);
 
-    // The notice belongs to the tasks' (validated) org.
-    const taskIds = runWithNotice(
-      { type: 'run_now', createdBy: userId, orgId: org_id },
-      (noticeId) => createTasks(taskRequest, org_id, userId, { noticeId }),
-    );
-
-    res.status(201).json({ success: true, data: { task_ids: taskIds } });
-  })
-);
-
-/**
- * POST /admin/tasks/batch
- * Run several tests at once: every request's tasks are created under ONE
- * pre-execution notice (one email), all-or-nothing like a single Run Now.
- * Body: { org_id, requests: CreateTaskRequest[] } (1..50 requests)
- * Returns: { task_ids: string[][] } in request order.
- */
-adminTasksRouter.post(
-  '/tasks/batch',
-  requirePermission('endpoints:tasks:create'),
-  validate(CreateTaskBatchSchema),
-  asyncHandler(async (req, res) => {
-    const userId = getUserId(req.auth);
-    if (!userId) {
-      throw new AppError('Unable to determine user identity', 401);
-    }
-
-    const { org_id, requests } = req.body as { org_id: string; requests: CreateTaskRequest[] };
-    validateRequestOrgId(org_id, req.auth);
-
-    const taskIds = runWithNotice(
-      { type: 'run_now', createdBy: userId, orgId: org_id },
-      (noticeId) => createTasksBatch(requests, org_id, userId, { noticeId }),
-    );
+    const taskIds = createTasks(taskRequest, org_id, userId);
 
     res.status(201).json({ success: true, data: { task_ids: taskIds } });
   })
@@ -357,10 +321,7 @@ adminTasksRouter.get(
       offset: req.query.offset ? parseInt(req.query.offset as string, 10) : undefined,
     };
 
-    // Ruling R21: an org caller's notice map holds only its own org's notices.
-    // The task rows themselves are not org-scoped here (separate follow-up).
-    const callerOrg = getUserOrgId(req.auth);
-    const result = listTasksGrouped(filters, callerOrg ? { kind: 'org', orgId: callerOrg } : { kind: 'all' });
+    const result = listTasksGrouped(filters);
 
     // Strip env_vars from admin responses
     for (const group of result.groups) {
@@ -416,13 +377,7 @@ adminTasksRouter.post(
       throw new AppError('Unable to determine user identity', 401);
     }
 
-    // The clone keeps the original task's org, so the notice belongs to it.
-    // getTask throws 404 for an unknown id before any notice is created.
-    const orgId = getTask(req.params.id).org_id;
-    const task = runWithNotice(
-      { type: 'manual_retry', createdBy: userId, orgId },
-      (noticeId) => retryTask(req.params.id, userId, noticeId),
-    );
+    const task = retryTask(req.params.id, userId);
 
     res.status(201).json({ success: true, data: sanitizeTaskForAdmin(task) });
   })

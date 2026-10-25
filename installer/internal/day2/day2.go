@@ -7,10 +7,8 @@ import (
 	"bufio"
 	"context"
 	"crypto/x509"
-	"errors"
 	"fmt"
 	"io"
-	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -109,10 +107,8 @@ func (d Deps) backupDir(override string) string {
 
 var projectBad = regexp.MustCompile(`[^a-z0-9_-]`)
 
-// project is the compose project name, in compose's own order: the explicit
-// one, COMPOSE_PROJECT_NAME from the environment, then from the root .env
-// (where deploy-server.sh pins it), else the checkout directory's base name
-// lowercased the way compose does it.
+// project is the compose project name: the explicit one, COMPOSE_PROJECT_NAME,
+// or the checkout directory's base name lowercased the way compose does it.
 func (d Deps) project() string {
 	if d.Project != "" {
 		return d.Project
@@ -120,48 +116,7 @@ func (d Deps) project() string {
 	if p := os.Getenv("COMPOSE_PROJECT_NAME"); p != "" {
 		return p
 	}
-	if p := envFileValue(filepath.Join(d.RepoDir, ".env"), "COMPOSE_PROJECT_NAME"); p != "" {
-		return p
-	}
-	return strings.TrimLeft(projectBad.ReplaceAllString(strings.ToLower(filepath.Base(d.RepoDir)), ""), "-_")
-}
-
-// envFileValue returns the last KEY=value for key in an env file ("" if the
-// file or the key is missing).
-func envFileValue(path, key string) string {
-	b, err := os.ReadFile(path)
-	if err != nil {
-		return ""
-	}
-	val := ""
-	for _, line := range strings.Split(string(b), "\n") {
-		if v, ok := strings.CutPrefix(strings.TrimRight(line, "\r"), key+"="); ok {
-			val = v
-		}
-	}
-	return val
-}
-
-// setEnvFileValue sets key=val in an env file, replacing every existing line
-// for key (or appending one), and keeps the file at mode 0600.
-func setEnvFileValue(path, key, val string) error {
-	b, err := os.ReadFile(path)
-	if err != nil && !errors.Is(err, fs.ErrNotExist) {
-		return err
-	}
-	var out []string
-	if s := strings.TrimRight(string(b), "\n"); s != "" {
-		for _, line := range strings.Split(s, "\n") {
-			if !strings.HasPrefix(line, key+"=") {
-				out = append(out, line)
-			}
-		}
-	}
-	out = append(out, key+"="+val)
-	if err := os.WriteFile(path, []byte(strings.Join(out, "\n")+"\n"), 0o600); err != nil {
-		return err
-	}
-	return os.Chmod(path, 0o600)
+	return projectBad.ReplaceAllString(strings.ToLower(filepath.Base(d.RepoDir)), "")
 }
 
 func (d Deps) composeFile() string { return filepath.Join(d.RepoDir, "docker-compose.server.yml") }

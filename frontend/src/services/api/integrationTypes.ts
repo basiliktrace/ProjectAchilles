@@ -109,8 +109,6 @@ export interface IntegrationAlertQuery {
   sortField?: string;
   sortOrder?: 'asc' | 'desc';
   source?: AlertSource;
-  /** Vendor-specific record type (SentinelOne: threats vs detection alerts). */
-  sourceType?: string;
   severities?: string[];
   from?: string;
   to?: string;

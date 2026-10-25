@@ -744,12 +744,6 @@ Anyone who reads a backup can impersonate your CA within its zone. Store it
 encrypted and off the server.
 :::
 
-Container and volume names start with the compose project name, which the
-engine pins in the root `.env` as `COMPOSE_PROJECT_NAME` (`achilles-server` on a
-new install; an older install keeps its directory's name, for example
-`projectachilles`). Restoring a backup from another install keeps the live
-project name, so the data lands in this install's volumes.
-
 ## Moving to a public IP later
 
 Switching certificate source is a re-run with different answers, not a reinstall.
@@ -851,8 +845,6 @@ active; it never enables an inactive firewall and never touches port 22.
 | Sign-in fails with production keys | Clerk's DNS records are not yet verified in the public zone. |
 | Server still presents the old intermediate after `ca renew` | Run `sudo systemctl start achilles-ca-renew.service` (clears Caddy's leaf cache, then restarts), or re-run the install. |
 | `upgrade`: `… has uncommitted changes; refusing to upgrade over them` | Commit, stash or discard the changes shown, then run it again. |
-| Engine: `Compose project '…' already belongs to <dir>` | Another checkout on this host (a dev clone, an earlier install) runs containers under the same project name, and `up` would take over its containers and volumes. Install from that directory, or set another `COMPOSE_PROJECT_NAME` in `deploy.config.env` and re-run. |
-| Engine: `COMPOSE_PROJECT_NAME is '…' but this install runs as '…'` | The project name can't change after the first install: the data is in the old name's volumes. Remove `COMPOSE_PROJECT_NAME` from `deploy.config.env`. |
 | Preflight: `Port 443 available` fails | Another service holds the port. Stop it, then press **r**. |
 | A `.local` name works on some machines only | mDNS conflict. Use another name. |
 

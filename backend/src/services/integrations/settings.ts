@@ -5,75 +5,16 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import { encrypt as sharedEncrypt, decrypt as sharedDecrypt } from '../shared/encryption.js';
-import type { AzureIntegrationSettings, AzureCredentials, DefenderIntegrationSettings, DefenderCredentials, CrowdStrikeIntegrationSettings, CrowdStrikeCredentials, AlertSettings, IntegrationsSettings, OrgIntegrationSettings, PreExecutionNoticeSettings } from '../../types/integrations.js';
+import type { AzureIntegrationSettings, AzureCredentials, DefenderIntegrationSettings, DefenderCredentials, CrowdStrikeIntegrationSettings, CrowdStrikeCredentials, AlertSettings, IntegrationsSettings, OrgIntegrationSettings } from '../../types/integrations.js';
 import type { AutoResolveMode } from '../../types/defender.js';
 import type { CrowdStrikeRegion, CrowdStrikeZtaStatus } from '../../types/crowdstrike.js';
 import { CROWDSTRIKE_REGION_BASE_URLS, DEFAULT_CROWDSTRIKE_REGION } from '../crowdstrike/falcon-client.js';
-import { isMaskedSecret } from '../alerts/testEmailSettings.js';
 
 const AUTO_RESOLVE_MODES: ReadonlyArray<AutoResolveMode> = ['disabled', 'dry_run', 'enabled'] as const;
 const DEFAULT_AUTO_RESOLVE_MODE: AutoResolveMode = 'disabled';
 
 const SETTINGS_DIR = path.join(os.homedir(), '.projectachilles');
 const SETTINGS_FILE = path.join(SETTINGS_DIR, 'integrations.json');
-
-const NOTICE_DEFAULTS: PreExecutionNoticeSettings = {
-  enabled: false,
-  recipients: [],
-  lead_minutes: 5,
-  max_wait_minutes: 60,
-  pickup_window_minutes: 120,
-  send_finished: true,
-};
-
-function clampInt(value: unknown, min: number, max: number, fallback: number): number {
-  if (typeof value !== 'number' || !Number.isFinite(value)) return fallback;
-  return Math.min(max, Math.max(min, Math.trunc(value)));
-}
-
-/** Fill defaults and clamp numeric fields of pre-execution notice settings. */
-export function clampNoticeSettings(s: Partial<PreExecutionNoticeSettings>): PreExecutionNoticeSettings {
-  const out: PreExecutionNoticeSettings = {
-    enabled: s.enabled ?? NOTICE_DEFAULTS.enabled,
-    recipients: Array.isArray(s.recipients) ? [...s.recipients] : [],
-    lead_minutes: clampInt(s.lead_minutes, 0, 5, NOTICE_DEFAULTS.lead_minutes),
-    max_wait_minutes: clampInt(s.max_wait_minutes, 15, 1440, NOTICE_DEFAULTS.max_wait_minutes),
-    pickup_window_minutes: clampInt(s.pickup_window_minutes, 30, 1440, NOTICE_DEFAULTS.pickup_window_minutes),
-    send_finished: s.send_finished ?? NOTICE_DEFAULTS.send_finished,
-  };
-  if (s.last_smtp_check_at !== undefined) out.last_smtp_check_at = s.last_smtp_check_at;
-  if (s.last_smtp_check_ok !== undefined) out.last_smtp_check_ok = s.last_smtp_check_ok;
-  if (s.last_smtp_check_message !== undefined) out.last_smtp_check_message = s.last_smtp_check_message;
-  return out;
-}
-
-/**
- * `configured` on alert channels means "has everything needed to send". It is
- * derived server-side and never trusted from the client or from disk.
- * `enabled` is the separate user intent flag.
- */
-function isSlackChannelConfigured(slack: AlertSettings['slack']): boolean {
-  return !!slack?.webhook_url?.trim();
-}
-
-function isEmailChannelConfigured(email: AlertSettings['email']): boolean {
-  return !!(
-    email?.smtp_host?.trim() &&
-    email.from_address?.trim() &&
-    Array.isArray(email.recipients) &&
-    email.recipients.length > 0
-  );
-}
-
-function withDerivedConfigured(alerts: AlertSettings): AlertSettings {
-  const out: AlertSettings = { ...alerts };
-  if (out.slack) out.slack = { ...out.slack, configured: isSlackChannelConfigured(out.slack) };
-  if (out.email) out.email = { ...out.email, configured: isEmailChannelConfigured(out.email) };
-  return out;
-}
-
-/** Last successfully read notice settings per org id ('' = legacy), for an unreadable file. */
-const lastGoodNoticeSettings = new Map<string, PreExecutionNoticeSettings>();
 
 export class IntegrationsSettingsService {
   /**
@@ -202,20 +143,18 @@ export class IntegrationsSettingsService {
         }
       }
 
-      // Decrypt sensitive Alert channel fields (top-level or per-org).
-      const decryptAlerts = (alerts: AlertSettings | undefined) => {
-        if (!alerts) return;
-        if (alerts.slack?.webhook_url?.startsWith('enc:')) {
-          alerts.slack.webhook_url = this.decrypt(alerts.slack.webhook_url.slice(4));
+      // Decrypt sensitive Alert channel fields
+      if (settings.alerts) {
+        if (settings.alerts.slack?.webhook_url?.startsWith('enc:')) {
+          settings.alerts.slack.webhook_url = this.decrypt(settings.alerts.slack.webhook_url.slice(4));
         }
-        if (alerts.email?.smtp_user?.startsWith('enc:')) {
-          alerts.email.smtp_user = this.decrypt(alerts.email.smtp_user.slice(4));
+        if (settings.alerts.email?.smtp_user?.startsWith('enc:')) {
+          settings.alerts.email.smtp_user = this.decrypt(settings.alerts.email.smtp_user.slice(4));
         }
-        if (alerts.email?.smtp_pass?.startsWith('enc:')) {
-          alerts.email.smtp_pass = this.decrypt(alerts.email.smtp_pass.slice(4));
+        if (settings.alerts.email?.smtp_pass?.startsWith('enc:')) {
+          settings.alerts.email.smtp_pass = this.decrypt(settings.alerts.email.smtp_pass.slice(4));
         }
-      };
-      decryptAlerts(settings.alerts);
+      }
 
       // Decrypt a single CrowdStrike section in place (top-level or per-org).
       const decryptCrowdStrike = (cs: CrowdStrikeIntegrationSettings | undefined) => {
@@ -234,10 +173,6 @@ export class IntegrationsSettingsService {
       // keeps the CrowdStrike per-org round-trip correct).
       for (const org of Object.values(settings.orgs ?? {})) {
         decryptCrowdStrike(org.crowdstrike);
-        // Org alert sections are written encrypted by saveAlertSettings; without
-        // this, org-scoped SMTP/Slack would be used with ciphertext credentials
-        // and re-encrypted on the next partial save.
-        decryptAlerts(org.alerts);
       }
 
       return settings;
@@ -947,10 +882,10 @@ export class IntegrationsSettingsService {
     const fileSettings = this.getFileSettings();
 
     const orgSection = this.getOrgSection(fileSettings);
-    if (orgSection?.alerts) return withDerivedConfigured(orgSection.alerts);
+    if (orgSection?.alerts) return orgSection.alerts;
 
     if (!fileSettings?.alerts) return null;
-    return withDerivedConfigured(fileSettings.alerts);
+    return fileSettings.alerts;
   }
 
   /** Save alert settings (encrypts sensitive channel fields). Supports partial update. */
@@ -982,7 +917,7 @@ export class IntegrationsSettingsService {
       const newSlack = settings.slack;
       merged.slack = {
         webhook_url: newSlack?.webhook_url || currentSlack?.webhook_url || '',
-        configured: false, // derived below
+        configured: newSlack?.configured ?? currentSlack?.configured ?? false,
         enabled: newSlack?.enabled ?? currentSlack?.enabled ?? false,
       };
     }
@@ -995,12 +930,11 @@ export class IntegrationsSettingsService {
         smtp_host: newEmail?.smtp_host || currentEmail?.smtp_host || '',
         smtp_port: newEmail?.smtp_port ?? currentEmail?.smtp_port ?? 587,
         smtp_secure: newEmail?.smtp_secure ?? currentEmail?.smtp_secure ?? false,
-        // A reopened form echoes the masked username back; keep the real one.
-        smtp_user: (isMaskedSecret(newEmail?.smtp_user) ? '' : newEmail?.smtp_user) || currentEmail?.smtp_user || '',
+        smtp_user: newEmail?.smtp_user || currentEmail?.smtp_user || '',
         smtp_pass: newEmail?.smtp_pass || currentEmail?.smtp_pass || '',
         from_address: newEmail?.from_address || currentEmail?.from_address || '',
         recipients: newEmail?.recipients ?? currentEmail?.recipients ?? [],
-        configured: false, // derived below
+        configured: newEmail?.configured ?? currentEmail?.configured ?? false,
         enabled: newEmail?.enabled ?? currentEmail?.enabled ?? false,
       };
     }
@@ -1019,9 +953,8 @@ export class IntegrationsSettingsService {
       };
     }
 
-    // Encrypt sensitive channel fields. `configured` is derived from the merged
-    // values; any client-supplied value is ignored.
-    const alertsToSave: AlertSettings = withDerivedConfigured(merged);
+    // Encrypt sensitive channel fields
+    const alertsToSave: AlertSettings = { ...merged };
 
     if (alertsToSave.slack) {
       alertsToSave.slack = {
@@ -1055,69 +988,6 @@ export class IntegrationsSettingsService {
     }
 
     fs.writeFileSync(SETTINGS_FILE, JSON.stringify(raw, null, 2), { mode: 0o600 });
-  }
-
-  // ---------------------------------------------------------------------------
-  // Pre-execution notices (Ruling R20: per org, legacy top level as fallback)
-  // ---------------------------------------------------------------------------
-
-  /**
-   * Always returns a full settings object (defaults filled, numbers clamped).
-   * Org-specific > legacy, like getAlertSettings().
-   */
-  /**
-   * The notice gate must fail closed. The section holds no secrets, so it is
-   * read from the raw JSON: one undecryptable credential elsewhere in the
-   * file (e.g. after ENCRYPTION_SECRET changed) must not read as "off". If the
-   * file can't be parsed at all, the last good read for this org is kept.
-   */
-  getPreExecutionNoticeSettings(): PreExecutionNoticeSettings {
-    const key = this.orgId ?? '';
-    const exists = fs.existsSync(SETTINGS_FILE);
-    const raw = exists ? this.getRawFileSettings() : null;
-    if (exists && raw === null) {
-      const last = lastGoodNoticeSettings.get(key);
-      console.error(`[integrations] integrations.json is unreadable; pre-execution notices use the last good settings${last ? '' : ' (none: defaults)'}`);
-      return last ?? clampNoticeSettings({});
-    }
-    const own = this.getOrgSection(raw)?.pre_execution_notices;
-    const settings = clampNoticeSettings(own ?? raw?.pre_execution_notices ?? {});
-    lastGoodNoticeSettings.set(key, settings);
-    return settings;
-  }
-
-  /**
-   * Merge a patch into the stored settings, clamp, and persist: under
-   * `orgs[orgId]` when an org id is set, at the top level otherwise. An org's
-   * first save starts from the legacy values (like saveAlertSettings) but not
-   * the legacy daily SMTP check result, which was for the legacy SMTP.
-   */
-  savePreExecutionNoticeSettings(patch: Partial<PreExecutionNoticeSettings>): PreExecutionNoticeSettings {
-    this.ensureSettingsDir();
-    const file = this.getFileSettings();
-    const own = this.getOrgSection(file)?.pre_execution_notices;
-    let base: Partial<PreExecutionNoticeSettings> = own ?? file?.pre_execution_notices ?? {};
-    if (this.orgId && !own) {
-      const { last_smtp_check_at: _at, last_smtp_check_ok: _ok, last_smtp_check_message: _msg, ...rest } = base;
-      base = rest;
-    }
-    const merged = clampNoticeSettings({ ...base, ...patch });
-    const raw = this.getRawFileSettings() ?? {};
-    if (this.orgId) {
-      raw.orgs ??= {};
-      raw.orgs[this.orgId] ??= {};
-      raw.orgs[this.orgId].pre_execution_notices = merged;
-    } else {
-      raw.pre_execution_notices = merged;
-    }
-    fs.writeFileSync(SETTINGS_FILE, JSON.stringify(raw, null, 2), { mode: 0o600 });
-    return merged;
-  }
-
-  /** Org ids that have their own pre-execution notice section (ignores this service's org id). */
-  listNoticeOrgIds(): string[] {
-    const orgs = this.getRawFileSettings()?.orgs ?? {};
-    return Object.keys(orgs).filter((id) => orgs[id]?.pre_execution_notices !== undefined);
   }
 
   /** Check if alerting is configured: thresholds enabled + at least one channel configured & enabled. */

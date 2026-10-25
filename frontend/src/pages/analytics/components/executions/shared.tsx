@@ -167,8 +167,6 @@ export interface BundleGroup {
   crowdstrikeDetected?: boolean;
   crowdstrikePrevented?: boolean;
   defenderPrevented?: boolean;
-  sentineloneDetected?: boolean;
-  sentinelonePrevented?: boolean;
 }
 
 export interface StandaloneRow {
@@ -200,8 +198,6 @@ export function mapGroupsToDisplayRows(groups: ExecutionGroup[]): DisplayRow[] {
         crowdstrikeDetected: group.crowdstrikeDetected,
         crowdstrikePrevented: group.crowdstrikePrevented,
         defenderPrevented: group.defenderPrevented,
-        sentineloneDetected: group.sentineloneDetected,
-        sentinelonePrevented: group.sentinelonePrevented,
       };
     }
     return {
@@ -229,16 +225,13 @@ export function classifyExecution(exec: EnrichedTestExecution): ExecutionOutcome
   if (result !== 'unprotected') return 'inconclusive';
   const csDetected = exec.crowdstrike_stage_detected ?? exec.crowdstrike_detected;
   const defDetected = exec.defender_stage_detected ?? exec.defender_detected;
-  const s1Detected = exec.sentinelone_stage_detected ?? exec.sentinelone_detected;
   const isPrevented =
     exec.crowdstrike_prevented ||
     (csDetected && isConfirmedPrevention(exec.crowdstrike_prevention_action)) ||
     exec.defender_prevented ||
-    (defDetected && isConfirmedPrevention(exec.defender_prevention_action)) ||
-    exec.sentinelone_prevented ||
-    (s1Detected && isConfirmedPrevention(exec.sentinelone_prevention_action));
+    (defDetected && isConfirmedPrevention(exec.defender_prevention_action));
   if (isPrevented) return 'prevented';
-  if (defDetected || csDetected || s1Detected) return 'detected';
+  if (defDetected || csDetected) return 'detected';
   return 'unprotected';
 }
 
@@ -274,7 +267,7 @@ export function ExecResultLabel({ exec, compact }: { exec: EnrichedTestExecution
       );
     case 'prevented': {
       const action = formatPreventionAction(
-        exec.crowdstrike_prevention_action ?? exec.sentinelone_prevention_action ?? exec.defender_prevention_action,
+        exec.crowdstrike_prevention_action ?? exec.defender_prevention_action,
       );
       return (
         <span className="inline-flex items-center gap-1.5 text-accent">
@@ -319,9 +312,9 @@ export function BundleResultLabel({ group, compact }: { group: BundleGroup; comp
   const iconClass = compact ? 'w-3.5 h-3.5' : 'w-4 h-4';
   const textClass = compact ? 'text-xs font-medium' : 'text-sm font-medium';
   const isProtected = group.protectedCount > 0;
-  const isPrevented = !isProtected && (group.crowdstrikePrevented || group.defenderPrevented || group.sentinelonePrevented);
+  const isPrevented = !isProtected && (group.crowdstrikePrevented || group.defenderPrevented);
   const isDetected =
-    !isProtected && !isPrevented && (group.defenderDetected || group.crowdstrikeDetected || group.sentineloneDetected);
+    !isProtected && !isPrevented && (group.defenderDetected || group.crowdstrikeDetected);
 
   if (group.category === 'cyber-hygiene') {
     if (isPrevented) {

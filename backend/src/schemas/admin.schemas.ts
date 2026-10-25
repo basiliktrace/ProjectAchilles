@@ -38,18 +38,6 @@ export const CreateTaskSchema = z.object({
   max_retries: z.number().int().min(0).max(5).optional(),
 });
 
-// ── Create a batch of test tasks (one Run for several tests) ─────────────────
-
-export const MAX_TASK_BATCH_REQUESTS = 50;
-
-export const CreateTaskBatchSchema = z.object({
-  org_id: z.string().min(1, 'org_id is required'),
-  requests: z
-    .array(CreateTaskSchema.omit({ org_id: true }))
-    .min(1, 'At least one request is required')
-    .max(MAX_TASK_BATCH_REQUESTS, `At most ${MAX_TASK_BATCH_REQUESTS} requests per batch`),
-});
-
 // ── Create command tasks ─────────────────────────────────────────────────────
 
 export const CreateCommandTaskSchema = z.object({

@@ -32,7 +32,6 @@
 - Both TypeScript backends are ESM and require `.js` suffixes on relative imports in `.ts` source; extensionless imports compile but fail at runtime.
 - Backend route handlers use `asyncHandler`; HTTP failures use `AppError`. New protected routes must apply the existing Clerk permission middleware; device routes under `/api/agent/*` use agent-key auth instead.
 - Backend database tests use in-memory SQLite. When replacing the database module with `vi.mock`, define the mock first and dynamically import the subject afterward; static import order can bind the production database.
-- Any new `tasks` column must also be added to `migrateExecuteCommandType`'s `optionalCols` (and its index to the index recreation) in `backend/src/services/agent/database.ts`; that migration recreates `tasks` even on fresh databases and silently drops unlisted columns. `notice_id` and `campaign_run_id` are there.
 - SQLite CHECK-constraint migrations recreate tables: disable foreign keys outside the transaction, drop stale temp tables, copy/swap the table, recreate indexes, then re-enable foreign keys. See `backend/src/services/agent/database.ts` before changing schema migration logic.
 - Frontend source supports `@/` as the `frontend/src` alias. API calls should go through the authenticated API layer; Redux consumers use the typed `useAppDispatch`/`useAppSelector` hooks.
 - User-facing API/config behavior may require matching pages under `wiki/`; `./scripts/check-docs-drift.sh` reports the repository's code-to-doc mappings.
@@ -43,6 +42,6 @@
 # Design Context
 
 - Before UI work, use the `impeccable` skill and read root `PRODUCT.md` and `DESIGN.md`; if absent, use `frontend/src/styles/index.css` as the token source of truth.
-- There is one theme (the f0 dark theme). Use structural and semantic tokens; never hard-code hex/OKLCH colors in components (print layouts re-point the tokens to a light palette).
+- One component set supports Default, Neobrutalism, and Hacker Terminal themes. Use structural and semantic tokens; never hard-code hex/OKLCH colors in components.
 - Status color must also have an icon, label, or shape. Preserve WCAG 2.2 AA, keyboard focus, reduced-motion behavior, and the flat-at-rest/kinetic-on-interaction model.
 <!-- impeccable:end -->

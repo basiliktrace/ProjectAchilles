@@ -27,7 +27,6 @@ import {
 } from '../crowdstrike/evidence-correlation.js';
 import { DEFENDER_INDEX } from '../defender/index-management.js';
 import { CROWDSTRIKE_INDEX } from '../crowdstrike/index-management.js';
-import { SENTINELONE_INDEX } from '../sentinelone/index-management.js';
 import { projectAlertHit } from '../alerts/alertHit.js';
 import type { ReportAlert } from '../../types/reports.js';
 
@@ -60,14 +59,6 @@ export const DEFENDER_ADAPTER: VendorAdapter = {
 export const CROWDSTRIKE_ADAPTER: VendorAdapter = {
   vendor: 'crowdstrike',
   index: CROWDSTRIKE_INDEX,
-  buildEvidenceQuery: buildCrowdStrikeEvidenceQuery,
-  buildTimeWindowQuery: crowdstrikeTimeWindow,
-};
-
-/** SentinelOne docs share the CrowdStrike evidence shape and correlation rules. */
-export const SENTINELONE_ADAPTER: VendorAdapter = {
-  vendor: 'sentinelone',
-  index: SENTINELONE_INDEX,
   buildEvidenceQuery: buildCrowdStrikeEvidenceQuery,
   buildTimeWindowQuery: crowdstrikeTimeWindow,
 };

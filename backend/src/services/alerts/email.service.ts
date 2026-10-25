@@ -135,58 +135,20 @@ function createTransport(settings: EmailAlertSettings) {
       user: settings.smtp_user,
       pass: settings.smtp_pass,
     },
-    // Bound SMTP time well inside the notice send pass's 5-minute stale-claim
-    // window (nodemailer's default socketTimeout is 10 minutes).
-    connectionTimeout: 30_000,
-    greetingTimeout: 30_000,
-    socketTimeout: 60_000,
   });
-}
-
-type MailAddressLike = string | { address?: string; name?: string };
-
-function normaliseAddresses(list: unknown): string[] {
-  if (!Array.isArray(list)) return [];
-  return (list as MailAddressLike[])
-    .map((e) => (typeof e === 'string' ? e : e?.address ?? ''))
-    .map((a) => a.trim().toLowerCase())
-    .filter((a) => a.length > 0);
-}
-
-export interface OutgoingMail {
-  to: string[];
-  subject: string;
-  html: string;
-  attachments?: Array<{ filename: string; content: string; contentType: string }>;
-}
-
-/**
- * Send a mail and report which recipients the server accepted/rejected
- * (lowercased address strings).
- */
-export async function sendMail(
-  settings: EmailAlertSettings,
-  mail: OutgoingMail,
-): Promise<{ accepted: string[]; rejected: string[] }> {
-  const transport = createTransport(settings);
-  const info = await transport.sendMail({
-    from: settings.from_address,
-    to: mail.to.join(', '),
-    subject: mail.subject,
-    html: mail.html,
-    ...(mail.attachments ? { attachments: mail.attachments } : {}),
-  });
-  return {
-    accepted: normaliseAddresses(info?.accepted),
-    rejected: normaliseAddresses(info?.rejected),
-  };
 }
 
 export async function sendEmailAlert(
   settings: EmailAlertSettings,
   payload: { subject: string; html: string },
 ): Promise<void> {
-  await sendMail(settings, { to: settings.recipients, ...payload });
+  const transport = createTransport(settings);
+  await transport.sendMail({
+    from: settings.from_address,
+    to: settings.recipients.join(', '),
+    subject: payload.subject,
+    html: payload.html,
+  });
 }
 
 // ---------------------------------------------------------------------------

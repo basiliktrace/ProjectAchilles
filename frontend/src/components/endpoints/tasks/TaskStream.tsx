@@ -143,15 +143,6 @@ export default function TaskStream({
     [allTasks, selectedTaskId],
   );
 
-  const selectedNotice = useMemo(() => {
-    if (!selectedTask?.notice_id) return undefined;
-    for (const g of groups) {
-      const n = g.notices?.[selectedTask.notice_id];
-      if (n) return n;
-    }
-    return undefined;
-  }, [groups, selectedTask]);
-
   const toggleBatch = (batchId: string) => {
     setCollapsedBatches((prev) => {
       const next = new Set(prev);
@@ -175,8 +166,8 @@ export default function TaskStream({
 
   const selectable = Boolean(onToggleSelect);
 
-  const renderTaskRow = (task: AgentTask, indent: boolean, notices?: TaskGroup['notices']) => {
-    const display = resolveTaskStatusDisplay(task, noticeFor(task, notices));
+  const renderTaskRow = (task: AgentTask, indent: boolean) => {
+    const display = resolveTaskStatusDisplay(task);
     const isSelected = selectedTask?.id === task.id;
     const failed = display.variant === 'destructive';
     return (
@@ -224,12 +215,6 @@ export default function TaskStream({
     );
   };
 
-  const noticeFor = (task: AgentTask, notices?: TaskGroup['notices']) =>
-    task.notice_id ? notices?.[task.notice_id] : undefined;
-
-  const runTagsFor = (group: TaskGroup) =>
-    Array.from(new Set(Object.values(group.notices ?? {}).map((n) => n.run_tag))).join(', ');
-
   const checkedClass = (taskId: string) =>
     selectedTasks.includes(taskId) ? 'bg-accent-dim/40' : undefined;
 
@@ -264,7 +249,7 @@ export default function TaskStream({
             return (
               <Fragment key={group.batch_id}>
                 {marker}
-                {task ? renderTaskRow(task, false, group.notices) : null}
+                {task ? renderTaskRow(task, false) : null}
               </Fragment>
             );
           }
@@ -307,12 +292,7 @@ export default function TaskStream({
                     }
                     name={`batch · ${group.payload?.test_name || group.type.replace(/_/g, ' ')}`}
                     nameClassName="font-sans text-[13px]"
-                    meta={
-                      <span className="text-faint">
-                        · {group.agent_count} agents
-                        {runTagsFor(group) && <span className="ml-1.5 text-muted">· {runTagsFor(group)}</span>}
-                      </span>
-                    }
+                    meta={<span className="text-faint">· {group.agent_count} agents</span>}
                     trailing={
                       <>
                         {completed > 0 && <span className="text-accent">{completed}✓</span>}
@@ -322,7 +302,7 @@ export default function TaskStream({
                     }
                   />
                 </div>
-                {!collapsed && group.tasks.map((task) => renderTaskRow(task, true, group.notices))}
+                {!collapsed && group.tasks.map((task) => renderTaskRow(task, true))}
               </div>
             </Fragment>
           );
@@ -335,7 +315,7 @@ export default function TaskStream({
           <div className="border-b border-border p-4">
             <div className="flex items-start justify-between gap-3">
               <h3 className="text-[15px] font-semibold leading-snug">{taskName(selectedTask)}</h3>
-              <TaskStatusBadge task={selectedTask} notice={selectedNotice} className="shrink-0 font-mono uppercase" />
+              <TaskStatusBadge task={selectedTask} className="shrink-0 font-mono uppercase" />
             </div>
             <div className="mt-1 font-mono text-[11px] text-faint">
               {selectedTask.type} · batch {selectedTask.batch_id.slice(0, 8)}

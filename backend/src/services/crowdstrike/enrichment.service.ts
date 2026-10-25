@@ -42,23 +42,10 @@ const ALERT_HITS_PER_SUBQUERY = 5;
  */
 const PREVENTION_ACTIONS = new Set(['quarantined', 'process_killed', 'blocked']);
 
-/**
- * Which vendor's alert index to read and which `f0rtika.<vendor>_*` flags to
- * write. Defaults to CrowdStrike; SentinelOne reuses the same pass because its
- * normalized alert docs share the evidence_* / prevention_action shape.
- */
-export interface EnrichmentVendorTarget {
-  alertIndex: string;
-  flagPrefix: 'crowdstrike' | 'sentinelone';
-}
-
-const CROWDSTRIKE_TARGET: EnrichmentVendorTarget = { alertIndex: CROWDSTRIKE_INDEX, flagPrefix: 'crowdstrike' };
-
 export class CrowdStrikeEnrichmentService {
   constructor(
     private readonly client: Client,
     private readonly resultsIndexPattern: string,
-    private readonly target: EnrichmentVendorTarget = CROWDSTRIKE_TARGET,
   ) {}
 
   async runEnrichmentPass(
@@ -148,7 +135,7 @@ export class CrowdStrikeEnrichmentService {
       if (queries.length > 0) {
         const searches: unknown[] = [];
         for (const q of queries) {
-          searches.push({ index: this.target.alertIndex });
+          searches.push({ index: CROWDSTRIKE_INDEX });
           searches.push({ size: ALERT_HITS_PER_SUBQUERY, _source: ['prevention_action'], query: q.body });
         }
 
@@ -245,16 +232,15 @@ export class CrowdStrikeEnrichmentService {
           for (const u of updatesByHitId.values()) {
             // Test-doc update: only set the fields that flipped to true.
             const f0rtika: Record<string, unknown> = {};
-            const v = this.target.flagPrefix;
-            if (u.wideMatched)  f0rtika[`${v}_detected`]       = true;
-            if (u.stageMatched) f0rtika[`${v}_stage_detected`] = true;
+            if (u.wideMatched)  f0rtika.crowdstrike_detected       = true;
+            if (u.stageMatched) f0rtika.crowdstrike_stage_detected = true;
             // Vendor-confirmed prevention — rides alongside the detected flags.
             // preventionActions is already qualification-filtered above
             // (stage matches always; wide matches only for non-conclusive docs).
             // Prevention ⊆ detection: a prevention flag implies a matched alert.
             if (u.preventionActions.length > 0) {
-              f0rtika[`${v}_prevented`] = true;
-              f0rtika[`${v}_prevention_action`] = u.preventionActions[0];
+              f0rtika.crowdstrike_prevented = true;
+              f0rtika.crowdstrike_prevention_action = u.preventionActions[0];
             }
             operations.push({ update: { _index: u.hit._index, _id: u.hit._id } });
             operations.push({ doc: { f0rtika } });
@@ -264,7 +250,7 @@ export class CrowdStrikeEnrichmentService {
             for (const alertId of u.alertIds) {
               if (alertIdsEmitted.has(alertId)) continue;
               alertIdsEmitted.add(alertId);
-              operations.push({ update: { _index: this.target.alertIndex, _id: alertId } });
+              operations.push({ update: { _index: CROWDSTRIKE_INDEX, _id: alertId } });
               operations.push({
                 doc: {
                   f0rtika: {
@@ -333,8 +319,8 @@ export class CrowdStrikeEnrichmentService {
           {
             bool: {
               should: [
-                missingFlag(`f0rtika.${this.target.flagPrefix}_detected`),
-                missingFlag(`f0rtika.${this.target.flagPrefix}_stage_detected`),
+                missingFlag('f0rtika.crowdstrike_detected'),
+                missingFlag('f0rtika.crowdstrike_stage_detected'),
               ],
               minimum_should_match: 1,
             },

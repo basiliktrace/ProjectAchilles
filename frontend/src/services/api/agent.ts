@@ -105,15 +105,6 @@ export const agentApi = {
     return response.data.data.task_ids;
   },
 
-  /**
-   * Run several tests at once under one pre-execution notice (one email).
-   * All-or-nothing. Returns each request's task ids, in request order.
-   */
-  async createTasksBatch(data: { org_id: string; requests: Omit<CreateTasksRequest, 'org_id'>[] }): Promise<string[][]> {
-    const response = await apiClient.post('/agent/admin/tasks/batch', data);
-    return response.data.data.task_ids;
-  },
-
   async createCommandTasks(data: CreateCommandTasksRequest): Promise<string[]> {
     const response = await apiClient.post('/agent/admin/tasks/command', data);
     return response.data.data.task_ids;

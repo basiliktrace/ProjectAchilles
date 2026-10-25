@@ -1,5 +1,4 @@
-import { FlaskConical, Server, ShieldAlert, ShieldCheck, Star } from 'lucide-react';
-import { CrowdStrikeLogo } from '@/components/shared/VendorLogos';
+import { Bird, FlaskConical, Server, ShieldAlert, ShieldCheck, Star } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { isLowSample, POSTURE_HELP, postureCaption, postureWindowLabel } from '@/lib/posture';
 import { isSameTimeRange, TIME_RANGE_PRESETS, timeRangeButtonLabel } from '@/lib/timeRange';
@@ -69,7 +68,7 @@ export default function DashboardPage() {
           label: 'ZTA score',
           value: data.ztaScore ? `${data.ztaScore.overallScore.toFixed(1)}%` : '—',
           sub: data.ztaScore ? `${data.ztaScore.deviceCount.toLocaleString()} devices` : undefined,
-          icon: CrowdStrikeLogo,
+          icon: Bird,
           to: '/analytics?tab=crowdstrike',
           tone: (data.ztaScore ? 'accent' : 'default') as KpiCardProps['tone'],
         }]

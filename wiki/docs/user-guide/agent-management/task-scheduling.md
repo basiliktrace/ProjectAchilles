@@ -39,19 +39,6 @@ Schedules support three timing modes:
 
 Randomization provides more realistic simulation of attacker behavior than executing at the same time every day. **Per-machine** randomization additionally avoids the whole fleet lighting up detection systems at once — useful for staggering load and for realistic dispersed activity.
 
-A randomized daily, weekly or monthly schedule runs **at most once per day**: after it fires, its next random time is picked on the next eligible day, never later the same day. A run that was skipped or failed also waits for the next eligible day. Editing a schedule picks a new time and may choose later the same day.
-
-The **Next run** shown in the list can sit in the past for up to 5 minutes. That is the scheduler's grace period: a schedule is only moved forward when it is more than 5 minutes overdue, so opening the Schedules or Dashboard page can never skip a run that is about to fire.
-
-## Pre-execution Notices
-
-When [pre-execution notices](../integrations/pre-execution-notices) are on, scheduled runs are announced by email like any other run:
-
-- **Fixed-time and fleet-randomized schedules**: every schedule due in the same minute shares one notice listing all its tests and hosts.
-- **Per-machine schedules**: one notice per schedule per day covers the day's randomization window; each machine still runs at its own random time inside it. A machine that comes due too close to the end of the window gets its own notice rather than joining a closed one.
-
-Tests are held until the notice is accepted, so a scheduled run can start a few minutes after its scheduled time.
-
 ## Priority Queue
 
 Higher-priority tasks are assigned before lower-priority ones when multiple tasks are pending for the same agent.
